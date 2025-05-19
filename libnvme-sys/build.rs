@@ -31,11 +31,11 @@ fn main() {
     assert!(status.success(), "Meson compile failed");
 
     // Tell cargo to look for shared libraries in the specified directory
-    println!("cargo:rustc-link-search={}/libnvme_build/src", out_dir);
+    println!("cargo:rustc-link-search={}/src", build_dir);
     println!("cargo:rustc-link-lib=static=nvme");
     println!("cargo:rustc-link-lib=static=nvme-mi");
 
-	println!("cargo:rerun-if-changed=wrapper.h");
+	println!("cargo:rerun-if-changed=libnvme_wrapper.h");
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -54,14 +54,7 @@ fn main() {
         // Unwrap the Result and panic on failure.
         .expect("Unable to generate bindings");
 
-    // Write the bindings to nvme/bindings.rs
-	
-	// This generates the binding file in OUT_DIR
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
-
+    // Write the bindings to nvme/src/bindings.rs
 	bindings
         .write_to_file("../nvme/src/bindings.rs")
         .expect("Couldn't write bindings!");

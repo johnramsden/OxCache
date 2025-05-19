@@ -2,6 +2,8 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+use libnvme_sys;
+
 include!("./bindings.rs");
 
 // Included here because "gen" is a keyword in Rust, so this struct needs to be modified manually to incorporate that
