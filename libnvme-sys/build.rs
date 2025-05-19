@@ -13,14 +13,15 @@ fn main() {
     if !Path::new(&build_dir).exists() {
         let status = Command::new("meson")
             .arg("setup")
+			.arg("--default-library=static")
             .arg(&build_dir)
-            .arg(&libnvme_dir) 
+            .arg(&libnvme_dir)
             .status()
             .expect("failed to run meson setup");
         assert!(status.success(), "Meson setup failed");
     }
 
-    // Now build the project
+    // Build the project
     let status = Command::new("meson")
         .arg("compile")
         .arg("-C")
@@ -29,16 +30,12 @@ fn main() {
         .expect("failed to run meson compile");
     assert!(status.success(), "Meson compile failed");
 
-    // Optionally link the resulting library
-    println!("cargo:rustc-link-search=native={}/meson_build", out_dir);
-    println!("cargo:rustc-link-lib=static=your_library_name"); // adjust as needed
-
     // Tell cargo to look for shared libraries in the specified directory
-    println!("cargo:rustc-link-search=/path/to/lib");
+    println!("cargo:rustc-link-search={}/libnvme_build/src", out_dir);
+    println!("cargo:rustc-link-lib=static=nvme");
+    println!("cargo:rustc-link-lib=static=nvme-mi");
 
-    // Tell cargo to tell rustc to link the system bzip2
-    // shared library.
-    println!("cargo:rustc-link-lib=bz2");
+	println!("cargo:rerun-if-changed=wrapper.h");
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -46,18 +43,26 @@ fn main() {
     let bindings = bindgen::Builder::default()
         // The input header we would like to generate
         // bindings for.
-        .header("wrapper.h")
+        .header("src/libnvme_wrapper.h")
+		.clang_arg(format!("-I{}/src", libnvme_dir))
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+		.blocklist_type("nvme_resv_status")
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
         .expect("Unable to generate bindings");
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
+    // Write the bindings to nvme/bindings.rs
+	
+	// This generates the binding file in OUT_DIR
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out_path.join("bindings.rs"))
+        .expect("Couldn't write bindings!");
+
+	bindings
+        .write_to_file("../nvme/src/bindings.rs")
         .expect("Couldn't write bindings!");
 }
