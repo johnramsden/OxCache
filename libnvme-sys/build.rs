@@ -1,5 +1,3 @@
-use std::env;
-use std::path::PathBuf;
 use std::process::Command;
 use std::path::Path;
 
@@ -54,8 +52,9 @@ fn main() {
         // Unwrap the Result and panic on failure.
         .expect("Unable to generate bindings");
 
-    // Write the bindings to nvme/src/bindings.rs
+    // Write the bindings to OUT_DIR/bindings.rs
+    let out = Path::new(out_dir.as_str()).join("bindings.rs");
 	bindings
-        .write_to_file("../nvme/src/bindings.rs")
+        .write_to_file(out)
         .expect("Couldn't write bindings!");
 }
