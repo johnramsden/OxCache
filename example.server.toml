@@ -1,0 +1,3 @@
+[server]
+socket = "/tmp/oxcache.sock"
+disk = "/dev/zd48"
