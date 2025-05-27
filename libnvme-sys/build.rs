@@ -1,5 +1,23 @@
+use std::fs;
 use std::process::Command;
 use std::path::Path;
+
+fn emit_rerun_if_changed_recursive<P: AsRef<Path>>(path: P) {
+    let path = path.as_ref();
+    if path.is_dir() {
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                emit_rerun_if_changed_recursive(entry_path);
+            } else {
+                println!("cargo:rerun-if-changed={}", entry_path.display());
+            }
+        }
+    } else {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
 
 fn main() {
 
@@ -33,7 +51,9 @@ fn main() {
     println!("cargo:rustc-link-lib=static=nvme");
     println!("cargo:rustc-link-lib=static=nvme-mi");
 
-	println!("cargo:rerun-if-changed=libnvme_wrapper.h");
+    emit_rerun_if_changed_recursive("external/libnvme");
+    println!("cargo:rerun-if-changed=src/libnvme_wrapper.h");
+
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
