@@ -13,6 +13,7 @@ impl Writer {
     }
 
     fn run(self) {
+        println!("Writer {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             println!("Writer {} processing: {}", self.id, msg);
             // TODO: Real logic
@@ -52,19 +53,14 @@ impl WriterPool {
     pub fn stop(self) {
         drop(self.sender); // Close the channel
         for handle in self.handles {
-            match handle.join() {
-                Ok(()) => {
-                    println!("Evictor thread exited cleanly.");
-                }
-                Err(e) => {
-                    // A panic occurred — e is a Box<dyn Any + Send + 'static>
-                    if let Some(msg) = e.downcast_ref::<&str>() {
-                        eprintln!("Evictor thread panicked with message: {}", msg);
-                    } else if let Some(msg) = e.downcast_ref::<String>() {
-                        eprintln!("Evictor thread panicked with message: {}", msg);
-                    } else {
-                        eprintln!("Evictor thread panicked with unknown payload.");
-                    }
+            if let Err(e) = handle.join() {
+                // A panic occurred — e is a Box<dyn Any + Send + 'static>
+                if let Some(msg) = e.downcast_ref::<&str>() {
+                    eprintln!("Writer thread panicked with message: {}", msg);
+                } else if let Some(msg) = e.downcast_ref::<String>() {
+                    eprintln!("Writer thread panicked with message: {}", msg);
+                } else {
+                    eprintln!("Writer thread panicked with unknown payload.");
                 }
             }
         }

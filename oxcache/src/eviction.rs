@@ -35,19 +35,14 @@ impl Evictor {
     pub fn stop(mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            match handle.join() {
-                Ok(()) => {
-                    println!("Evictor thread exited cleanly.");
-                }
-                Err(e) => {
-                    // A panic occurred — e is a Box<dyn Any + Send + 'static>
-                    if let Some(msg) = e.downcast_ref::<&str>() {
-                        eprintln!("Evictor thread panicked with message: {}", msg);
-                    } else if let Some(msg) = e.downcast_ref::<String>() {
-                        eprintln!("Evictor thread panicked with message: {}", msg);
-                    } else {
-                        eprintln!("Evictor thread panicked with unknown payload.");
-                    }
+            if let Err(e) = handle.join() {
+                // A panic occurred — e is a Box<dyn Any + Send + 'static>
+                if let Some(msg) = e.downcast_ref::<&str>() {
+                    eprintln!("Evictor thread panicked with message: {}", msg);
+                } else if let Some(msg) = e.downcast_ref::<String>() {
+                    eprintln!("Evictor thread panicked with message: {}", msg);
+                } else {
+                    eprintln!("Evictor thread panicked with unknown payload.");
                 }
             }
         } else {

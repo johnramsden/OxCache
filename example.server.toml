@@ -1,3 +1,5 @@
 [server]
 socket = "/tmp/oxcache.sock"
 disk = "/dev/zd48"
+writer_threads = 14
+reader_threads = 14
