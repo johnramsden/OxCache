@@ -3,7 +3,7 @@ use oxcache;
 
 use clap::Parser;
 use serde::Deserialize;
-use oxcache::server::ServerConfig;
+use oxcache::server::{ServerConfig,Server};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -50,11 +50,13 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     })
 }
 
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CliArgs::parse();
     let config = load_config(&cli)?;
 
     println!("Config: {:?}", config);
+    
+    Server::new(config).run().await?;
     Ok(())
 }
