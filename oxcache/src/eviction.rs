@@ -1,6 +1,9 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,

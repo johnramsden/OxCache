@@ -1,7 +1,7 @@
-use tokio::net::UnixStream;
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use clap::Parser;
-use tokio::time::{sleep, Duration};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
+use tokio::time::{Duration, sleep};
 
 /// Simple Unix socket client
 #[derive(Parser, Debug)]

@@ -1,4 +1,4 @@
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender, unbounded};
 use std::thread::{self, JoinHandle};
 
 /// Represents an individual reader thread

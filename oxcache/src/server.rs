@@ -1,11 +1,11 @@
 use crate::cache::Cache;
-use crate::writerpool::WriterPool;
-use crate::readerpool::ReaderPool;
 use crate::eviction::Evictor;
+use crate::readerpool::ReaderPool;
+use crate::writerpool::WriterPool;
 
 // use tokio::spawn;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
 use std::path::Path;
@@ -44,18 +44,20 @@ impl Server {
 
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
-        
+
         let evictor = Evictor::start();
         let writerpool = WriterPool::start(self.config.writer_threads);
         let readerpool = ReaderPool::start(self.config.reader_threads);
-        
+
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());
         let shutdown_signal = shutdown.clone();
 
         // Spawn a task to listen for Ctrl+C
         let shutdown_task = tokio::spawn(async move {
-            tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl_c");
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to listen for ctrl_c");
             println!("Ctrl+C received, shutting down...");
             shutdown_signal.notify_waiters();
             evictor.stop();
@@ -66,32 +68,32 @@ impl Server {
         // Request handling (green threads)
         loop {
             tokio::select! {
-            _ = shutdown.notified() => {
-                println!("Shutting down accept loop.");
-                break;
-            }
+                _ = shutdown.notified() => {
+                    println!("Shutting down accept loop.");
+                    break;
+                }
 
-            accept_result = listener.accept() => {
-                match accept_result {
-                    Ok((stream, addr)) => {
-                        println!("Accepted connection: {:?}", addr);
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((stream, addr)) => {
+                            println!("Accepted connection: {:?}", addr);
 
-                        tokio::spawn({
-                            let cache = Arc::clone(&self.cache);
-                            async move {
-                            if let Err(e) = handle_connection(stream, cache).await {
-                                eprintln!("Connection error: {}", e);
-                            }
-                        }});
-                    },
-                    Err(e) => {
-                        eprintln!("Accept failed: {}", e);
+                            tokio::spawn({
+                                let cache = Arc::clone(&self.cache);
+                                async move {
+                                if let Err(e) = handle_connection(stream, cache).await {
+                                    eprintln!("Connection error: {}", e);
+                                }
+                            }});
+                        },
+                        Err(e) => {
+                            eprintln!("Accept failed: {}", e);
+                        }
                     }
                 }
             }
         }
-        }
-        
+
         Ok(())
     }
 }
