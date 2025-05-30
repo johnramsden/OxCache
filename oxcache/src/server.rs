@@ -6,6 +6,7 @@ use crate::eviction::Evictor;
 // use tokio::spawn;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Notify;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -48,26 +49,47 @@ impl Server {
         let writerpool = WriterPool::start(self.config.writer_threads);
         let readerpool = ReaderPool::start(self.config.reader_threads);
         
-        // TODO: Clean shutdown.
-        //   let shutdown_signal = tokio::signal::ctrl_c();
-        //   How to handle this? tokio::select!?. What about threads?
-        //         evictor.stop();
-        //         writerpool.stop();
-        //         readerpool.stop();
+        // Shutdown signal
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_signal = shutdown.clone();
+
+        // Spawn a task to listen for Ctrl+C
+        let shutdown_task = tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl_c");
+            println!("Ctrl+C received, shutting down...");
+            shutdown_signal.notify_waiters();
+            evictor.stop();
+            writerpool.stop();
+            readerpool.stop();
+        });
 
         // Request handling (green threads)
         loop {
-            let (stream, addr) = listener.accept().await?;
-            println!("Accepted connection: {:?}", addr);
+            tokio::select! {
+            _ = shutdown.notified() => {
+                println!("Shutting down accept loop.");
+                break;
+            }
 
-            let cache = Arc::clone(&self.cache);
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((stream, addr)) => {
+                        println!("Accepted connection: {:?}", addr);
 
-            // Spawn green thread for each connection
-            tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, cache).await {
-                    eprintln!("Connection error: {}", e);
+                        tokio::spawn({
+                            let cache = Arc::clone(&self.cache);
+                            async move {
+                            if let Err(e) = handle_connection(stream, cache).await {
+                                eprintln!("Connection error: {}", e);
+                            }
+                        }});
+                    },
+                    Err(e) => {
+                        eprintln!("Accept failed: {}", e);
+                    }
                 }
-            });
+            }
+        }
         }
         
         Ok(())
