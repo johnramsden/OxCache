@@ -3,3 +3,7 @@ socket = "/tmp/oxcache.sock"
 disk = "/dev/zd48"
 writer_threads = 14
 reader_threads = 14
+
+[remote]
+remote_type = "emulated" # emulated | S3
+bucket = "S3_BUCKET"

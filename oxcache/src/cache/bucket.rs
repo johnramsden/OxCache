@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 
+#[derive(Debug)]
 pub struct Bucket {
     state: DashMap<String, String>,
 }

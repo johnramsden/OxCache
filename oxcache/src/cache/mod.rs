@@ -1,5 +1,6 @@
 pub mod bucket;
 
+#[derive(Debug)]
 pub struct Cache {
     buckets: bucket::Bucket,
 }

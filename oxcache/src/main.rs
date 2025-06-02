@@ -2,7 +2,7 @@ use oxcache;
 use std::fs;
 
 use clap::Parser;
-use oxcache::server::{Server, ServerConfig};
+use oxcache::server::{Server, ServerConfig, ServerRemoteConfig};
 use serde::Deserialize;
 
 #[derive(Parser, Debug)]
@@ -23,6 +23,12 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub reader_threads: Option<usize>,
+    
+    #[arg(long)]
+    pub remote_type: Option<String>,
+    
+    #[arg(long)]
+    pub remote_bucket: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,8 +40,15 @@ pub struct ParsedServerConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ParsedRemoteConfig {
+    pub remote_type: Option<String>,
+    pub bucket: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub server: ParsedServerConfig,
+    pub remote: ParsedRemoteConfig,
 }
 
 fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
@@ -56,26 +69,45 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .or_else(|| config.as_ref()?.server.disk.clone());
     let writer_threads = cli
         .writer_threads
-        .clone()
-        .or_else(|| config.as_ref()?.server.writer_threads.clone());
+        .or_else(|| config.as_ref()?.server.writer_threads);
     let reader_threads = cli
         .reader_threads
+        .or_else(|| config.as_ref()?.server.reader_threads);
+
+    let remote_type = cli
+        .remote_type
         .clone()
-        .or_else(|| config.as_ref()?.server.reader_threads.clone());
+        .or_else(|| config.as_ref()?.remote.remote_type.clone());
+    let remote_bucket = cli
+        .remote_bucket
+        .clone()
+        .or_else(|| config.as_ref()?.remote.bucket.clone());
 
     let socket = socket.ok_or("Missing required `socket` (in CLI or file)")?;
     let disk = disk.ok_or("Missing required `disk` (in CLI or file)")?;
 
     let writer_threads =
         writer_threads.ok_or("Missing required `writer_threads` (in CLI or file)")?;
-
     if writer_threads == 0 {
         return Err("writer_threads must be greater than 0".into());
     }
-    let reader_threads = reader_threads.ok_or("Missing required `disk` (in CLI or file)")?;
 
+    let reader_threads =
+        reader_threads.ok_or("Missing required `reader_threads` (in CLI or file)")?;
     if reader_threads == 0 {
         return Err("reader_threads must be greater than 0".into());
+    }
+
+    let remote_type = remote_type
+        .ok_or("Missing required `remote_type` (in CLI or file)")?
+        .to_lowercase();
+    
+    if remote_type != "emulated" && remote_type != "s3" {
+        return Err("remote_type must be either `emulated` or `S3`".into());
+    }
+    
+    if remote_type != "emulated" && remote_bucket.is_none() {
+        return Err("remote_bucket must be set if remote_type is not `emulated`".into());
     }
 
     Ok(ServerConfig {
@@ -83,6 +115,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         disk,
         writer_threads,
         reader_threads,
+        remote: ServerRemoteConfig {
+            remote_type,
+            bucket: remote_bucket,
+        },
     })
 }
 
@@ -93,6 +129,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Config: {:?}", config);
 
-    Server::new(config).run().await?;
+    Server::new(config)?.run().await?;
     Ok(())
 }

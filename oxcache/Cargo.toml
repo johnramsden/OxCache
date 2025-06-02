@@ -13,3 +13,5 @@ clap = { version = "4.5.38", features = ["derive"] }
 toml = "0.8.22"
 crossbeam = "0.8.4"
 tokio = { version = "1.45.1", features = ["net", "fs", "io-util", "rt", "rt-multi-thread", "macros", "time", "signal", "sync"] }
+aws-sdk-s3 = "1.90.0"
+aws-config = "1.6.3"

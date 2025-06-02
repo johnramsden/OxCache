@@ -1,3 +1,4 @@
+use std::error::Error;
 use crate::cache::Cache;
 use crate::eviction::Evictor;
 use crate::readerpool::ReaderPool;
@@ -12,6 +13,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+use crate::remote;
+use crate::remote::RemoteBackend;
+
+#[derive(Debug)]
+pub struct ServerRemoteConfig {
+    pub remote_type: String,
+    pub bucket: Option<String>,
+}
 
 #[derive(Debug)]
 pub struct ServerConfig {
@@ -19,19 +28,22 @@ pub struct ServerConfig {
     pub disk: String,
     pub writer_threads: usize,
     pub reader_threads: usize,
+    pub remote: ServerRemoteConfig
 }
 
 pub struct Server {
     cache: Arc<Cache>, // shared across tasks
     config: ServerConfig,
+    remote: Arc<dyn RemoteBackend>
 }
 
 impl Server {
-    pub fn new(config: ServerConfig) -> Self {
-        Self {
+    pub fn new(config: ServerConfig) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
             cache: Arc::new(Cache::new()),
+            remote: remote::from_config(&config.remote)?,
             config,
-        }
+        })
     }
 
     pub async fn run(&self) -> tokio::io::Result<()> {
