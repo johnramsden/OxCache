@@ -1,9 +1,11 @@
 use oxcache;
 use std::fs;
-
+use std::process::exit;
+use std::sync::Arc;
 use clap::Parser;
 use oxcache::server::{Server, ServerConfig, ServerRemoteConfig};
 use serde::Deserialize;
+use oxcache::remote;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -109,6 +111,8 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     if remote_type != "emulated" && remote_bucket.is_none() {
         return Err("remote_bucket must be set if remote_type is not `emulated`".into());
     }
+    
+    // TODO: Add secrets from env vars
 
     Ok(ServerConfig {
         socket,
@@ -128,7 +132,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(&cli)?;
 
     println!("Config: {:?}", config);
+    let remote = remote::validated_type(config.remote.remote_type.as_str());
+    let remote = remote.unwrap_or_else(|err| {
+        eprintln!("Error: {}", err);
+        exit(1);
+    });
+    
+    match remote {
+        remote::RemoteBackendType::Emulated => {
+            Server::new(config, Arc::new(remote::EmulatedBackend::new()))?.run().await?;
+        },
+        remote::RemoteBackendType::S3 => {
+            let bucket = config.remote.bucket.clone().unwrap();
+            Server::new(config, Arc::new(remote::S3Backend::new(bucket)))?.run().await?;
+        }
+    }
 
-    Server::new(config)?.run().await?;
+    
     Ok(())
 }

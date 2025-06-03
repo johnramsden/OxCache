@@ -4,3 +4,4 @@ pub mod readerpool;
 pub mod server;
 pub mod writerpool;
 pub mod remote;
+pub mod request;

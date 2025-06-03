@@ -4,9 +4,11 @@ use crate::cache::Cache;
 use aws_sdk_s3::{Client, Config};
 use aws_config::meta::region::RegionProviderChain;
 use crate::server::ServerRemoteConfig;
+use async_trait::async_trait;
 
-pub trait RemoteBackend {
-    fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>>;
+#[async_trait]
+pub trait RemoteBackend: Send + Sync {
+    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>>;
 }
 
 pub struct S3Backend {
@@ -27,33 +29,32 @@ impl EmulatedBackend {
     }
 }
 
+#[async_trait]
 impl RemoteBackend for S3Backend {
-    
-
-    fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
+    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
         // TODO: Implement with AWS SDK
         Ok(vec![])
     }
 }
 
+#[async_trait]
 impl RemoteBackend for EmulatedBackend {
-    fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
+    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
         // TODO: Implement
         println!("GET {} {} {}", key, offset, size);
         Ok(vec![])
     }
 }
 
-pub fn from_config(config: &ServerRemoteConfig) -> Result<Arc<dyn RemoteBackend>, Box<dyn std::error::Error>> {
-    match config.remote_type.as_str() {
-        "emulated" => Ok(Arc::new(EmulatedBackend::new())),
-        "s3" => {
-            let bucket = config
-                .bucket
-                .clone()
-                .ok_or("S3 remote requires a bucket")?;
-            Ok(Arc::new(S3Backend::new(bucket)))
-        }
+pub enum RemoteBackendType {
+    Emulated,
+    S3,
+}
+
+pub fn validated_type(remote_type: &str) -> Result<RemoteBackendType, Box<dyn std::error::Error>> {
+    match remote_type {
+        "emulated" => Ok(RemoteBackendType::Emulated),
+        "s3" => Ok(RemoteBackendType::S3),
         other => Err(format!("Unknown remote type: {}", other).into()),
     }
 }

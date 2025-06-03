@@ -1,20 +1,25 @@
-use std::error::Error;
 use crate::cache::Cache;
 use crate::eviction::Evictor;
 use crate::readerpool::ReaderPool;
 use crate::writerpool::WriterPool;
+use std::error::Error;
 
 // use tokio::spawn;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
+use crate::remote::{EmulatedBackend, RemoteBackend};
+use crate::{remote, request};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
-use crate::remote;
-use crate::remote::RemoteBackend;
+
+use bincode;
+use bincode::error::DecodeError;
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {
@@ -28,20 +33,20 @@ pub struct ServerConfig {
     pub disk: String,
     pub writer_threads: usize,
     pub reader_threads: usize,
-    pub remote: ServerRemoteConfig
+    pub remote: ServerRemoteConfig,
 }
 
-pub struct Server {
+pub struct Server<T: RemoteBackend + Send + Sync> {
     cache: Arc<Cache>, // shared across tasks
     config: ServerConfig,
-    remote: Arc<dyn RemoteBackend>
+    remote: Arc<T>,
 }
 
-impl Server {
-    pub fn new(config: ServerConfig) -> Result<Self, Box<dyn Error>> {
+impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
+    pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             cache: Arc::new(Cache::new()),
-            remote: remote::from_config(&config.remote)?,
+            remote,
             config,
         })
     }
@@ -92,8 +97,10 @@ impl Server {
 
                             tokio::spawn({
                                 let cache = Arc::clone(&self.cache);
+                                let remote = Arc::clone(&self.remote);
                                 async move {
-                                if let Err(e) = handle_connection(stream, cache).await {
+                                    
+                                if let Err(e) = handle_connection(stream, cache, remote).await {
                                     eprintln!("Connection error: {}", e);
                                 }
                             }});
@@ -110,18 +117,44 @@ impl Server {
     }
 }
 
-async fn handle_connection(mut stream: UnixStream, _cache: Arc<Cache>) -> tokio::io::Result<()> {
-    let mut buf = [0u8; 1024];
-    loop {
-        let n = stream.read(&mut buf).await?;
+async fn handle_connection<T: RemoteBackend + Send + Sync>(
+    stream: UnixStream,
+    _cache: Arc<Cache>,
+    remote: Arc<T>,
+) -> tokio::io::Result<()> {
+    let (read_half, write_half) = split(stream);
+    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
+    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+    
+    while let Some(frame) = reader.next().await {
+        let f = frame?;
+        let bytes = f.as_ref();
+        let msg: Result<(request::Request, usize), DecodeError> =
+            bincode::serde::decode_from_slice(bytes, bincode::config::standard());
+        println!("Received: {:?}", msg);
 
-        let recieved = String::from_utf8_lossy(&buf[..n]);
-
-        println!("Received: {}", recieved);
-
-        stream.write_all(b"OK\n").await?;
-        if recieved == "exit\n" {
-            break;
+        match msg {
+            Ok((request, _)) => {
+                println!("Received: {:?}", request);
+                match request {
+                    request::Request::Get(req) => {
+                        println!("Received get request: {:?}", req);
+                        let resp = remote.get(req.key.as_str(), req.offset, req.size).await?;
+                        writer.send(Bytes::from(resp)).await?;
+                    }
+                    request::Request::Close => {
+                        println!("Received close request");
+                        break;
+                    }
+                    _ => {
+                        println!("Unknown request: {:?}", request);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error receiving data: {:?}", e);
+                break;
+            }
         }
     }
     Ok(())
