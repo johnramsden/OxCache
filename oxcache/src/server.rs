@@ -140,7 +140,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                     request::Request::Get(req) => {
                         println!("Received get request: {:?}", req);
                         let resp = remote.get(req.key.as_str(), req.offset, req.size).await?;
-                        writer.send(Bytes::from(resp)).await?;
+                        let encoded = bincode::serde::encode_to_vec(
+                            resp,
+                            bincode::config::standard()
+                        ).unwrap();
+                        writer.send(Bytes::from(encoded)).await?;
                     }
                     request::Request::Close => {
                         println!("Received close request");
