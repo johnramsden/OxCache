@@ -7,6 +7,12 @@ pub struct GetRequest {
     pub size: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub enum GetResponse {
+    Error(String),
+    Response(Vec<u8>),
+}
+
 #[derive(Debug, Serialize,Deserialize)]
 pub enum Request {
     Get(GetRequest),

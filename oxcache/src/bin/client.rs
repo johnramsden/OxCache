@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(frame) = reader.next().await {
             let f = frame?;
             let bytes = f.as_ref();
-            let msg: Result<(Vec<u8>, usize), DecodeError> =
+            let msg: Result<(request::GetResponse, usize), DecodeError> =
                 bincode::serde::decode_from_slice(bytes, bincode::config::standard());
             println!("Received: {:?}", msg);
         }

@@ -139,9 +139,20 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                 match request {
                     request::Request::Get(req) => {
                         println!("Received get request: {:?}", req);
-                        let resp = remote.get(req.key.as_str(), req.offset, req.size).await?;
+                        let resp = match remote.get(req.key.as_str(), req.offset, req.size).await {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                let encoded = bincode::serde::encode_to_vec(
+                                    request::GetResponse::Error(e.to_string()),
+                                    bincode::config::standard()
+                                ).unwrap();
+                                writer.send(Bytes::from(encoded)).await?;
+                                // Fatal error, or keep accepting? Currently fatal, closes connection.
+                                return Err(e);
+                            }
+                        };
                         let encoded = bincode::serde::encode_to_vec(
-                            resp,
+                            request::GetResponse::Response(resp),
                             bincode::config::standard()
                         ).unwrap();
                         writer.send(Bytes::from(encoded)).await?;
