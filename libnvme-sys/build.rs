@@ -22,14 +22,14 @@ fn emit_rerun_if_changed_recursive<P: AsRef<Path>>(path: P) {
 fn main() {
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
-    let libnvme_dir = "external/libnvme";
-    let build_dir = format!("{}/libnvme_build", out_dir);
+    let manifest_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let libnvme_dir = format!("{}/external/libnvme", manifest_path);
+    let build_dir = format!("{}/libnvme_build/", out_dir);
 
     // Only run meson setup if build directory doesn't exist
     if !Path::new(&build_dir).exists() {
         let status = Command::new("meson")
             .arg("setup")
-			.arg("--default-library=static")
             .arg(&build_dir)
             .arg(&libnvme_dir)
             .status()
@@ -48,8 +48,8 @@ fn main() {
 
     // Tell cargo to look for shared libraries in the specified directory
     println!("cargo:rustc-link-search={}/src", build_dir);
-    println!("cargo:rustc-link-lib=static=nvme");
-    println!("cargo:rustc-link-lib=static=nvme-mi");
+    println!("cargo:rustc-link-lib=nvme");
+    println!("cargo:rustc-link-lib=nvme-mi");
 
     emit_rerun_if_changed_recursive("external/libnvme");
     println!("cargo:rerun-if-changed=src/libnvme_wrapper.h");
