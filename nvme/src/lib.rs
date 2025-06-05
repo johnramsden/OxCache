@@ -3,12 +3,12 @@
 #![allow(non_snake_case)]
 
 use std::{
-    ffi::{CStr, c_void},
-    os::fd::RawFd,
+    ffi::{CStr, CString, c_void},
+    os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd},
     ptr::null,
 };
 
-use libnvme_sys::bindings::*;
+use libnvme_sys::bindings::{nvme_open, *};
 
 pub struct ZNSAppendResult {
     error_code: nvme_status_field,
@@ -26,6 +26,10 @@ pub fn get_error_string(status: nvme_status_field) -> &'static str {
 
 pub fn get_errno(status: nvme_status_field) -> u8 {
     unsafe { nvme_status_to_errno(status as i32, false) }
+}
+
+pub fn zns_nvme_open(device_name: &str) -> RawFd {
+    unsafe { nvme_open(CString::new(device_name).unwrap().as_ptr()) }
 }
 
 pub fn zns_append(
