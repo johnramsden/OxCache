@@ -37,7 +37,7 @@ pub struct ServerConfig {
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
-    cache: Arc<Cache>, // shared across tasks
+    cache: Arc<Cache>,
     config: ServerConfig,
     remote: Arc<T>,
 }
@@ -139,6 +139,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                 match request {
                     request::Request::Get(req) => {
                         println!("Received get request: {:?}", req);
+                        
+                        // Grab from remote
                         let resp = match remote.get(req.key.as_str(), req.offset, req.size).await {
                             Ok(resp) => resp,
                             Err(e) => {
@@ -156,6 +158,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                             bincode::config::standard()
                         ).unwrap();
                         writer.send(Bytes::from(encoded)).await?;
+                        // Proceed with writing/reading to/from disk
                     }
                     request::Request::Close => {
                         println!("Received close request");

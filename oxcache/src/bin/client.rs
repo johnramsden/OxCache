@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let msg = Request::Get(GetRequest {
             key: number.to_string(),
             offset: number,
-            size: number
+            size: 100
         });
         
         println!("Sending: {:?}", msg);
