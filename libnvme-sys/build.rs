@@ -1,6 +1,6 @@
 use std::fs;
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 fn emit_rerun_if_changed_recursive<P: AsRef<Path>>(path: P) {
     let path = path.as_ref();
@@ -20,7 +20,6 @@ fn emit_rerun_if_changed_recursive<P: AsRef<Path>>(path: P) {
 }
 
 fn main() {
-
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let manifest_path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let libnvme_dir = format!("{}/external/libnvme", manifest_path);
@@ -56,7 +55,6 @@ fn main() {
     emit_rerun_if_changed_recursive("external/libnvme");
     println!("cargo:rerun-if-changed=src/libnvme_wrapper.h");
 
-
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
     // the resulting bindings.
@@ -64,11 +62,11 @@ fn main() {
         // The input header we would like to generate
         // bindings for.
         .header("src/libnvme_wrapper.h")
-		.clang_arg(format!("-I{}/src", libnvme_dir))
+        .clang_arg(format!("-I{}/src", libnvme_dir))
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-		.blocklist_type("nvme_resv_status")
+        .blocklist_type("nvme_resv_status")
         .generate_comments(false)
         // Finish the builder and generate the bindings.
         .generate()
@@ -77,7 +75,7 @@ fn main() {
 
     // Write the bindings to OUT_DIR/bindings.rs
     let out = Path::new(out_dir.as_str()).join("bindings.rs");
-	bindings
+    bindings
         .write_to_file(out)
         .expect("Couldn't write bindings!");
 }
