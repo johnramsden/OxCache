@@ -2,13 +2,30 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use std::{ffi::c_void, os::fd::RawFd, ptr::null};
+use std::{
+    ffi::{CStr, c_void},
+    os::fd::RawFd,
+    ptr::null,
+};
 
 use libnvme_sys::bindings::*;
 
 pub struct ZNSAppendResult {
     error_code: nvme_status_field,
     written_addr: u64,
+}
+
+pub fn get_error_string(status: nvme_status_field) -> &'static str {
+    // These are all defined as static const char in the C code, so they should have static lifetime
+    unsafe {
+        CStr::from_ptr(nvme_status_to_string(status as i32, false))
+            .to_str()
+            .unwrap()
+    }
+}
+
+pub fn get_errno(status: nvme_status_field) -> u8 {
+    unsafe { nvme_status_to_errno(status as i32, false) }
 }
 
 pub fn zns_append(
