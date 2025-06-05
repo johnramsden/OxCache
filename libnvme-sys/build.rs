@@ -27,6 +27,8 @@ fn main() {
     let build_dir = format!("{}/libnvme_build/", out_dir);
 
     // Only run meson setup if build directory doesn't exist
+    // This seems buggy. If the meson compile is complaining then it
+    // may be due to this failing to run. Remove the check if needed
     if !Path::new(&build_dir).exists() {
         let status = Command::new("meson")
             .arg("setup")
