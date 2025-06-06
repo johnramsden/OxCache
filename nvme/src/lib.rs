@@ -4,17 +4,32 @@
 
 use std::{
     ffi::{CStr, CString, c_void},
-    os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd},
+    os::fd::RawFd,
     ptr::null,
 };
 
 use libnvme_sys::bindings::{nvme_open, *};
 
-pub struct ZNSAppendResult {
-    error_code: nvme_status_field,
-    written_addr: u64,
-}
-
+/// Returns a human-readable error string for a given NVMe status code.
+///
+/// # Arguments
+///
+/// * `status` - The NVMe status code (`nvme_status_field`) to convert.
+///
+/// # Returns
+///
+/// * `&'static str` - A static string describing the NVMe status code.
+///
+/// # Safety
+///
+/// This function calls into unsafe FFI code and assumes the status code is valid.
+///
+/// # Example
+///
+/// ```rust
+/// let msg = get_error_string(status);
+/// println!("NVMe error: {}", msg);
+/// ```
 pub fn get_error_string(status: nvme_status_field) -> &'static str {
     // These are all defined as static const char in the C code, so they should have static lifetime
     unsafe {
@@ -24,10 +39,50 @@ pub fn get_error_string(status: nvme_status_field) -> &'static str {
     }
 }
 
+/// Converts an NVMe status code to a standard errno value.
+///
+/// # Arguments
+///
+/// * `status` - The NVMe status code (`nvme_status_field`) to convert.
+///
+/// # Returns
+///
+/// * `u8` - The corresponding errno value.
+///
+/// # Safety
+///
+/// This function calls into unsafe FFI code and assumes the status code is valid.
+///
+/// # Example
+///
+/// ```rust
+/// let errno = get_errno(status);
+/// println!("Errno: {}", errno);
+/// ```
 pub fn get_errno(status: nvme_status_field) -> u8 {
     unsafe { nvme_status_to_errno(status as i32, false) }
 }
 
+/// Opens an NVMe device and returns its file descriptor.
+///
+/// # Arguments
+///
+/// * `device_name` - The path to the NVMe device (e.g., "/dev/nvme0n1").
+///
+/// # Returns
+///
+/// * `Ok(RawFd)` - The file descriptor for the opened NVMe device.
+/// * `Err(())` - If the operation fails.
+///
+/// # Safety
+///
+/// This function calls into unsafe FFI code and assumes the provided device name is valid.
+///
+/// # Example
+///
+/// ```rust
+/// let fd = zns_nvme_open("/dev/nvme0n1").expect("Failed to open NVMe device");
+/// ```
 pub fn zns_nvme_open(device_name: &str) -> Result<RawFd, ()> {
     unsafe { 
 		let fd = nvme_open(CString::new(device_name).unwrap().as_ptr());
@@ -38,6 +93,39 @@ pub fn zns_nvme_open(device_name: &str) -> Result<RawFd, ()> {
 		}
 	}
 }
+
+/// Appends data to a ZNS (Zoned Namespace) zone on an NVMe device.
+///
+/// # Arguments
+///
+/// * `fd` - The file descriptor for the open NVMe device.
+/// * `zone_num` - The index of the zone to which data will be appended.
+/// * `zone_size` - The size of each zone in bytes.
+/// * `data` - The buffer containing data to append. The length should be a multiple of `logical_block_size`.
+/// * `timeout` - Timeout for the operation, in milliseconds.
+/// * `nsid` - Namespace ID, obtained from an identify command.
+/// * `logical_block_size` - The size of a logical block, in bytes.
+///
+/// # Returns
+///
+/// * `Ok(u64)` - The logical block address (LBA) where the data was appended.
+/// * `Err(nvme_status_field)` - An NVMe status code if the operation failed.
+///
+/// # Errors
+///
+/// Returns an error if the NVMe append command fails, with the corresponding NVMe status code.
+///
+/// # Safety
+///
+/// This function calls into unsafe FFI code and assumes the provided arguments are valid for the underlying NVMe device.
+///
+/// # Example
+///
+/// ```rust
+/// let fd = zns_nvme_open("/dev/nvme0n1");
+/// let mut buffer = vec![0u8; 4096];
+/// let lba = zns_append(fd, 0, 1024, &mut buffer, 1000, 1, 4096)?;
+/// ```
 pub fn zns_append(
     fd: RawFd,
     zone_num: u64,
