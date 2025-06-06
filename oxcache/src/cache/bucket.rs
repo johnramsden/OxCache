@@ -1,11 +1,19 @@
 use dashmap::DashMap;
 use crate::cache::Cache;
+use tokio::sync::{RwLock, Notify};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-struct Chunk {
+pub struct Chunk {
     uuid: String,
     offset: usize,
     size: usize,
+}
+
+#[derive(Debug)]
+pub struct ChunkLocation {
+    zone: usize,
+    addr: u64,
 }
 
 impl Chunk {
@@ -17,14 +25,12 @@ impl Chunk {
 }
 
 #[derive(Debug)]
-pub struct Bucket {
-    state: DashMap<String, String>,
+enum BucketState<T> {
+    Waiting(Notify),
+    Ready(Arc<T>),
 }
 
-impl Bucket {
-    pub fn new() -> Self {
-        Self {
-            state: DashMap::new(),
-        }
-    }
+#[derive(Debug)]
+pub struct SharedBucketState<T> {
+    state: RwLock<BucketState<T>>,
 }
