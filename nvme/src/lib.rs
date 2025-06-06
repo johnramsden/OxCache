@@ -28,10 +28,16 @@ pub fn get_errno(status: nvme_status_field) -> u8 {
     unsafe { nvme_status_to_errno(status as i32, false) }
 }
 
-pub fn zns_nvme_open(device_name: &str) -> RawFd {
-    unsafe { nvme_open(CString::new(device_name).unwrap().as_ptr()) }
+pub fn zns_nvme_open(device_name: &str) -> Result<RawFd, ()> {
+    unsafe { 
+		let fd = nvme_open(CString::new(device_name).unwrap().as_ptr());
+		if fd == -1 {
+			Err(())
+		} else {
+			Ok(fd)
+		}
+	}
 }
-
 pub fn zns_append(
     fd: RawFd,
     zone_num: u64,
@@ -40,11 +46,8 @@ pub fn zns_append(
     timeout: u32,
     nsid: u32, // obtained from an identify command
     logical_block_size: usize,
-) -> ZNSAppendResult {
-    let mut ret = ZNSAppendResult {
-        error_code: 0,
-        written_addr: 0,
-    };
+) -> Result<u64, nvme_status_field> {
+    let mut result: u64 = 0;
 
     // See fig. 26 of NVME ZNS Command Set Spec Rev 1.2
     const lr: u16 = 0;
@@ -61,7 +64,7 @@ pub fn zns_append(
     // zslba is the starting logical block address
     let mut args: nvme_zns_append_args = nvme_zns_append_args {
         zslba: zone_num * zone_size,
-        result: &mut ret.written_addr,
+        result: &mut result,
         data: data.as_mut_ptr() as *mut c_void,
         metadata: null::<c_void>() as *mut c_void, // type *mut c_void
         args_size: size_of::<nvme_zns_append_args>() as i32,
@@ -80,8 +83,12 @@ pub fn zns_append(
         ilbrt_u64: 0,
     };
     unsafe {
-        ret.error_code = nvme_zns_append(&mut args) as u32;
+        let error_code = nvme_zns_append(&mut args) as u32;
+        if error_code != nvme_status_field_NVME_SC_SUCCESS {
+            return Err(error_code)
+        }
     }
 
-    return ret;
+    return Ok(result);
 }
+
