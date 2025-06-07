@@ -1,4 +1,5 @@
 use std::os::fd::RawFd;
+use crate::cache::bucket::ChunkLocation;
 
 struct Zoned {
     fd: RawFd,
@@ -11,17 +12,28 @@ struct Zoned {
 struct BlockInterface {}
 
 trait Device {
-    fn append(data: Vec<u8>, zone: u64) -> tokio::io::Result<u64>;
+    fn append(&self, data: Vec<u8>) -> tokio::io::Result<ChunkLocation>;
+    
+    fn new() -> Self; // Args?
 }
 
 impl Device for Zoned {
-    fn append(data: Vec<u8>, zone: u64) -> std::io::Result<u64> {
-        Ok(0)
+    /// Hold internal state to keep track of zone state
+    fn new() -> Self {
+        unimplemented!()
+    }
+    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+        Ok(ChunkLocation::new(0, 0))
     }
 }
 
 impl Device for BlockInterface {
-    fn append(data: Vec<u8>, zone: u64) -> std::io::Result<u64> {
-        Ok(0)
+    /// Hold internal state to keep track of "ssd" zone state
+    fn new() -> Self {
+        unimplemented!()
+    }
+    
+    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+        Ok(ChunkLocation::new(0, 0))
     }
 }
