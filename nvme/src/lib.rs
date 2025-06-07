@@ -1,7 +1,6 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
-#![feature(iter_array_chunks)]
 
 use std::{
     ffi::{CStr, CString, c_void},
@@ -489,6 +488,7 @@ pub fn report_zones(
         "The flexible array field should have size 0"
     );
     const_assert!(align_of::<nvme_zone_report>() <= 64);
+    const_assert!(zone_desc_sz == 64);
 
     const nr_hdr_sz: usize = std::mem::size_of::<nvme_zone_report>();
     const zone_desc_sz: usize = std::mem::size_of::<nvme_zns_desc>();
@@ -514,9 +514,9 @@ pub fn report_zones(
             nvme_status_field_NVME_SC_SUCCESS => Ok(report_buf
                 .into_iter()
                 .skip(nr_hdr_sz)
-                .array_chunks::<{ zone_desc_sz / 64 }>()
-                .map(|data: [u64; 1]| {
-                    let zns_desc = std::ptr::read(data.as_ptr() as *const nvme_zns_desc);
+                .map(|data: u64| {
+                    let data_ptr: *const u64 = &data;
+                    let zns_desc = std::ptr::read(data_ptr as *const nvme_zns_desc);
                     ZNSZoneDescriptor {
                         seq_write_required: zns_desc.zt == 2,
                         zone_state: zns_desc.zs.try_into().unwrap(),
