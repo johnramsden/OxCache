@@ -1,6 +1,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+#![feature(iter_array_chunks)]
 
 use std::{
     ffi::{CStr, CString, c_void},
@@ -9,6 +10,74 @@ use std::{
 };
 
 use libnvme_sys::bindings::{nvme_open, *};
+
+use std::convert::TryFrom;
+
+macro_rules! const_assert {
+    ($($tt:tt)*) => {
+        const _: () = assert!($($tt)*);
+    }
+}
+
+#[repr(u8)]
+pub enum ZoneState {
+    Empty = 1,
+    ImplicitlyOpened = 2,
+    ExplicitlyOpened = 3,
+    Closed = 4,
+    ReadOnly = 13,
+    Full = 14,
+    Offline = 15,
+}
+
+impl TryFrom<u8> for ZoneState {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x01 => Ok(ZoneState::Empty),
+            0x02 => Ok(ZoneState::ImplicitlyOpened),
+            0x03 => Ok(ZoneState::ExplicitlyOpened),
+            0x04 => Ok(ZoneState::Closed),
+            0x13 => Ok(ZoneState::ReadOnly),
+            0x14 => Ok(ZoneState::Full),
+            0x15 => Ok(ZoneState::Offline),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Describes the properties and state of a single ZNS (Zoned Namespace) zone.
+///
+/// This struct provides key information about a zone, including its state, capacity, start address, and write pointer.
+///
+/// # Fields
+///
+/// * `seq_write_required` - Indicates if sequential writes are required for this zone.
+/// * `zone_state` - The current state of the zone, as a `ZoneState`.
+/// * `zone_capacity` - The total capacity of the zone in *logical blocks*.
+/// * `zone_start_address` - The starting logical block address (LBA) of the zone.
+/// * `write_pointer` - The current write pointer LBA for the zone.
+///
+/// # Example
+///
+/// ```rust
+/// let desc = ZNSZoneDescriptor {
+///     seq_write_required: true,
+///     zone_state: ZoneState::Empty,
+///     zone_capacity: 1024,
+///     zone_start_address: 0,
+///     write_pointer: 0,
+/// };
+/// println!("Zone state: {:?}", desc.zone_state);
+/// ```
+pub struct ZNSZoneDescriptor {
+    seq_write_required: bool,
+    zone_state: ZoneState,
+    zone_capacity: u64,
+    zone_start_address: u64,
+    write_pointer: u64,
+}
 
 /// Returns a human-readable error string for a given NVMe status code.
 ///
@@ -242,3 +311,95 @@ pub fn open_zone(
         }
     }
 }
+
+/// Retrieves a report of zones from a Zoned Namespace (ZNS) NVMe device.
+///
+/// # Arguments
+///
+/// * `fd` - The file descriptor for the open NVMe device.
+/// * `nsid` - Namespace ID, obtained from an identify command.
+/// * `zone_num` - The starting zone index for the report.
+/// * `zone_size` - The size of each zone in bytes.
+/// * `max_zones` - The maximum number of zones to report.
+/// * `timeout` - Timeout for the operation, in milliseconds.
+///
+/// # Returns
+///
+/// * `Ok(Vec<ZNSZoneDescriptor>)` - A vector of zone descriptors for the reported zones.
+/// * `Err(nvme_status_field)` - An NVMe status code if the operation failed.
+///
+/// # Errors
+///
+/// Returns an error if the NVMe report zones command fails, with the corresponding NVMe status code.
+///
+/// # Safety
+///
+/// This function calls into unsafe FFI code and assumes the provided arguments are valid for the underlying NVMe device.
+///
+/// # Example
+///
+/// ```rust
+/// let fd = zns_nvme_open("/dev/nvme0n1")?;
+/// let zones = report_zones(fd, 1, 0, 1024, 128, 1000)?;
+/// for zone in zones {
+///     println!("Zone start: {:#x}, state: {:?}", zone.zone_start_address, zone.zone_state);
+/// }
+/// ```
+pub fn report_zones(
+    fd: RawFd,
+    nsid: u32,
+    zone_num: u64,
+    zone_size: u64,
+    max_zones: u64,
+    timeout: u32,
+) -> Result<Vec<ZNSZoneDescriptor>, nvme_status_field> {
+    // dword0, has nothing useful
+    let mut result: u32 = 0;
+
+    const_assert!(
+        std::mem::size_of::<__IncompleteArrayField<nvme_zns_desc>>() == 0,
+        "The flexible array field should have size 0"
+    );
+    const_assert!(align_of::<nvme_zone_report>() <= 64);
+
+    const nr_hdr_sz: usize = std::mem::size_of::<nvme_zone_report>();
+    const zone_desc_sz: usize = std::mem::size_of::<nvme_zns_desc>();
+    let alloc_size = (nr_hdr_sz + zone_desc_sz * max_zones as usize) / 64;
+    let mut report_buf = vec![0_u64; alloc_size];
+
+    // extended reports store a little extra data in each zone, unneeded in this case
+    unsafe {
+        let err = nvme_zns_report_zones_wrapper(
+            fd,
+            nsid,
+            zone_num * zone_size,
+            nvme_zns_report_options_NVME_ZNS_ZRAS_REPORT_ALL,
+            false,
+            true,
+            report_buf.len() as u32,
+            report_buf.as_mut_ptr() as *mut c_void,
+            timeout,
+            &mut result,
+        );
+
+        match err as u32 {
+            nvme_status_field_NVME_SC_SUCCESS => Ok(report_buf
+                .into_iter()
+                .skip(nr_hdr_sz)
+                .array_chunks::<{ zone_desc_sz / 64 }>()
+                .map(|data: [u64; 1]| {
+                    let zns_desc = std::ptr::read(data.as_ptr() as *const nvme_zns_desc);
+                    ZNSZoneDescriptor {
+                        seq_write_required: zns_desc.zt == 2,
+                        zone_state: zns_desc.zs.try_into().unwrap(),
+                        zone_capacity: zns_desc.zcap,
+                        zone_start_address: zns_desc.zslba,
+                        write_pointer: zns_desc.wp,
+                    }
+                })
+                .collect::<Vec<ZNSZoneDescriptor>>()),
+            _ => Err(err as u32),
+        }
+    }
+}
+
