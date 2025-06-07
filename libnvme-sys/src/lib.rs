@@ -4,7 +4,7 @@
 #[allow(warnings)] // suppress all warnings from bindings
 pub mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-    
+
     // Included here because "gen" is a keyword in Rust, so this struct needs to be modified manually to incorporate that
     #[repr(C)]
     pub struct nvme_resv_status {
@@ -17,6 +17,3 @@ pub mod bindings {
         pub __bindgen_anon_1: nvme_resv_status__bindgen_ty_1,
     }
 }
-
-
-
