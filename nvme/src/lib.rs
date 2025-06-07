@@ -303,6 +303,14 @@ pub fn open_zone(
     };
 
     unsafe {
+        match nvme_zns_mgmt_send(&mut args) as u32 {
+            nvme_status_field_NVME_SC_SUCCESS => Ok(zone_cap_changed == 1),
+            status => Err(status)
+        }
+    }
+}
+
+    unsafe {
         let status = nvme_zns_mgmt_send(&mut args) as u32;
         if status == nvme_status_field_NVME_SC_SUCCESS {
             Ok(zone_cap_changed == 1)
