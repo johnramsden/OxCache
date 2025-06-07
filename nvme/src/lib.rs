@@ -373,6 +373,67 @@ pub fn close_zone(fd: RawFd,
         }
     }
 }
+
+/// Resets a specific zone or all zones on a Zoned Namespace (ZNS) NVMe device.
+///
+/// # Arguments
+///
+/// * `fd` - The file descriptor for the open NVMe device.
+/// * `zone_num` - The index of the zone to reset.
+/// * `zone_size` - The size of each zone in bytes.
+/// * `timeout` - Timeout for the operation, in milliseconds.
+/// * `nsid` - Namespace ID, obtained from an identify command.
+/// * `reset_all` - If `true`, reset all zones; if `false`, reset only the specified zone.
+///
+/// # Returns
+///
+/// * `Ok(bool)` - Returns `true` if the zone capacity changed (zone reset), `false` otherwise.
+/// * `Err(nvme_status_field)` - An NVMe status code if the operation failed.
+///
+/// # Errors
+///
+/// Returns an error if the NVMe zone management command fails, with the corresponding NVMe status code.
+///
+/// # Safety
+///
+/// This function calls into unsafe FFI code and assumes the provided arguments are valid for the underlying NVMe device.
+///
+/// # Example
+///
+/// ```rust
+/// let fd = zns_nvme_open("/dev/nvme0n1")?;
+/// let reset = reset_zone(fd, 0, 1024, 1000, 1, false)?;
+/// if reset {
+///     println!("Zone reset successfully");
+/// }
+/// ```
+pub fn reset_zone(fd: RawFd,
+    zone_num: u64,
+    zone_size: u64,
+    timeout: u32,
+    nsid: u32,
+    reset_all: bool)
+-> Result<bool, nvme_status_field> {
+    let mut zone_cap_changed: u32 = 0;
+
+    let mut args = nvme_zns_mgmt_send_args {
+        slba: zone_num * zone_size,
+        result: &mut zone_cap_changed,
+        data: null::<c_void>() as *mut c_void,
+        args_size: size_of::<nvme_zns_mgmt_send_args>() as i32,
+        fd: fd,
+        timeout: timeout,
+        nsid: nsid,
+        zsa: nvme_zns_send_action_NVME_ZNS_ZSA_RESET,
+        data_len: 0,
+        select_all: reset_all,
+        zsaso: 0,
+    };
+
+    unsafe {
+        match nvme_zns_mgmt_send(&mut args) as u32 {
+            nvme_status_field_NVME_SC_SUCCESS => Ok(zone_cap_changed == 1),
+            status => Err(status)
         }
     }
 }
