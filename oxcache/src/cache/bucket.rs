@@ -16,6 +16,12 @@ pub struct ChunkLocation {
     addr: u64,
 }
 
+impl ChunkLocation {
+    pub fn new(zone: usize, addr: u64) -> Self {
+        Self { zone, addr }
+    }
+}
+
 impl Chunk {
     pub fn new(uuid: String, offset: usize, size: usize) -> Self {
         Self {
