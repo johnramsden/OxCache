@@ -238,7 +238,7 @@ pub fn zns_append(
     unsafe {
         let error_code = nvme_zns_append(&mut args) as u32;
         if error_code != nvme_status_field_NVME_SC_SUCCESS {
-            return Err(error_code)
+            return Err(error_code);
         }
     }
 
