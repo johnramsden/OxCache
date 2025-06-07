@@ -305,7 +305,7 @@ pub fn open_zone(
     unsafe {
         match nvme_zns_mgmt_send(&mut args) as u32 {
             nvme_status_field_NVME_SC_SUCCESS => Ok(zone_cap_changed == 1),
-            status => Err(status)
+            status => Err(status),
         }
     }
 }
@@ -343,13 +343,14 @@ pub fn open_zone(
 ///     println!("Zone closed successfully");
 /// }
 /// ```
-pub fn close_zone(fd: RawFd,
+pub fn close_zone(
+    fd: RawFd,
     zone_num: u64,
     zone_size: u64,
     timeout: u32,
     nsid: u32,
-    close_all: bool)
--> Result<bool, nvme_status_field> {
+    close_all: bool,
+) -> Result<bool, nvme_status_field> {
     let mut zone_cap_changed: u32 = 0;
 
     let mut args = nvme_zns_mgmt_send_args {
@@ -369,7 +370,7 @@ pub fn close_zone(fd: RawFd,
     unsafe {
         match nvme_zns_mgmt_send(&mut args) as u32 {
             nvme_status_field_NVME_SC_SUCCESS => Ok(zone_cap_changed == 1),
-            status => Err(status)
+            status => Err(status),
         }
     }
 }
@@ -407,13 +408,14 @@ pub fn close_zone(fd: RawFd,
 ///     println!("Zone reset successfully");
 /// }
 /// ```
-pub fn reset_zone(fd: RawFd,
+pub fn reset_zone(
+    fd: RawFd,
     zone_num: u64,
     zone_size: u64,
     timeout: u32,
     nsid: u32,
-    reset_all: bool)
--> Result<bool, nvme_status_field> {
+    reset_all: bool,
+) -> Result<bool, nvme_status_field> {
     let mut zone_cap_changed: u32 = 0;
 
     let mut args = nvme_zns_mgmt_send_args {
@@ -433,7 +435,7 @@ pub fn reset_zone(fd: RawFd,
     unsafe {
         match nvme_zns_mgmt_send(&mut args) as u32 {
             nvme_status_field_NVME_SC_SUCCESS => Ok(zone_cap_changed == 1),
-            status => Err(status)
+            status => Err(status),
         }
     }
 }
@@ -528,4 +530,3 @@ pub fn report_zones(
         }
     }
 }
-
