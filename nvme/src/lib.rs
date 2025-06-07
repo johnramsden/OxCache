@@ -83,15 +83,11 @@ pub fn get_errno(status: nvme_status_field) -> u8 {
 /// ```rust
 /// let fd = zns_nvme_open("/dev/nvme0n1").expect("Failed to open NVMe device");
 /// ```
-pub fn zns_nvme_open(device_name: &str) -> Result<RawFd, ()> {
-    unsafe { 
-		let fd = nvme_open(CString::new(device_name).unwrap().as_ptr());
-		if fd == -1 {
-			Err(())
-		} else {
-			Ok(fd)
-		}
-	}
+pub fn zns_open(device_name: &str) -> Result<RawFd, ()> {
+    unsafe {
+        let fd = nvme_open(CString::new(device_name).unwrap().as_ptr());
+        if fd == -1 { Err(()) } else { Ok(fd) }
+    }
 }
 
 /// Appends data to a ZNS (Zoned Namespace) zone on an NVMe device.
