@@ -63,7 +63,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         println!("Listening on socket: {}", self.config.socket);
 
         let evictor = Evictor::start();
-        let writerpool = WriterPool::start(self.config.writer_threads);
+        let writerpool = WriterPool::start(self.config.writer_threads, self.config.disk.as_str());
         let readerpool = ReaderPool::start(self.config.reader_threads);
 
         // Shutdown signal

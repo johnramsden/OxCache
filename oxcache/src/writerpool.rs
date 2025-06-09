@@ -1,15 +1,22 @@
+use std::sync::Arc;
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use std::thread::{self, JoinHandle};
+use crate::device;
 
 /// Represents an individual writer thread
 struct Writer {
+    device: Arc<dyn device::Device>,
     id: usize,
     receiver: Receiver<String>,
 }
 
 impl Writer {
-    fn new(id: usize, receiver: Receiver<String>) -> Self {
-        Self { id, receiver }
+    fn new(id: usize, receiver: Receiver<String>, device: Arc<dyn device::Device>) -> Self {
+        Self {
+            id,
+            receiver,
+            device
+        }
     }
 
     fn run(self) {
@@ -30,13 +37,15 @@ pub struct WriterPool {
 
 impl WriterPool {
     /// Creates and starts the writer pool with a given number of threads
-    pub fn start(num_writers: usize) -> Self {
+    pub fn start(num_writers: usize, device: &str) -> Self {
+        // TODO: Should be type SSD if !zoned
+        let dev: Arc<device::Zoned> = Arc::new(device::Device::new(device).unwrap());
         let (sender, receiver): (Sender<String>, Receiver<String>) = unbounded();
         let mut handles = Vec::with_capacity(num_writers);
 
         for id in 0..num_writers {
             let rx_clone = receiver.clone();
-            let writer = Writer::new(id, rx_clone);
+            let writer = Writer::new(id, rx_clone, dev.clone());
             let handle = thread::spawn(move || writer.run());
             handles.push(handle);
         }
