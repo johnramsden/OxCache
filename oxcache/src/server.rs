@@ -10,7 +10,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
 use crate::remote::{EmulatedBackend, RemoteBackend};
-use crate::{remote, request};
+use crate::{device, remote, request};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -61,9 +61,11 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
+        
+        let device = device::get_device(self.config.disk.as_str())?;
 
         let evictor = Evictor::start();
-        let writerpool = WriterPool::start(self.config.writer_threads, self.config.disk.as_str());
+        let writerpool = WriterPool::start(self.config.writer_threads, device);
         let readerpool = ReaderPool::start(self.config.reader_threads);
 
         // Shutdown signal

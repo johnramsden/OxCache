@@ -37,15 +37,14 @@ pub struct WriterPool {
 
 impl WriterPool {
     /// Creates and starts the writer pool with a given number of threads
-    pub fn start(num_writers: usize, device: &str) -> Self {
-        // TODO: Should be type SSD if !zoned
-        let dev: Arc<device::Zoned> = Arc::new(device::Device::new(device).unwrap());
+    pub fn start(num_writers: usize, device: Arc<dyn device::Device>) -> Self {
+        
         let (sender, receiver): (Sender<String>, Receiver<String>) = unbounded();
         let mut handles = Vec::with_capacity(num_writers);
 
         for id in 0..num_writers {
             let rx_clone = receiver.clone();
-            let writer = Writer::new(id, rx_clone, dev.clone());
+            let writer = Writer::new(id, rx_clone, device.clone());
             let handle = thread::spawn(move || writer.run());
             handles.push(handle);
         }

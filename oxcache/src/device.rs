@@ -1,5 +1,8 @@
-use std::os::fd::RawFd;
+use std::fs::OpenOptions;
+use std::os::fd::{AsRawFd, RawFd};
+use std::sync::Arc;
 use crate::cache::bucket::ChunkLocation;
+use crate::device;
 
 pub struct Zoned {
     fd: RawFd,
@@ -9,18 +12,25 @@ pub struct Zoned {
     zone_size: u64,
 }
 
-pub struct BlockInterface {}
+pub struct BlockInterface {
+    fd: RawFd,
+}
 
 pub trait Device: Send + Sync {
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
     
-    fn new(device: &str) -> std::io::Result<Self> where Self: Sized; // Args?
+    fn new(device: &str) -> std::io::Result<Self> where Self: Sized; // Args
+}
+pub fn get_device(device: &str) -> std::io::Result<Arc<dyn Device>> {
+    // TODO: If dev type Zoned..., else
+    Ok(Arc::new(device::BlockInterface::new(device)?))
 }
 
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn new(device: &str) -> std::io::Result<Self> {
-        unimplemented!(); // TODO: REMOVE
+        unimplemented!();
+        // TODO: PANICS
         Ok(Self {
             fd: nvme::zns_open(device).expect(format!("Failed to open zoned device {}", device).as_str()),
             // TODO:
@@ -38,7 +48,12 @@ impl Device for Zoned {
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
     fn new(device: &str) -> std::io::Result<Self> {
-        Ok(Self {})
+        let handle = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(device)?;
+        let fd = handle.as_raw_fd();
+        Ok(Self { fd })
     }
     
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
