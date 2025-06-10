@@ -2,6 +2,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 use dashmap::DashMap;
 use crate::cache::bucket::{ChunkLocation, SharedBucketState, Chunk};
+use crate::readerpool::ReaderPool;
+use crate::writerpool::WriterPool;
 
 pub mod bucket;
 

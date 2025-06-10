@@ -1,7 +1,7 @@
 use crate::cache::Cache;
 use crate::eviction::Evictor;
 use crate::readerpool::ReaderPool;
-use crate::writerpool::WriterPool;
+use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
 
 // use tokio::spawn;
@@ -65,23 +65,22 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(self.config.disk.as_str())?;
 
         let evictor = Evictor::start();
-        let writerpool = WriterPool::start(self.config.writer_threads, device);
-        let readerpool = ReaderPool::start(self.config.reader_threads);
+        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, device));
+        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads));
 
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());
         let shutdown_signal = shutdown.clone();
 
         // Spawn a task to listen for Ctrl+C
-        let shutdown_task = tokio::spawn(async move {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to listen for ctrl_c");
-            println!("Ctrl+C received, shutting down...");
-            shutdown_signal.notify_waiters();
-            evictor.stop();
-            writerpool.stop();
-            readerpool.stop();
+        let shutdown_task = tokio::spawn({
+            async move {
+                tokio::signal::ctrl_c()
+                    .await
+                    .expect("Failed to listen for ctrl_c");
+                println!("Ctrl+C received, shutting down...");
+                shutdown_signal.notify_waiters();
+            }
         });
 
         // Request handling (green threads)
@@ -98,11 +97,13 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                             println!("Accepted connection: {:?}", addr);
 
                             tokio::spawn({
-                                let cache = Arc::clone(&self.cache);
+                                let writer_pool = Arc::clone(&self.cache);
                                 let remote = Arc::clone(&self.remote);
+                                let writerpool = Arc::clone(&writerpool);
+                                let readerpool = Arc::clone(&readerpool);
                                 async move {
                                     
-                                if let Err(e) = handle_connection(stream, cache, remote).await {
+                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote).await {
                                     eprintln!("Connection error: {}", e);
                                 }
                             }});
@@ -115,13 +116,18 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             }
         }
 
+        // Cleanup (last)
+        evictor.stop();
+        // writerpool.stop(); // Cannot move
+        // readerpool.stop(); // Cannot move
         Ok(())
     }
 }
 
 async fn handle_connection<T: RemoteBackend + Send + Sync>(
     stream: UnixStream,
-    _cache: Arc<Cache>,
+    writer_pool: Arc<WriterPool>,
+    reader_pool: Arc<ReaderPool>,
     remote: Arc<T>,
 ) -> tokio::io::Result<()> {
     let (read_half, write_half) = split(stream);
@@ -156,11 +162,22 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                             }
                         };
                         let encoded = bincode::serde::encode_to_vec(
-                            request::GetResponse::Response(resp),
+                            request::GetResponse::Response(resp.clone()),
                             bincode::config::standard()
                         ).unwrap();
                         writer.send(Bytes::from(encoded)).await?;
+                        
                         // Proceed with writing/reading to/from disk
+                        let (tx, rx) = flume::bounded(1);
+                        let write_req = WriteRequest {
+                            data: resp,
+                            responder: tx,
+                        };
+                        writer_pool.send(write_req).await?;
+                        let recv_err = rx.recv_async().await;
+                        if recv_err.is_err() {
+                            eprintln!("Failed to get response {:?}", recv_err);
+                        }
                     }
                     request::Request::Close => {
                         println!("Received close request");

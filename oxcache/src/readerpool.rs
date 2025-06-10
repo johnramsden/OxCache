@@ -1,4 +1,4 @@
-use crossbeam::channel::{Receiver, Sender, unbounded};
+use flume::{Receiver, Sender, unbounded};
 use std::thread::{self, JoinHandle};
 
 /// Represents an individual reader thread
@@ -23,6 +23,7 @@ impl Reader {
 }
 
 /// Pool of writer threads sharing a single receiver
+#[derive(Debug)]
 pub struct ReaderPool {
     sender: Sender<String>,
     handles: Vec<JoinHandle<()>>,
