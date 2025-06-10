@@ -3,14 +3,13 @@
 #![allow(non_snake_case)]
 
 use std::{
-    ffi::{CStr, CString, c_void},
-    os::fd::RawFd,
-    ptr::null,
+    ffi::{c_void, CStr, CString}, fs::{File, OpenOptions}, os::fd::{IntoRawFd, RawFd}, ptr::null
 };
 
-use libnvme_sys::bindings::{nvme_open, *};
-
+use errno::{Errno, errno};
+use libnvme_sys::bindings::{*};
 use std::convert::TryFrom;
+use libc::{open, O_RDWR, O_DIRECT, O_SYNC, O_LARGEFILE};
 
 macro_rules! const_assert {
     ($($tt:tt)*) => {
@@ -151,10 +150,15 @@ pub fn get_errno(status: nvme_status_field) -> u8 {
 /// ```rust
 /// let fd = zns_nvme_open("/dev/nvme0n1").expect("Failed to open NVMe device");
 /// ```
-pub fn zns_open(device_name: &str) -> Result<RawFd, ()> {
+pub fn zns_open(device_name: &str) -> Result<RawFd, Errno> {
+    let cstr_ptr = CString::new(device_name).unwrap();
     unsafe {
-        let fd = nvme_open(CString::new(device_name).unwrap().as_ptr());
-        if fd == -1 { Err(()) } else { Ok(fd) }
+        let fd: i32 = open(cstr_ptr.as_ptr(), O_RDWR | O_DIRECT | O_SYNC | O_LARGEFILE);
+        if fd == -1 {
+            Err(errno())
+        } else {
+            Ok(fd)
+        }
     }
 }
 

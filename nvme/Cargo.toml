@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 libnvme-sys = { path = "../libnvme-sys" }
+errno = "0.3.12"
+libc = "0.2.172"
