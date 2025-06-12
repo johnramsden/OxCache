@@ -101,9 +101,10 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let remote = Arc::clone(&self.remote);
                                 let writerpool = Arc::clone(&writerpool);
                                 let readerpool = Arc::clone(&readerpool);
+                                let cache = Arc::clone(&self.cache);
                                 async move {
                                     
-                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote).await {
+                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache).await {
                                     eprintln!("Connection error: {}", e);
                                 }
                             }});
@@ -129,6 +130,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
     writer_pool: Arc<WriterPool>,
     reader_pool: Arc<ReaderPool>,
     remote: Arc<T>,
+    cache: Arc<Cache>,
 ) -> tokio::io::Result<()> {
     let (read_half, write_half) = split(stream);
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
@@ -177,7 +179,10 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                         let recv_err = rx.recv_async().await;
                         if recv_err.is_err() {
                             eprintln!("Failed to get response {:?}", recv_err);
+                            return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
                         }
+                        
+                        // Add to map
                     }
                     request::Request::Close => {
                         println!("Received close request");

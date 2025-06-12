@@ -31,12 +31,12 @@ impl Chunk {
 }
 
 #[derive(Debug)]
-enum BucketState<T> {
+pub enum BucketState<T> {
     Waiting(Notify),
     Ready(Arc<T>),
 }
 
 #[derive(Debug)]
 pub struct SharedBucketState<T> {
-    state: RwLock<BucketState<T>>,
+    pub state: RwLock<BucketState<T>>,
 }
