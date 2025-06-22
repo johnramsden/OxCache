@@ -10,7 +10,11 @@ use std::{
 
 use libnvme_sys::bindings::{nvme_open, *};
 
+use regex::Regex;
+
 use std::convert::TryFrom;
+
+use errno::{Errno, errno};
 
 macro_rules! const_assert {
     ($($tt:tt)*) => {
@@ -19,6 +23,7 @@ macro_rules! const_assert {
 }
 
 #[repr(u8)]
+#[derive(Debug)]
 pub enum ZoneState {
     Empty = 1,
     ImplicitlyOpened = 2,
@@ -61,6 +66,8 @@ impl TryFrom<u8> for ZoneState {
 /// # Example
 ///
 /// ```rust
+/// use nvme::{ZNSZoneDescriptor, ZoneState};
+/// 
 /// let desc = ZNSZoneDescriptor {
 ///     seq_write_required: true,
 ///     zone_state: ZoneState::Empty,
@@ -70,12 +77,13 @@ impl TryFrom<u8> for ZoneState {
 /// };
 /// println!("Zone state: {:?}", desc.zone_state);
 /// ```
+#[derive(Debug)]
 pub struct ZNSZoneDescriptor {
-    seq_write_required: bool,
-    zone_state: ZoneState,
-    zone_capacity: u64,
-    zone_start_address: u64,
-    write_pointer: u64,
+    pub seq_write_required: bool,
+    pub zone_state: ZoneState,
+    pub zone_capacity: u64,
+    pub zone_start_address: u64,
+    pub write_pointer: u64,
 }
 
 /// Returns a human-readable error string for a given NVMe status code.
@@ -95,8 +103,13 @@ pub struct ZNSZoneDescriptor {
 /// # Example
 ///
 /// ```rust
-/// let msg = get_error_string(status);
-/// println!("NVMe error: {}", msg);
+/// use nvme::{get_error_string, report_zones};
+/// 
+/// // Example function that will fail
+/// match report_zones(1, 2, 3, 4, 5, 6) {
+/// 	Ok(_) => panic!("Unexpected"),
+/// 	Err(status) => println!("NVMe error: {}", get_error_string(status))
+/// };
 /// ```
 pub fn get_error_string(status: nvme_status_field) -> &'static str {
     // These are all defined as static const char in the C code, so they should have static lifetime
@@ -105,6 +118,16 @@ pub fn get_error_string(status: nvme_status_field) -> &'static str {
             .to_str()
             .unwrap()
     }
+}
+
+/// Linux-specific and probably not reliable, but will work.
+/// Parses the dev device file's name to retrieve the NSID.
+pub fn get_nsid<'a>(device_name: &'a str) -> Result<u32, ()> {
+    let re = Regex::new(r"/dev/nvme(?<nvmenum>[0-9]*)n(?<nsid>[0-9]*)(p[0-9]*)+").unwrap();
+    let Some(captures) = re.captures(device_name) else {
+        return Err(());
+    };
+    Ok(captures["nsid"].parse::<u32>().unwrap())
 }
 
 /// Converts an NVMe status code to a standard errno value.
@@ -124,23 +147,33 @@ pub fn get_error_string(status: nvme_status_field) -> &'static str {
 /// # Example
 ///
 /// ```rust
-/// let errno = get_errno(status);
-/// println!("Errno: {}", errno);
+/// use nvme::{get_errno, report_zones};
+/// 
+/// // Example function call that will fail
+/// match report_zones(1, 2, 3, 4, 5, 6) {
+/// 	Ok(fd) => panic!("Unexpected"),
+/// 	Err(nvme_status) => {
+/// 		let errno = get_errno(nvme_status);
+/// 		println!("Errno: {}", errno);
+/// 	}
+/// }
 /// ```
 pub fn get_errno(status: nvme_status_field) -> u8 {
     unsafe { nvme_status_to_errno(status as i32, false) }
 }
 
-/// Opens an NVMe device and returns its file descriptor.
+/// Opens an NVMe device and returns its file descriptor. Note that
+/// this function does NOT require you to prepend "/dev/" in front,
+/// i.e. "nvmeXnY" will be sufficient.
 ///
 /// # Arguments
 ///
-/// * `device_name` - The path to the NVMe device (e.g., "/dev/nvme0n1").
+/// * `device_name` - The path to the NVMe device (e.g., "nvme0n1").
 ///
 /// # Returns
 ///
 /// * `Ok(RawFd)` - The file descriptor for the opened NVMe device.
-/// * `Err(())` - If the operation fails.
+/// * `Err(Errno)` - If the operation fails.
 ///
 /// # Safety
 ///
@@ -149,12 +182,18 @@ pub fn get_errno(status: nvme_status_field) -> u8 {
 /// # Example
 ///
 /// ```rust
-/// let fd = zns_nvme_open("/dev/nvme0n1").expect("Failed to open NVMe device");
+/// use nvme::zns_open;
+/// 
+/// let fd = zns_open("nvme0n1").expect("Failed to open NVMe device");
 /// ```
-pub fn zns_open(device_name: &str) -> Result<RawFd, ()> {
+pub fn zns_open(device_name: &str) -> Result<RawFd, Errno> {
     unsafe {
         let fd = nvme_open(CString::new(device_name).unwrap().as_ptr());
-        if fd == -1 { Err(()) } else { Ok(fd) }
+        if fd == -1 {
+			Err(errno())
+		} else { 
+			Ok(fd) 
+		}
     }
 }
 
@@ -186,9 +225,11 @@ pub fn zns_open(device_name: &str) -> Result<RawFd, ()> {
 /// # Example
 ///
 /// ```rust
-/// let fd = zns_nvme_open("/dev/nvme0n1");
-/// let mut buffer = vec![0u8; 4096];
-/// let lba = zns_append(fd, 0, 1024, &mut buffer, 1000, 1, 4096)?;
+/// use nvme::*;
+/// 
+/// let fd = zns_open("nvme0n1").unwrap();
+/// // let mut buffer = vec![0u8; 4096];
+/// // let lba = zns_append(fd, 0, 1024, &mut buffer, 1000, 1, 4096).unwrap();
 /// ```
 pub fn zns_append(
     fd: RawFd,
@@ -271,11 +312,15 @@ pub fn zns_append(
 /// # Example
 ///
 /// ```rust
-/// let fd = zns_nvme_open("/dev/nvme0n1")?;
-/// let opened = open_zone(fd, 0, 1024, 1000, 1, false)?;
-/// if opened {
-///     println!("Zone opened successfully");
-/// }
+/// use nvme::*;
+/// 
+/// let fd = zns_open("nvme0n1").unwrap();
+/// let result = open_zone(fd, 0, 1024, 1000, 1, false);
+/// 
+/// match result {
+/// 	Ok(_) => "OK",
+/// 	Err(status) => get_error_string(status)
+/// };
 /// ```
 pub fn open_zone(
     fd: RawFd,
@@ -336,11 +381,15 @@ pub fn open_zone(
 /// # Example
 ///
 /// ```rust
-/// let fd = zns_nvme_open("/dev/nvme0n1")?;
-/// let closed = close_zone(fd, 0, 1024, 1000, 1, false)?;
-/// if closed {
-///     println!("Zone closed successfully");
-/// }
+/// use nvme::*;
+/// 
+/// let fd = zns_open("nvme0n1").unwrap();
+/// let closed = close_zone(fd, 0, 1024, 1000, 1, false);
+/// 
+/// match closed {
+/// 	Ok(cap_changed) => println!("{}", cap_changed),
+/// 	Err(status) => println!("{}", get_error_string(status))
+/// };
 /// ```
 pub fn close_zone(
     fd: RawFd,
@@ -401,11 +450,14 @@ pub fn close_zone(
 /// # Example
 ///
 /// ```rust
-/// let fd = zns_nvme_open("/dev/nvme0n1")?;
-/// let reset = reset_zone(fd, 0, 1024, 1000, 1, false)?;
-/// if reset {
-///     println!("Zone reset successfully");
-/// }
+/// use nvme::*;
+/// 
+/// let fd = zns_open("nvme0n1").unwrap();
+/// let reset = reset_zone(fd, 0, 1024, 1000, 1, false);
+/// match reset {
+/// 	Ok(cap_changed) => println!("{}", cap_changed),
+/// 	Err(status) => println!("{}", get_error_string(status))
+/// };
 /// ```
 pub fn reset_zone(
     fd: RawFd,
@@ -466,11 +518,19 @@ pub fn reset_zone(
 /// # Example
 ///
 /// ```rust
-/// let fd = zns_nvme_open("/dev/nvme0n1")?;
-/// let zones = report_zones(fd, 1, 0, 1024, 128, 1000)?;
-/// for zone in zones {
-///     println!("Zone start: {:#x}, state: {:?}", zone.zone_start_address, zone.zone_state);
-/// }
+/// use nvme::*;
+/// 
+/// let fd = zns_open("nvme1n1").unwrap();
+/// let zones = report_zones(fd, 1, 0, 1024, 128, 1000);
+/// 
+/// match zones {
+/// 	Ok(zones) => {
+/// 		for zone in zones {
+///     		println!("Zone start: {:#x}, state: {:?}", zone.zone_start_address, zone.zone_state);
+/// 		}
+/// 	},
+/// 	Err(err) => println!("{}", get_error_string(err))
+/// };
 /// ```
 pub fn report_zones(
     fd: RawFd,
@@ -488,9 +548,12 @@ pub fn report_zones(
         "The flexible array field should have size 0"
     );
     const_assert!(align_of::<nvme_zone_report>() <= 64);
+	const_assert!(nr_hdr_sz == 64);
     const_assert!(zone_desc_sz == 64);
 
+    // The header stores number of zones and the rest are zone descriptors in a flexible array
     const nr_hdr_sz: usize = std::mem::size_of::<nvme_zone_report>();
+    // The zone descriptor zone type, zone state, zone attributes, zone capacity, zone starting LBA, and the write pointer.
     const zone_desc_sz: usize = std::mem::size_of::<nvme_zns_desc>();
     let alloc_size = (nr_hdr_sz + zone_desc_sz * max_zones as usize) / 64;
     let mut report_buf = vec![0_u64; alloc_size];
@@ -515,7 +578,7 @@ pub fn report_zones(
                 .into_iter()
                 .skip(nr_hdr_sz)
                 .map(|data: u64| {
-                    let data_ptr: *const u64 = &data;
+					let data_ptr: *const u64 = &data;
                     let zns_desc = std::ptr::read(data_ptr as *const nvme_zns_desc);
                     ZNSZoneDescriptor {
                         seq_write_required: zns_desc.zt == 2,
@@ -530,3 +593,12 @@ pub fn report_zones(
         }
     }
 }
+
+pub fn id_namespace() {
+    // TODO: Implement this function to retrieve namespace information.
+    // See fig 144 of NVMe 1.1 spec
+}
+
+// pub fn id_zns() {
+
+// }
