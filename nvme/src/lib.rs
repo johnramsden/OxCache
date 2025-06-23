@@ -23,7 +23,7 @@ macro_rules! const_assert {
 }
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ZoneState {
     Empty = 1,
     ImplicitlyOpened = 2,
@@ -491,6 +491,17 @@ pub fn reset_zone(
     }
 }
 
+pub fn report_zones_all(
+    fd: RawFd,
+    nsid: u32,
+) -> Result<(u64, Vec<ZNSZoneDescriptor>), nvme_status_field> {
+    let initial_res = report_zones(fd, nsid, 0, 0, 0);
+    match initial_res {
+        Ok((nz, _)) => report_zones(fd, nsid, 0, nz, 0),
+        Err(_) => initial_res,
+    }
+}
+
 /// Retrieves a report of zones from a Zoned Namespace (ZNS) NVMe device.
 ///
 /// # Arguments
@@ -535,11 +546,10 @@ pub fn reset_zone(
 pub fn report_zones(
     fd: RawFd,
     nsid: u32,
-    zone_num: u64,
-    zone_size: u64,
-    max_zones: u64,
+    starting_address: u64,
+    report_count: u64, // 0 to just report the number of zones
     timeout: u32,
-) -> Result<Vec<ZNSZoneDescriptor>, nvme_status_field> {
+) -> Result<(u64, Vec<ZNSZoneDescriptor>), nvme_status_field> {
     // dword0, has nothing useful
     let mut result: u32 = 0;
 
@@ -555,40 +565,52 @@ pub fn report_zones(
     const nr_hdr_sz: usize = std::mem::size_of::<nvme_zone_report>();
     // The zone descriptor zone type, zone state, zone attributes, zone capacity, zone starting LBA, and the write pointer.
     const zone_desc_sz: usize = std::mem::size_of::<nvme_zns_desc>();
-    let alloc_size = (nr_hdr_sz + zone_desc_sz * max_zones as usize) / 64;
-    let mut report_buf = vec![0_u64; alloc_size];
+    let alloc_size = nr_hdr_sz + zone_desc_sz * report_count as usize;
+    let mut report_buf = vec![0_u64; alloc_size / std::mem::size_of::<u64>()];
 
     // extended reports store a little extra data in each zone, unneeded in this case
     unsafe {
         let err = nvme_zns_report_zones_wrapper(
             fd,
             nsid,
-            zone_num * zone_size,
+            starting_address,
             nvme_zns_report_options_NVME_ZNS_ZRAS_REPORT_ALL,
             false,
-            true,
-            report_buf.len() as u32,
+            report_count != 0,
+            alloc_size as u32,
             report_buf.as_mut_ptr() as *mut c_void,
             timeout,
             &mut result,
         );
 
+        // This is very messy. Consider cleaning up?
         match err as u32 {
-            nvme_status_field_NVME_SC_SUCCESS => Ok(report_buf
-                .into_iter()
-                .skip(nr_hdr_sz)
-                .map(|data: u64| {
-					let data_ptr: *const u64 = &data;
-                    let zns_desc = std::ptr::read(data_ptr as *const nvme_zns_desc);
-                    ZNSZoneDescriptor {
-                        seq_write_required: zns_desc.zt == 2,
-                        zone_state: zns_desc.zs.try_into().unwrap(),
-                        zone_capacity: zns_desc.zcap,
-                        zone_start_address: zns_desc.zslba,
-                        write_pointer: zns_desc.wp,
-                    }
-                })
-                .collect::<Vec<ZNSZoneDescriptor>>()),
+            nvme_status_field_NVME_SC_SUCCESS => Ok({
+                if report_buf.len() == 1 {
+                    (report_buf[0], Vec::new())
+                } else {
+                    (
+                        report_buf[0],
+                        report_buf[8..]
+                            .iter()
+                            .as_slice()
+                            .chunks_exact(8)
+                            .map(|data: &[u64]| {
+                                let data_ptr: *const u64 = data.as_ptr();
+                                let zns_desc = std::ptr::read(data_ptr as *const nvme_zns_desc);
+                                let zone_state = zns_desc.zs >> 4;
+                                ZNSZoneDescriptor {
+                                    seq_write_required: (zns_desc.zt & 0b111) == 2,
+                                    zone_state: zone_state.try_into().unwrap(),
+                                    zone_capacity: zns_desc.zcap,
+                                    zone_start_address: zns_desc.zslba,
+                                    write_pointer: zns_desc.wp,
+                                }
+                            })
+                            .collect::<Vec<ZNSZoneDescriptor>>(),
+                    )
+                }
+            }),
             _ => Err(err as u32),
         }
     }
