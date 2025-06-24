@@ -32,7 +32,7 @@ impl Chunk {
 
 #[derive(Debug)]
 pub enum BucketState<T> {
-    Waiting(Notify),
+    Waiting(Arc<Notify>),
     Ready(Arc<T>),
 }
 
