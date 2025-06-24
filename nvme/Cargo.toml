@@ -9,4 +9,8 @@ errno = "0.3.13"
 libnvme-sys = { path = "../libnvme-sys" }
 regex = "1.11.1"
 serde = { version = "1.0.219", features = ["derive"] }
+serial_test = "3.2.0"
 toml = "0.8.23"
+
+[profile.dev.package."*"]
+opt-level = 3

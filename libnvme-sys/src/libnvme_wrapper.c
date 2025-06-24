@@ -8,3 +8,17 @@ int nvme_zns_report_zones_wrapper(int fd, __u32 nsid, __u64 slba,
 				  __u32 timeout, __u32 *result) {
   return nvme_zns_report_zones(fd, nsid, slba, opts, extended, partial, data_len, data, timeout, result);
 }
+
+
+int nvme_identify_ns_wrapper(int fd, __u32 nsid, struct nvme_id_ns *ns) {
+	return nvme_identify_ns(fd, nsid, ns);
+}
+
+int nvme_zns_identify_ns_wrapper(int fd, __u32 nsid,
+			struct nvme_zns_id_ns *data) {
+				return nvme_zns_identify_ns(fd, nsid, data);
+			}
+
+int nvme_zns_identify_ctrl_wrapper(int fd, struct nvme_zns_id_ctrl *id) {
+	return nvme_zns_identify_ctrl(fd, id);
+}
