@@ -163,6 +163,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let chunk = chunk.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);
+                                let writer_pool = Arc::clone(&writer_pool);
                                 move || async move {
                                     let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
                                         Ok(resp) => resp,
@@ -187,7 +188,32 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         let mut w = writer.lock().await;
                                         w.send(Bytes::from(encoded)).await?;
                                     }
-                                    Ok(ChunkLocation::new(0, 0))
+
+                                    // Proceed with writing to disk
+                                    let (tx, rx) = flume::bounded(1);
+                                    let write_req = WriteRequest {
+                                        data: resp,
+                                        responder: tx,
+                                    };
+                                    writer_pool.send(write_req).await?;
+                                    
+                                    // Recieve written val
+                                    let recv_err = rx.recv_async().await;
+                                    let write_response = match recv_err {
+                                        Ok(wr) => { 
+                                            match wr.location {
+                                                Ok(loc) => loc,
+                                                Err(e) => {
+                                                    return Err(e);
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            eprintln!("Failed to get response {:?}", e);
+                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
+                                        },
+                                    };
+                                    Ok(write_response)
                                 }
                             },
                         ).await?;
