@@ -7,7 +7,7 @@ use std::error::Error;
 // use tokio::spawn;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 
 use crate::remote::{EmulatedBackend, RemoteBackend};
 use crate::{device, remote, request};
@@ -126,7 +126,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     }
 }
 
-async fn handle_connection<T: RemoteBackend + Send + Sync>(
+async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     stream: UnixStream,
     writer_pool: Arc<WriterPool>,
     reader_pool: Arc<ReaderPool>,
@@ -135,7 +135,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
 ) -> tokio::io::Result<()> {
     let (read_half, write_half) = split(stream);
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LengthDelimitedCodec::new())));
     
     while let Some(frame) = reader.next().await {
         let f = frame?;
@@ -151,16 +151,44 @@ async fn handle_connection<T: RemoteBackend + Send + Sync>(
                     request::Request::Get(req) => {
                         println!("Received get request: {:?}", req);
                         let chunk: Chunk = req.into();
-                        let buffer = cache.get_or_insert_with(
-                            chunk,
+                        cache.get_or_insert_with(
+                            chunk.clone(),
                             // Data was in map, read and return it
                             |location| async {
                                 // Read from disk via channel
                                 unimplemented!();
                             },
                             // Data wasn't in map, request it and write it
-                            || async {                                
-                                Ok(ChunkLocation::new(0, 0))
+                            {
+                                let chunk = chunk.clone();
+                                let writer = Arc::clone(&writer);
+                                let remote = Arc::clone(&remote);
+                                move || async move {
+                                    let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
+                                        Ok(resp) => resp,
+                                        Err(e) => {
+                                            let encoded = bincode::serde::encode_to_vec(
+                                                request::GetResponse::Error(e.to_string()),
+                                                bincode::config::standard()
+                                            ).unwrap();
+                                            {
+                                                let mut w = writer.lock().await;
+                                                w.send(Bytes::from(encoded)).await?;
+                                            }
+                                            // Fatal error, or keep accepting? Currently fatal, closes connection.
+                                            return Err(e);
+                                        }
+                                    };
+                                    let encoded = bincode::serde::encode_to_vec(
+                                        request::GetResponse::Response(resp.clone()),
+                                        bincode::config::standard()
+                                    ).unwrap();
+                                    {
+                                        let mut w = writer.lock().await;
+                                        w.send(Bytes::from(encoded)).await?;
+                                    }
+                                    Ok(ChunkLocation::new(0, 0))
+                                }
                             },
                         ).await?;
 

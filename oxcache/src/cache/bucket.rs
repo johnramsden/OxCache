@@ -6,9 +6,9 @@ use crate::request::GetRequest;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Chunk {
-    uuid: String,
-    offset: usize,
-    size: usize,
+    pub uuid: String,
+    pub offset: usize,
+    pub size: usize,
 }
 
 #[derive(Debug)]
