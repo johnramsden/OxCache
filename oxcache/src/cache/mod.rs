@@ -32,7 +32,10 @@ impl Cache {
         W: FnOnce() -> WFut + Send + 'static,
         WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static
     {
+       
+        // Creates rw lock on entry
         match self.buckets.entry(key.clone()) {
+            // Read from map
             Entry::Occupied(e) => {
                 let shared = Arc::clone(e.get());
 
@@ -41,18 +44,22 @@ impl Cache {
 
                     match &*state {
                         BucketState::Ready(inner) => {
+                            println!("Wrote to bucket: {:?}", inner);
                             reader(Arc::clone(inner)).await?;
                             return Ok(());
                         }
                         BucketState::Waiting(notify) => {
                             let notify = Arc::clone(notify);
-                            drop(state);
-                            notify.notified().await;
+                            let notified = notify.notified();
+                            drop(state); 
+                            // No race condition, we subscribe above at notified(), queuing notifications
+                            notified.await;
                         }
                     }
                 }
             }
 
+            // Write to map
             Entry::Vacant(e) => {
                 let notify = Arc::new(Notify::new());
                 let shared = Arc::new(SharedBucketState {
@@ -69,7 +76,7 @@ impl Cache {
                         let data = Arc::new(data);
                         *state = BucketState::Ready(Arc::clone(&data));
                         notify.notify_waiters();
-                        
+                        println!("Wrote to bucket: {:?}", data);
                         Ok(())
                     }
                     Err(e) => {

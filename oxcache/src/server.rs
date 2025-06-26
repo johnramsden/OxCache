@@ -136,7 +136,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     let (read_half, write_half) = split(stream);
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
     let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LengthDelimitedCodec::new())));
-    
+
     while let Some(frame) = reader.next().await {
         let f = frame?;
         let bytes = f.as_ref();
@@ -165,6 +165,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let remote = Arc::clone(&remote);
                                 let writer_pool = Arc::clone(&writer_pool);
                                 move || async move {
+                                    // Call remote (S3, ...)
                                     let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
                                         Ok(resp) => resp,
                                         Err(e) => {
@@ -180,6 +181,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             return Err(e);
                                         }
                                     };
+                                    
+                                    // Send to user
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(resp.clone()),
                                         bincode::config::standard()
@@ -196,11 +199,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         responder: tx,
                                     };
                                     writer_pool.send(write_req).await?;
-                                    
+
                                     // Recieve written val
                                     let recv_err = rx.recv_async().await;
                                     let write_response = match recv_err {
-                                        Ok(wr) => { 
+                                        Ok(wr) => {
                                             match wr.location {
                                                 Ok(loc) => loc,
                                                 Err(e) => {
@@ -216,41 +219,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     Ok(write_response)
                                 }
                             },
-                        ).await?;
-
-                        // // Write to disk, return ChunkLocation
-                        // // Grab from remote
-                        // let resp = match remote.get(req.key.as_str(), req.offset, req.size).await {
-                        //     Ok(resp) => resp,
-                        //     Err(e) => {
-                        //         let encoded = bincode::serde::encode_to_vec(
-                        //             request::GetResponse::Error(e.to_string()),
-                        //             bincode::config::standard()
-                        //         ).unwrap();
-                        //         writer.send(Bytes::from(encoded)).await?;
-                        //         // Fatal error, or keep accepting? Currently fatal, closes connection.
-                        //         return Err(e);
-                        //     }
-                        // };
-                        // let encoded = bincode::serde::encode_to_vec(
-                        //     request::GetResponse::Response(resp.clone()),
-                        //     bincode::config::standard()
-                        // ).unwrap();
-                        // writer.send(Bytes::from(encoded)).await?;
-                        // 
-                        // // Proceed with writing to disk
-                        // let (tx, rx) = flume::bounded(1);
-                        // let write_req = WriteRequest {
-                        //     data: resp,
-                        //     responder: tx,
-                        // };
-                        // writer_pool.send(write_req).await?;
-                        // let recv_err = rx.recv_async().await;
-                        // if recv_err.is_err() {
-                        //     eprintln!("Failed to get response {:?}", recv_err);
-                        //     return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
-                        // }
-                        
+                        ).await?;                        
                     }
                     request::Request::Close => {
                         println!("Received close request");
