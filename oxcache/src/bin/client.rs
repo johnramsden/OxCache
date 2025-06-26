@@ -32,7 +32,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
     let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
     
-    for number in 0..10 {
+    let work = vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
+    for number in work {
         let msg = Request::Get(GetRequest {
             key: number.to_string(),
             offset: number,

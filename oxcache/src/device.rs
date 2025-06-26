@@ -19,6 +19,8 @@ pub struct BlockInterface {
 pub trait Device: Send + Sync {
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
     
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
+    
     fn new(device: &str) -> std::io::Result<Self> where Self: Sized; // Args
 }
 pub fn get_device(device: &str) -> std::io::Result<Arc<dyn Device>> {
@@ -43,6 +45,10 @@ impl Device for Zoned {
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
         Ok(ChunkLocation::new(0, 0))
     }
+    
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
 }
 
 impl Device for BlockInterface {
@@ -58,5 +64,9 @@ impl Device for BlockInterface {
     
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
         Ok(ChunkLocation::new(0, 0))
+    }
+
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+        Ok(Vec::new())
     }
 }

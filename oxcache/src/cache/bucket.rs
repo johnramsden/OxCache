@@ -12,6 +12,7 @@ pub struct Chunk {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct ChunkLocation {
     zone: usize,
     addr: u64,

@@ -44,7 +44,7 @@ impl Cache {
 
                     match &*state {
                         BucketState::Ready(inner) => {
-                            println!("Wrote to bucket: {:?}", inner);
+                            println!("Read from bucket: {:?}", inner);
                             reader(Arc::clone(inner)).await?;
                             return Ok(());
                         }
@@ -66,6 +66,7 @@ impl Cache {
                     state: RwLock::new(BucketState::Waiting(notify.clone())),
                 });
 
+                // Race here
                 e.insert(Arc::clone(&shared));
 
                 let result = writer().await;

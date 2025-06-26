@@ -1,6 +1,6 @@
 use crate::cache::Cache;
 use crate::eviction::Evictor;
-use crate::readerpool::ReaderPool;
+use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
 
@@ -66,8 +66,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(self.config.disk.as_str())?;
 
         let evictor = Evictor::start();
-        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, device));
-        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads));
+        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&device)));
+        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&device)));
 
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());
@@ -154,9 +154,49 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                         cache.get_or_insert_with(
                             chunk.clone(),
                             // Data was in map, read and return it
-                            |location| async {
-                                // Read from disk via channel
-                                unimplemented!();
+                            {
+                                let writer = Arc::clone(&writer);
+                                let reader_pool = Arc::clone(&reader_pool);
+                                |location| async move {
+                                    let location = location.as_ref().clone(); // Owned copy
+                                    // Read from disk via channel
+                                    // Proceed with writing to disk
+                                    let (tx, rx) = flume::bounded(1);
+                                    let read_req = ReadRequest {
+                                        location,
+                                        responder: tx,
+                                    };
+                                    reader_pool.send(read_req).await?;
+
+                                    // Recieve read val
+                                    let recv_err = rx.recv_async().await;
+                                    let read_response = match recv_err {
+                                        Ok(wr) => {
+                                            match wr.data {
+                                                Ok(loc) => loc,
+                                                Err(e) => {
+                                                    return Err(e);
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            eprintln!("Failed to get read response {:?}", e);
+                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
+                                        },
+                                    };
+
+                                    // Send to user
+                                    let encoded = bincode::serde::encode_to_vec(
+                                        request::GetResponse::Response(read_response),
+                                        bincode::config::standard()
+                                    ).unwrap();
+                                    {
+                                        let mut w = writer.lock().await;
+                                        w.send(Bytes::from(encoded)).await?;
+                                    }
+                                    
+                                    Ok(())
+                                }
                             },
                             // Data wasn't in map, request it and write it
                             {
@@ -212,7 +252,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             }
                                         },
                                         Err(e) => {
-                                            eprintln!("Failed to get response {:?}", e);
+                                            eprintln!("Failed to get write response {:?}", e);
                                             return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
                                         },
                                     };
