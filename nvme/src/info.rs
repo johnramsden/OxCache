@@ -144,7 +144,7 @@ pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
 
     // Zone append size limit
     let zns_ctrl_data = oxcache_id_zns_ctrl(fd)?;
-    let zasl = 1 << zns_ctrl_data.zasl;
+    let zasl = (1 << zns_ctrl_data.zasl) * lba_size as u32;
 
     // Number of zones
     let nzones = match get_num_zones(fd, nsid) {

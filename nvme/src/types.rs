@@ -50,7 +50,7 @@ pub struct ZNSConfig {
     pub max_open_resources: u32,   // Just open zones
 
     // These are per-controller
-    pub zasl: u32, // The zone append size limit. Max append size is 2^zasl bytes.
+    pub zasl: u32, // The zone append size limit. Max append size is zasl bytes.
     pub zone_descriptor_extension_size: u64, // The size of the data that can be associated with a zone, in bytes
     pub block_size: u64,                       // In bytes
     pub zone_size: u64,                      // This is in number of logical blocks
@@ -61,8 +61,10 @@ pub struct ZNSConfig {
 }
 
 impl ZNSConfig {
+
+	// The ZSLBA field is referenced in logical blocks
 	pub fn get_starting_addr(&self, zone_index: u64) -> u64 {
-		self.zone_size * self.block_size * zone_index
+		self.zone_size * zone_index
 	}
 }
 
@@ -113,6 +115,7 @@ pub enum NVMeError {
     Errno(Errno),
     StatusResult(nvme_status_result),
     UnalignedDataBuffer { want: u64, has: u64 },
+	AppendSizeTooLarge { max_append: u32, trying_to_append: u32 },
 }
 
 impl fmt::Display for NVMeError {
@@ -121,17 +124,11 @@ impl fmt::Display for NVMeError {
             f,
             "{}",
             match self {
-                NVMeError::Errno(errno) => format!("Error: errno {}: {}", errno.0, errno),
-                NVMeError::StatusResult(res) => format!(
-                    "Error: NVMe Status Result {}: {}",
-                    res,
-                    get_error_string(*res)
-                ),
-                NVMeError::UnalignedDataBuffer { want, has } => format!(
-                    "Unaligned data buffer: want size of multiple {} but got size {}",
-                    want, has
-                ),
-            }
+                NVMeError::Errno(errno)=>format!("Error: errno {}: {}",errno.0,errno),
+				NVMeError::StatusResult(res)=>format!("Error: NVMe Status Result {}: {}",res,get_error_string(*res)),
+				NVMeError::UnalignedDataBuffer{want,has}=>format!("Unaligned data buffer: want buffer size of multiple {} but got size {}",want,has),
+				NVMeError::AppendSizeTooLarge{max_append,trying_to_append}=>format!("Append size too large: max append is {} bytes while trying to append {} bytes",max_append,trying_to_append),
+							}
         )
     }
 }

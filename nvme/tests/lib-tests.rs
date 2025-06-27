@@ -1,136 +1,126 @@
-use errno::errno;
-use libnvme_sys::bindings::nvme_cmd_dword_fields_NVME_DEVICE_SELF_TEST_CDW10_STC_MASK;
-use nvme::{
-    self, ZoneState, get_error_string, get_nsid, open_zone, report_zones, report_zones_all,
-    reset_zone, zns_append, zns_open,
-};
-use serde::Deserialize;
-use serial_test::serial;
-use std::ffi::{CStr, CString};
-use std::io::copy;
+use nvme::info::zns_get_info;
+use nvme::ops::{reset_zone, zns_append, zns_open, zns_read};
+use nvme::types::ZNSConfig;
 use std::path::PathBuf;
-use std::{fs::File, io::Read, os::fd::RawFd};
-use toml::{self, Value};
+use std::{fs::File, io::Read};
+use toml::{self, Table};
 
-#[derive(Debug)]
-struct Config {
-    device_name: String,
-    file_desc: RawFd,
-    nsid: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReadConfig {
-    zns: String,
-}
-
-fn init() -> ReadConfig {
+#[test]
+fn init() {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/test-config.toml");
     let mut file = File::open(&d).expect(format!("Failed to open config file: {:?}", &d).as_str());
     let mut buffer = String::new();
     file.read_to_string(&mut buffer)
         .expect("Failed to read test config file");
-    toml::from_str(buffer.as_str()).expect("Couldn't deserialize")
+
+    let table = buffer.parse::<Table>().unwrap();
+    let zns_device = table["zns"].as_str().unwrap();
+
+    let config = zns_get_info(zns_device).expect("Couldn't open device");
+
+    test_config(&config);
+
+    test_append(&config);
+    test_append_multiple_zones(&config);
+    test_append_offset(&config);
+    test_reset_zone(&config);
 }
 
-fn init_zns() -> Config {
-    let cfg = init();
-    Config {
-        device_name: cfg.zns.clone(),
-        file_desc: zns_open(&cfg.zns).expect("Failed to open nvme device"),
-        nsid: get_nsid(cfg.zns.as_str()).expect("Couldn't parse namespace ID"),
-    }
+fn test_config(config: &ZNSConfig) {
+    println!("{:?}", config);
 }
 
-#[test]
-#[serial]
-fn test_zns_open() {
-    let config = init();
-    if zns_open(&config.zns).is_err() {
-        let error_number = errno();
-        assert!(false, "Failed to open. Errno is {error_number}");
-    }
+fn test_append(config: &ZNSConfig) {
+    reset_zone(config, nvme::types::PerformOn::AllZones).expect("Failed to reset zones");
+
+    let string = "hello world. this is a test\n".as_bytes();
+    let mut buf = vec![0_u8; config.block_size as usize];
+    buf[..string.len()].clone_from_slice(&string);
+
+    zns_append(config, 0, &mut buf).expect("Failed to append");
+    zns_append(config, 0, &mut buf).expect("Failed to append");
+    zns_append(config, 0, &mut buf).expect("Failed to append");
+
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+
+    zns_read(config, 0, 0, &mut read_buf).expect("Failed to read");
+
+    assert_eq!(buf, read_buf);
 }
 
-#[test]
-#[serial]
-fn test_get_nsid() {
-    let device_name = "nvme9n1";
-    assert_eq!(get_nsid(device_name), Ok(1));
+fn test_append_multiple_zones(config: &ZNSConfig) {
+    reset_zone(config, nvme::types::PerformOn::AllZones).expect("Failed to reset zones");
 
-    let device_name2 = "nvme0n10";
-    assert_eq!(get_nsid(device_name2), Ok(10));
+    let string = "hello world. this is a test\n".as_bytes();
+    let mut buf = vec![0_u8; config.block_size as usize];
+    buf[..string.len()].clone_from_slice(&string);
+
+    zns_append(config, 0, &mut buf).expect("Failed to append");
+    zns_append(config, 1, &mut buf).expect("Failed to append");
+    zns_append(config, 2, &mut buf).expect("Failed to append");
+
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 0, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
+
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 1, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
+
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 2, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
 }
 
-#[test]
-#[serial]
-fn test_report_all_zones() {
-    let config = init_zns();
+fn test_append_offset(config: &ZNSConfig) {
+    reset_zone(config, nvme::types::PerformOn::AllZones).expect("Failed to reset zones");
 
-    reset_zone(config.file_desc, 0, 0, 0, config.nsid, true).expect("Failed to reset zones");
+    let string = "hello world. this is a test\n".as_bytes();
+    let mut buf = vec![0_u8; config.block_size as usize];
+    buf[..string.len()].clone_from_slice(&string);
 
-    match report_zones_all(config.file_desc, config.nsid) {
-        Ok((nz, descriptors)) => {
-            assert_eq!(nz, 256);
-            for (i, descriptor) in descriptors.iter().enumerate() {
-                assert_eq!(descriptor.zone_state, ZoneState::Empty, "Failed at {}", i);
-            }
-        }
-        Err(nvme_status_field) => {
-            assert!(false, "{}", get_error_string(nvme_status_field))
-        }
-    }
+    assert_eq!(zns_append(config, 0, &mut buf).expect("Failed to append"), 0);
+    assert_eq!(zns_append(config, 0, &mut buf).expect("Failed to append"), 1);
+    assert_eq!(zns_append(config, 0, &mut buf).expect("Failed to append"), 2);
 
-    // For some reason, this does NOT explicitly open the zone... Need to figure out why
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 0, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
 
-    open_zone(config.file_desc, 0, 0, 3000, config.nsid, true).expect("Failed to open zones");
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 0, 1, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
 
-    // match report_zones_all(config.file_desc, config.nsid) {
-    //     Ok((nz, descriptors)) => {
-    //         assert_eq!(nz, 256);
-    //         for (i, descriptor) in descriptors.iter().enumerate() {
-    //             assert_eq!(descriptor.zone_state, ZoneState::ExplicitlyOpened, "Failed at {}", i);
-    //         }
-
-    //     },
-    //     Err(nvme_status_field) => {
-    //         assert!(false, "{}", get_error_string(nvme_status_field))
-    //     },
-    // }
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 0, 2, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
 }
 
-#[test]
-#[serial]
-fn test_zns_reset() {
-    let config = init_zns();
-    reset_zone(config.file_desc, 0, 0, 0, config.nsid, true).expect("Failed to reset zones");
-    match report_zones_all(config.file_desc, config.nsid) {
-        Ok((nz, descriptors)) => {
-            assert_eq!(nz, 256);
-            for (i, descriptor) in descriptors.iter().enumerate() {
-                assert_eq!(descriptor.zone_state, ZoneState::Empty, "Failed at {}", i);
-            }
-        }
-        Err(nvme_status_field) => {
-            assert!(false, "{}", get_error_string(nvme_status_field))
-        }
-    }
-}
+fn test_reset_zone(config: &ZNSConfig) {
+    reset_zone(config, nvme::types::PerformOn::AllZones).expect("Failed to reset all zones");
 
-#[test]
-#[serial]
-fn test_zns_append() {
-    let config = init_zns();
-    reset_zone(config.file_desc, 0, 0, 0, config.nsid, true).unwrap();
-    let text = "hello world";
-    let ctext = CString::new(text).unwrap();
-    let mut buffer = ctext.as_bytes().to_vec();
+    let string = "hello world. this is a test\n".as_bytes();
+    let mut buf = vec![0_u8; config.block_size as usize];
+    buf[..string.len()].clone_from_slice(&string);
 
-    match zns_append(config.file_desc, 0, &mut buffer, 0, config.nsid, 4096) {
-        Ok(_) => {
-            assert!(true);
-        }
-        Err(err) => assert!(false, "{}", get_error_string(err)),
-    }
+    zns_append(config, 0, &mut buf).expect("Failed to append");
+    zns_append(config, 1, &mut buf).expect("Failed to append");
+    zns_append(config, 2, &mut buf).expect("Failed to append");
+
+    reset_zone(config, nvme::types::PerformOn::Zone(0)).expect("Failed to reset zone 1");    
+    reset_zone(config, nvme::types::PerformOn::Zone(2)).expect("Failed to reset zone 2");    
+
+    let empty_buf = vec![0_u8; config.block_size as usize];
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 0, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(empty_buf, read_buf);
+
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 1, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(buf, read_buf);
+
+    let mut read_buf = vec![0_u8; config.block_size as usize];
+    zns_read(config, 2, 0, &mut read_buf).expect("Failed to read");
+    assert_eq!(empty_buf, read_buf);
 }

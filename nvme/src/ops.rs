@@ -48,11 +48,10 @@ pub fn zns_open(device_name: &str) -> Result<RawFd, NVMeError> {
 /// * `config` - ZNSConfig containing device parameters.
 /// * `zone_index` - The index of the zone to append to.
 /// * `data` - Mutable buffer containing data to append. Length must be a multiple of `logical_block_size`.
-/// * `logical_block_size` - Logical block size in bytes.
 ///
 /// # Returns
 ///
-/// * `Ok(u64)` - Starting LBA where the data was appended.
+/// * `Ok(u64)` - Starting LBA (in logical blocks) where the data was appended.
 /// * `Err(NVMeError)` - If the operation fails or data buffer is not aligned.
 ///
 /// # Example
@@ -71,12 +70,7 @@ pub fn zns_open(device_name: &str) -> Result<RawFd, NVMeError> {
 /// let mut buffer = vec![0u8; 4096];
 /// let lba = zns_append(config, 0, &mut buffer, 4096).unwrap();
 /// ```
-pub fn zns_append(
-    config: ZNSConfig,
-    zone_index: u64,
-    data: &mut [u8],
-    logical_block_size: usize,
-) -> Result<u64, NVMeError> {
+pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Result<u64, NVMeError> {
     let mut result: u64 = 0;
 
     // See fig. 26 of NVME ZNS Command Set Spec Rev 1.2
@@ -98,6 +92,13 @@ pub fn zns_append(
         });
     }
 
+    if config.zasl < data.len() as u32 {
+        return Err(NVMeError::AppendSizeTooLarge {
+            max_append: config.zasl,
+            trying_to_append: data.len() as u32,
+        });
+    }
+
     // zslba is the starting logical block address
     let mut args: nvme_zns_append_args = nvme_zns_append_args {
         zslba: config.get_starting_addr(zone_index),
@@ -112,7 +113,7 @@ pub fn zns_append(
         ilbrt: 0,                    // Initial logical block reference tag
         data_len: data.len() as u32, // nvme-cli sets these as bytes
         metadata_len: 0,             // Unimplemented
-        nlb: (data.len() / logical_block_size - 1) as u16, // 0 based value
+        nlb: (data.len() / config.block_size as usize - 1) as u16, // 0 based value
         control: ctrl,
         lbat: 0,
         lbatm: 0,
@@ -132,7 +133,7 @@ pub fn zns_append(
 ///
 /// * `config` - ZNSConfig containing device parameters.
 /// * `zone_index` - The index of the zone to read from.
-/// * `offset` - Offset (in bytes) from the start of the zone.
+/// * `offset` - Offset (in logical blocks) from the start of the zone.
 /// * `read_buffer` - Mutable buffer to store the read data. Length must be a multiple of `block_size`.
 ///
 /// # Returns
@@ -157,7 +158,7 @@ pub fn zns_append(
 /// zns_read(config, 0, 0, &mut buffer).unwrap();
 /// ```
 pub fn zns_read(
-    config: ZNSConfig,
+    config: &ZNSConfig,
     zone_index: u64,
     offset: u64,
     read_buffer: &mut [u8],
@@ -208,7 +209,7 @@ pub fn zns_read(
 }
 
 fn zone_op(
-    config: ZNSConfig,
+    config: &ZNSConfig,
     perform_on: PerformOn,
     action: nvme_zns_send_action,
 ) -> Result<(), NVMeError> {
@@ -261,7 +262,7 @@ fn zone_op(
 /// };
 /// open_zone(config, PerformOn::Zone(0)).unwrap();
 /// ```
-pub fn open_zone(config: ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
+pub fn open_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
     zone_op(config, perform_on, nvme_zns_send_action_NVME_ZNS_ZSA_OPEN)
 }
 
@@ -292,7 +293,7 @@ pub fn open_zone(config: ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeErr
 /// };
 /// close_zone(config, PerformOn::Zone(0)).unwrap();
 /// ```
-pub fn close_zone(config: ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
+pub fn close_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
     zone_op(config, perform_on, nvme_zns_send_action_NVME_ZNS_ZSA_CLOSE)
 }
 
@@ -323,6 +324,6 @@ pub fn close_zone(config: ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeEr
 /// };
 /// reset_zone(config, PerformOn::Zone(0)).unwrap();
 /// ```
-pub fn reset_zone(config: ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
+pub fn reset_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
     zone_op(config, perform_on, nvme_zns_send_action_NVME_ZNS_ZSA_RESET)
 }
