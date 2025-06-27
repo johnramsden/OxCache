@@ -1,4 +1,4 @@
-use std::{fmt, os::fd::RawFd};
+use std::{convert::Infallible, fmt::{self, Debug, Display}, io, os::fd::RawFd};
 
 use errno::Errno;
 use libnvme_sys::bindings::nvme_status_result;
@@ -130,5 +130,19 @@ impl fmt::Display for NVMeError {
 				NVMeError::AppendSizeTooLarge{max_append,trying_to_append}=>format!("Append size too large: max append is {} bytes while trying to append {} bytes",max_append,trying_to_append),
 							}
         )
+    }
+}
+
+impl std::error::Error for NVMeError {}
+
+impl TryFrom<NVMeError> for std::io::Error {
+    type Error = Infallible;
+
+    fn try_from(value: NVMeError) -> Result<Self, Self::Error> {
+        match value {
+            NVMeError::Errno(errno) => Ok(io::Error::from_raw_os_error(errno.0)),
+            NVMeError::StatusResult(status) => Ok(io::Error::other(get_error_string(status))),
+            _ => Ok(io::Error::new(io::ErrorKind::InvalidInput, format!("{}", value))),
+        }
     }
 }
