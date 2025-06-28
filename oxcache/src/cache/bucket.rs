@@ -45,12 +45,7 @@ impl From<GetRequest> for Chunk {
 }
 
 #[derive(Debug)]
-pub enum BucketState<T> {
-    Waiting(Arc<Notify>),
-    Ready(Arc<T>),
-}
-
-#[derive(Debug)]
-pub struct SharedBucketState<T> {
-    pub state: RwLock<BucketState<T>>,
+pub enum ChunkState {
+    Ready(Arc<ChunkLocation>),
+    Waiting
 }
