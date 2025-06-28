@@ -166,6 +166,7 @@ pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
         zone_size: zone_size,
         lba_perf: 0, // Unimplemented, but can be queried in nvme id namespace
         timeout: 0,
+        chunks_per_zone: 0,
     })
 }
 

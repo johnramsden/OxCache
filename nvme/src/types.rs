@@ -55,6 +55,8 @@ pub struct ZNSConfig {
     pub block_size: u64,                       // In bytes
     pub zone_size: u64,                      // This is in number of logical blocks
 
+	pub chunks_per_zone: u64, // Number of chunks that can be allocated in a zone
+
     pub num_zones: u64,
     pub timeout: u32,  // Default 0
     pub lba_perf: u64, // Unimplemented
