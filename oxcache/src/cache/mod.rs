@@ -37,13 +37,18 @@ impl Cache {
         // NOTE: If we are ever clearing something from the map we need to acquire exclusive lock
         //       on both the entire map and the individual chunk location
 
-        {   // Bucket read locked
+        {   // Bucket write locked -- no one can write to map 
             let bucket_guard = self.buckets.read().await;
             if let Some(state) = bucket_guard.get(&key) {
+                
+                // We now have the entry
                 let bucket_state_guard = Arc::clone(state);
                 let bucket_state_guard = bucket_state_guard.read().await;
-                // Now we can drop full map lock, we have lock on bucketstate
-                drop(bucket_guard); // Other reads can proceed on outer map
+                
+                // Now we can drop full map lock, we have lock on chunkstate
+                drop(bucket_guard); // Writes can proceed on outer map
+
+                // The read state should not be changing here because we have a lock on the bucket state
                 if let ChunkState::Ready(state) = &*bucket_state_guard {
                     reader(Arc::clone(state)).await;
                     return Ok(())
@@ -51,19 +56,23 @@ impl Cache {
                 // Waiting State should not occur, this means something couldn't be
                 // successfully written to the map and it was inserted and then deleted
                 // (it should no longer be present now).
-                // Need to acquire exclusive lock because state must have changed, proceed
+                // Need to acquire exclusive lock because state must have changed (evicting), proceed
             }
         }
 
-        {   // Bucket write locked
+        {   // Bucket write locked -- no one can read or write to map
             let mut bucket_guard = self.buckets.write().await;
 
             // Incase it was inserted inbetween
             if let Some(state) = bucket_guard.get(&key) {
+                
+                // We now have the entry
                 let bucket_state_guard = Arc::clone(state);
                 let bucket_state_guard = bucket_state_guard.read().await;
-                // Now we can drop full map lock, we have lock on bucketstate
-                drop(bucket_guard); // Other reads can proceed on the outer map
+                
+                // Now we can drop full map lock, we have lock on chunkstate
+                drop(bucket_guard); // Bucket write unlocked -- Other reads can proceed on the outer map
+                
                 if let ChunkState::Ready(state) = &*bucket_state_guard {
                     reader(Arc::clone(state)).await;
                     return Ok(())
@@ -74,17 +83,20 @@ impl Cache {
                 panic!("Invalid bucket state");
             }
 
-            // Otherwise we need to write
-            let locked_chunk_location: Arc<RwLock<ChunkState>> = Arc::new(RwLock::new(ChunkState::Waiting));
+            // Otherwise we need to write, the entire map is still locked
+            let locked_chunk_location: Arc<RwLock<ChunkState>> = Arc::new(RwLock::new(ChunkState::Waiting));            
             let mut chunk_loc_guard = locked_chunk_location.write().await;
-            bucket_guard.insert(key.clone(), Arc::clone(&locked_chunk_location));
-            // Now we can drop bucket lock, but chunklocation remains locked
-            drop(bucket_guard);
+            // We now have something in the waiting state
+            // It is locked and should not be unlocked until it's out of the waiting state
+            bucket_guard.insert(key.clone(), Arc::clone(&locked_chunk_location)); // Place locked waiting state
+            
+            drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
             let write_result = writer().await;
             match write_result { 
                 Err(e) => {
                     let mut bucket_guard = self.buckets.write().await;
                     bucket_guard.remove(&key);
+                    // This is the condition where you could be left with something in the waiting state
                     return Err(e);
                 },
                 Ok(location) => {
@@ -92,8 +104,8 @@ impl Cache {
                 }
             }
             Ok(())
-        }
-    }
+        }   // Bucket write unlocked
+    }   
 }
 
 

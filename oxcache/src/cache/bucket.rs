@@ -47,5 +47,5 @@ impl From<GetRequest> for Chunk {
 #[derive(Debug)]
 pub enum ChunkState {
     Ready(Arc<ChunkLocation>),
-    Waiting
+    Waiting,
 }
