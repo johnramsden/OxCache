@@ -62,7 +62,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
         
-        let device = device::get_device(self.config.disk.as_str())?;
+        let device = device::get_device(self.config.disk.as_str(), 4096)?;
 
         let evictor = Evictor::start();
         let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, device));

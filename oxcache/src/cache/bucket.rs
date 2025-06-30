@@ -12,8 +12,8 @@ pub struct Chunk {
 
 #[derive(Debug)]
 pub struct ChunkLocation {
-    zone: usize,
-    addr: u64,
+    pub zone: usize,
+    pub addr: u64,
 }
 
 impl ChunkLocation {

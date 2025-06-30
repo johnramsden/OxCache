@@ -127,6 +127,14 @@ pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Resul
     }
 }
 
+pub fn write(address: u64, data: &mut [u8]) -> Result<(), NVMeError> {
+    unsafe {
+        // TODO: We can either use libnvme's read or just pwrite.
+    }
+
+    todo!();
+}
+
 /// Reads data from a ZNS (Zoned Namespace) NVMe device.
 ///
 /// # Arguments

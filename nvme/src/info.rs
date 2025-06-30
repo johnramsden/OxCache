@@ -1,11 +1,11 @@
-use std::{ffi::c_void, mem, os::fd::RawFd};
+use std::{ffi::c_void, fs::{self, File}, io::{self, Read}, mem, os::fd::RawFd, ptr::null};
 
 use libnvme_sys::bindings::*;
 
 use crate::{
     ops::zns_open,
     types::{NVMeError, ZNSConfig, ZNSZoneDescriptor},
-    util::{check_error, shift_and_mask},
+    util::{check_error, nullptr, shift_and_mask},
 };
 
 macro_rules! const_assert {
@@ -252,4 +252,13 @@ pub fn report_zones(
     };
 
     Ok((nzones, zone_descriptors))
+}
+
+pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
+    let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device))?;
+    match zoned.as_str() {
+        "host-managed" => Ok(true),
+        "host-aware" => Ok(true),
+        _ => Ok(false),
+    }
 }

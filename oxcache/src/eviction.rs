@@ -5,6 +5,13 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+pub trait EvictionPolicy: Send + Sync {
+    fn write_update(&self, zone_index: usize);
+	fn read_update(&self, zone_index: usize);
+	fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<usize>>;
+	fn get_evict_target(&self) -> Option<usize>;
+}
+
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
