@@ -27,10 +27,16 @@ pub struct CliArgs {
     pub reader_threads: Option<usize>,
     
     #[arg(long)]
+    pub chunk_size: Option<usize>,
+
+    #[arg(long)]
     pub remote_type: Option<String>,
     
     #[arg(long)]
     pub remote_bucket: Option<String>,
+
+    #[arg(long)]
+    pub eviction_policy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +45,7 @@ pub struct ParsedServerConfig {
     pub disk: Option<String>,
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
+    pub chunk_size: Option<usize>
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,10 +55,17 @@ pub struct ParsedRemoteConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ParsedEvictionConfig {
+    pub eviction_policy: Option<String>
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub server: ParsedServerConfig,
     pub remote: ParsedRemoteConfig,
+    pub eviction: ParsedEvictionConfig,
 }
+
 
 fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let config = if let Some(path) = &cli.config {
@@ -112,6 +126,21 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         return Err("remote_bucket must be set if remote_type is not `emulated`".into());
     }
     
+    let eviction_policy = cli
+        .eviction_policy
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.eviction_policy.clone());
+    let eviction_policy = eviction_policy
+        .ok_or("Missing eviction policy")?
+        .to_lowercase();
+        
+    let chunk_size = cli
+        .chunk_size
+        .or_else(|| config.as_ref()?.server.chunk_size);
+    let chunk_size = chunk_size
+        .ok_or("Missing chunk size")?;
+    
+
     // TODO: Add secrets from env vars
 
     Ok(ServerConfig {
@@ -123,6 +152,8 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
             remote_type,
             bucket: remote_bucket,
         },
+        eviction_type: eviction_policy,
+        chunk_size,
     })
 }
 

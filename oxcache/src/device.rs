@@ -7,7 +7,7 @@ use std::io::Error;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
-use crate::cache::bucket::{Chunk, ChunkLocation};
+use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::eviction::EvictionPolicy;
 
@@ -115,7 +115,7 @@ pub struct BlockInterface {
 pub trait Device: Send + Sync {
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
 
-    fn new(device: &str, chunk_size: usize) -> std::io::Result<Self>
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Self>
     where
         Self: Sized; // Args
 
@@ -126,13 +126,13 @@ pub trait Device: Send + Sync {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 }
 
-pub fn get_device(device: &str, chunk_size: usize) -> std::io::Result<Arc<dyn Device>> {
+pub fn get_device(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Arc<dyn Device>> {
     // TODO: If dev type Zoned..., else
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
-        return Ok(Arc::new(device::Zoned::new(device, chunk_size)?));
+        return Ok(Arc::new(device::Zoned::new(device, chunk_size, eviction_policy)?));
     } else {
-        return Ok(Arc::new(device::BlockInterface::new(device, chunk_size)?));
+        return Ok(Arc::new(device::BlockInterface::new(device, chunk_size, eviction_policy)?));
     }
 }
 
@@ -152,7 +152,7 @@ impl Zoned {
 
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
-    fn new(device: &str, chunk_size: usize) -> std::io::Result<Self> {
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Self> {
         match nvme::info::zns_get_info(device) {
             Ok(mut config) => {
                 config.chunks_per_zone = config.zone_size / chunk_size as u64;
@@ -250,7 +250,7 @@ impl BlockInterface {
 
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
-    fn new(device: &str, chunk_size: usize) -> std::io::Result<Self> {
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Self> {
         let handle = OpenOptions::new().read(true).write(true).open(device)?;
         let fd = handle.as_raw_fd();
 

@@ -3,7 +3,12 @@ socket = "/tmp/oxcache.sock"
 disk = "/dev/zd48"
 writer_threads = 14
 reader_threads = 14
+chunk_size = 8192
 
 [remote]
 remote_type = "emulated" # emulated | S3
 bucket = "S3_BUCKET"
+
+[eviction]
+eviction_policy = "dummy"
+

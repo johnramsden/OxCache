@@ -4,12 +4,36 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use core::fmt::Debug;
+
+pub fn str_to_eviction(str: &str) -> Arc<dyn EvictionPolicy> {
+    match str {
+        "dummy" => Arc::new(DummyEvictionPolicy{}),
+        _ => panic!("Error"),
+    }
+}
 
 pub trait EvictionPolicy: Send + Sync {
     fn write_update(&self, zone_index: usize);
-	fn read_update(&self, zone_index: usize);
-	fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<usize>>;
-	fn get_evict_target(&self) -> Option<usize>;
+    fn read_update(&self, zone_index: usize);
+    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<usize>>;
+    fn get_evict_target(&self) -> Option<usize>;
+}
+
+pub struct DummyEvictionPolicy {}
+
+impl EvictionPolicy for DummyEvictionPolicy {
+    fn write_update(&self, _zone_index: usize) {}
+
+    fn read_update(&self, _zone_index: usize) {}
+
+    fn get_evict_targets(&self, _num_evict: usize) -> Option<Vec<usize>> {
+        panic!("Not implemented for dummy");
+    }
+
+    fn get_evict_target(&self) -> Option<usize> {
+        panic!("Not implemented for dummy");
+    }
 }
 
 pub struct Evictor {
