@@ -1,62 +1,126 @@
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use dashmap::{DashMap, Entry};
 use tokio::sync::{Notify, RwLock};
-use crate::cache::bucket::{ChunkLocation, SharedBucketState, Chunk, BucketState};
+use crate::cache::bucket::{ChunkLocation, Chunk, ChunkState};
 use crate::readerpool::ReaderPool;
 use crate::writerpool::WriterPool;
+use std::collections::hash_map::Entry;
+use std::io::ErrorKind;
 
 pub mod bucket;
 
 #[derive(Debug)]
 pub struct Cache {
-    buckets: DashMap<Chunk, Arc<SharedBucketState<ChunkLocation>>>,
+    buckets: RwLock<HashMap<Chunk, Arc<RwLock<ChunkState>>>>,
 }
 
 impl Cache {
     pub fn new() -> Self {
         Self {
-            buckets: DashMap::new(),
+            buckets: RwLock::new(HashMap::new()),
         }
     }
     
-    // TODO: Confusing, locking, waiting, async locking, PROBABLY REDO COMPLETELY
-    // pub async fn get<PresentF, VacantF, Fut>(&self, chunk: Chunk, present: PresentF, vacant: VacantF) -> tokio::io::Result<Vec<u8>>
-    // where
-    //     PresentF: Fn(Arc<SharedBucketState<ChunkLocation>>) -> Fut + Send + 'static,
-    //     VacantF: Fn(Arc<SharedBucketState<ChunkLocation>>) -> Fut + Send + 'static,
-    //     Fut: Future<Output = tokio::io::Result<Vec<u8>>> + Send + 'static {
-    //     match self.buckets.entry(chunk) { // Implicit write lock on shard
-    //         Entry::Occupied(entry) => {
-    //             let shared = Arc::clone(entry.get());
-    // 
-    //             // Use a read lock, allows multiple concurrent reads
-    //             let state_guard = shared.state.read().await;
-    // 
-    //             match &*state_guard {
-    //                 BucketState::Ready(_) => {
-    //                     // Release read lock before awaiting
-    //                     drop(state_guard);
-    //                     present(Arc::clone(&shared)).await
-    //                 },
-    //                 BucketState::Waiting(notify) => {
-    //                     // Release read lock before awaiting
-    //                     let notified = notify.notified();
-    //                     drop(state_guard);
-    //                     notified.await;
-    //                     // EVICTED???
-    //                     present(Arc::clone(&shared)).await
-    //                 }
-    //             }
-    //         }
-    //         Entry::Vacant(entry) => {
-    //             let notify = Notify::new();
-    //             let shared = Arc::new(SharedBucketState {
-    //                 state: RwLock::new(BucketState::Waiting(notify)),
-    //             });
-    //             entry.insert(Arc::clone(&shared));
-    //             // notify...
-    //         }
-    //     }
-    // }
+    pub async fn get_or_insert_with<R, W, RFut, WFut>(
+        &self,
+        key: Chunk,
+        reader: R,
+        writer: W,
+    ) -> tokio::io::Result<()>
+    where
+        R: FnOnce(Arc<ChunkLocation>) -> RFut + Send + 'static,
+        RFut: Future<Output = tokio::io::Result<()>> + Send + 'static,
+        W: FnOnce() -> WFut + Send + 'static,
+        WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static
+    {
+        // NOTE: If we are ever clearing something from the map we need to acquire exclusive lock
+        //       on both the entire map and the individual chunk location
+
+        loop { // Bucket read locked -- no one can write to map 
+            let bucket_guard = self.buckets.read().await;
+            
+            if let Some(state) = bucket_guard.get(&key) {
+
+                // We now have the entry
+                let bucket_state_guard = Arc::clone(state);
+                let bucket_state_guard = bucket_state_guard.read().await;
+
+                match &*bucket_state_guard {
+                    ChunkState::Waiting(notify) => {
+                        let notified = notify.notified(); // queue notifies
+                        // Now we can drop full map lock, we have lock on chunkstate
+                        drop(bucket_guard); // Writes can proceed on outer map
+
+                        notified.await; // retry loop required
+                        continue; // loop to recheck state
+                    }
+                    ChunkState::Ready(loc) => {
+                        return reader(Arc::clone(loc)).await;
+                    }
+                };
+            } else {
+                break;
+            }
+        }
+
+        loop {   // Bucket write locked -- no one can read or write to map
+            let mut bucket_guard = self.buckets.write().await;
+
+            // Incase it was inserted inbetween
+            if let Some(state) = bucket_guard.get(&key) {
+                
+                // We now have the entry
+                let bucket_state_guard = Arc::clone(state);
+                let bucket_state_guard = bucket_state_guard.read().await;
+                
+                match &*bucket_state_guard {
+                    ChunkState::Waiting(notify) => {
+                        let notified = notify.notified(); // queue notifies
+                        // Now we can drop full map lock, we have lock on chunkstate
+                        drop(bucket_guard); // Writes can proceed on outer map
+
+                        notified.await; // retry loop required
+                        continue; // loop to recheck state
+                    }
+                    ChunkState::Ready(loc) => {
+                        return reader(Arc::clone(loc)).await;
+                    }
+                };
+            } else {
+                // Otherwise we need to write, the entire map is still locked
+                let locked_chunk_location: Arc<RwLock<ChunkState>> = Arc::new(RwLock::new(ChunkState::Waiting(Arc::new(Notify::new()))));
+                let mut chunk_loc_guard = locked_chunk_location.write().await;
+                // We now have something in the waiting state
+                // It is locked and should not be unlocked until it's out of the waiting state
+                bucket_guard.insert(key.clone(), Arc::clone(&locked_chunk_location)); // Place locked waiting state
+
+                drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
+                let write_result = writer().await;
+                match write_result {
+                    Err(e) => {
+                        let mut bucket_guard = self.buckets.write().await;
+                        bucket_guard.remove(&key);
+                        match &*chunk_loc_guard {
+                            ChunkState::Waiting(notify) => {
+                                notify.notify_waiters();
+                            },
+                            _ => {
+                                // This should never happen here
+                                panic!("Chunk was not in waiting state");
+                            }
+                        }
+                        // This is the condition where you could be left with something in the waiting state
+                        return Err(e);
+                    },
+                    Ok(location) => {
+                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location));
+                    }
+                }
+                return Ok(())
+            }
+        }
+    }   
 }
+
+

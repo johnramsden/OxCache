@@ -119,9 +119,11 @@ pub trait Device: Send + Sync {
     where
         Self: Sized; // Args
 
-    fn read(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()>;
+    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()>;
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()>;
+    
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 }
 
 pub fn get_device(device: &str, chunk_size: usize) -> std::io::Result<Arc<dyn Device>> {
@@ -154,6 +156,7 @@ impl Device for Zoned {
         match nvme::info::zns_get_info(device) {
             Ok(mut config) => {
                 config.chunks_per_zone = config.zone_size / chunk_size as u64;
+                config.chunk_size = chunk_size;
                 let zone_list = ZoneList::new(
                     config.num_zones as usize,
                     config.chunks_per_zone as usize,
@@ -184,7 +187,7 @@ impl Device for Zoned {
         }
     }
 
-    fn read(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()>
+    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()>
     where
         Self: Sized,
     {
@@ -202,6 +205,12 @@ impl Device for Zoned {
             },
             Err(err) => Err(err.try_into().unwrap()),
         }
+    }
+
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+        let mut data = vec![0; self.config.chunk_size];
+        self.read_into_buffer(location, &mut data)?;
+        return Ok(data);
     }
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
@@ -233,6 +242,10 @@ impl BlockInterface {
             )),
         }
     }
+    
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
 }
 
 impl Device for BlockInterface {
@@ -259,7 +272,7 @@ impl Device for BlockInterface {
         Ok(ChunkLocation::new(0, 0))
     }
 
-    fn read(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()>
+    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()> 
     where
         Self: Sized,
     {
@@ -268,5 +281,9 @@ impl Device for BlockInterface {
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
         todo!()
+    }
+
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+        Ok(Vec::new())
     }
 }
