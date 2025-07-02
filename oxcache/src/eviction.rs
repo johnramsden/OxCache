@@ -1,14 +1,13 @@
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, Ordering}, Arc, Mutex
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use core::fmt::Debug;
 
-pub fn str_to_eviction(str: &str) -> Arc<dyn EvictionPolicy> {
+pub fn str_to_eviction(str: &str) -> Arc<Mutex<dyn EvictionPolicy>> {
     match str {
-        "dummy" => Arc::new(DummyEvictionPolicy{}),
+        "dummy" => Arc::new(Mutex::new(DummyEvictionPolicy{})),
         _ => panic!("Error"),
     }
 }

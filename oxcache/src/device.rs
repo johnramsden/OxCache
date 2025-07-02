@@ -4,6 +4,7 @@ use nvme::types::ZNSConfig;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Error;
+use std::ops::Deref;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
@@ -54,6 +55,23 @@ impl ZoneList {
 
         Ok(zone.index)
     }
+
+    // Get the location to write to, for block devices
+    fn remove_chunk_location(&mut self) -> Result<ChunkLocation, ()> {
+        if self.is_full() {
+            // Need to evict
+            return Err(());
+        }
+
+        let mut zone = self.available_zones.pop_front().unwrap();
+        let chunk_idx = self.chunks_per_zone - zone.chunks_available;
+        if zone.chunks_available > 1 {
+            zone.chunks_available -= 1;
+            self.available_zones.push_front(zone);
+        }
+
+        Ok(ChunkLocation { zone: zone.index, addr: chunk_idx as u64 })
+    }    
 
     // Check if all zones are full
     fn is_full(&self) -> bool {
@@ -115,7 +133,7 @@ pub struct BlockInterface {
 pub trait Device: Send + Sync {
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
 
-    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Self>
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Self>
     where
         Self: Sized; // Args
 
@@ -126,8 +144,7 @@ pub trait Device: Send + Sync {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 }
 
-pub fn get_device(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Arc<dyn Device>> {
-    // TODO: If dev type Zoned..., else
+pub fn get_device(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
         return Ok(Arc::new(device::Zoned::new(device, chunk_size, eviction_policy)?));
@@ -152,7 +169,7 @@ impl Zoned {
 
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
-    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Self> {
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Self> {
         match nvme::info::zns_get_info(device) {
             Ok(mut config) => {
                 config.chunks_per_zone = config.zone_size / chunk_size as u64;
@@ -165,7 +182,7 @@ impl Device for Zoned {
                 Ok(Self {
                     config,
                     zones: Arc::new(Mutex::new(zone_list)),
-                    evict_policy: todo!(),
+                    evict_policy: eviction_policy,
                 })
             }
             Err(err) => Err(err.try_into().unwrap()),
@@ -230,12 +247,12 @@ impl Device for Zoned {
 }
 
 impl BlockInterface {
-    fn get_free_zone(&self) -> std::io::Result<usize> {
+    fn get_free_zone(&self) -> std::io::Result<ChunkLocation> {
         let mtx = Arc::clone(&self.state);
         let mut state = mtx.lock().unwrap();
         let zone_list = &mut state.active_zones;
-        match zone_list.remove() {
-            Ok(zone_idx) => Ok(zone_idx),
+        match zone_list.remove_chunk_location() {
+            Ok(location) => Ok(location),
             Err(()) => Err(std::io::Error::new(
                 std::io::ErrorKind::StorageFull,
                 "Cache is full",
@@ -250,7 +267,7 @@ impl BlockInterface {
 
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
-    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<dyn EvictionPolicy>) -> std::io::Result<Self> {
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Self> {
         let handle = OpenOptions::new().read(true).write(true).open(device)?;
         let fd = handle.as_raw_fd();
 
@@ -259,13 +276,13 @@ impl Device for BlockInterface {
         // Chunks per zone: how to get?
         let chunks_per_zone = 100;
 
-        Ok(Self { fd, state: Arc::new(Mutex::new(BlockDeviceState::new(num_zones, chunks_per_zone, chunk_size))), evict_policy: todo!() })
+        Ok(Self { fd, state: Arc::new(Mutex::new(BlockDeviceState::new(num_zones, chunks_per_zone, chunk_size))), evict_policy: eviction_policy })
     }
 
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
         let mtx = self.state.clone();
         let state = mtx.lock().unwrap();
-        let zone_index = self.get_free_zone()?;
+        let chunk_location = self.get_free_zone()?;
         
         // TODO: we will probably need to call 
 

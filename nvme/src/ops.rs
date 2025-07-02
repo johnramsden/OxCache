@@ -127,14 +127,97 @@ pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Resul
     }
 }
 
-pub fn write(address: u64, data: &mut [u8]) -> Result<(), NVMeError> {
-    unsafe {
-        // TODO: We can either use libnvme's read or just pwrite.
+pub fn zns_write(config: &ZNSConfig, zone_index: u64, offset: u64, data: &mut [u8]) -> Result<(), NVMeError> {
+    if data.len().rem(config.block_size as usize) != 0 {
+        return Err(NVMeError::UnalignedDataBuffer {
+            want: config.block_size,
+            has: data.len() as u64,
+        });
     }
 
-    todo!();
+    // Zero based value, so subtract by 1
+    let nlb = data.len() as u64 / config.block_size - 1;
+
+    let mut args = nvme_io_args {
+        slba: config.get_starting_addr(zone_index) + offset,
+        storage_tag: 0,                    // End to end protection
+        result: null::<u32>() as *mut u32, // submit_io in nvme-cli sets this as null
+        data: data.as_mut_ptr() as *mut c_void,
+        metadata: nullptr,
+        args_size: size_of::<nvme_io_args>() as i32,
+        fd: config.fd,
+        timeout: config.timeout,
+        nsid: config.nsid,
+        reftag: 0,
+        data_len: data.len() as u32,
+        metadata_len: 0,
+        nlb: nlb as u16,
+        control: 0, // Not applicable in our case. It's DWORD12 in the command set spec
+        apptag: 0,
+        appmask: 0,
+        // Dataset Management (DW13). This could be experimented but unsure of impact
+        dspec: 0,
+        dsm: 0,
+        rsvd1: [0],
+        reftag_u64: 0,
+        sts: 0, // Storage tag size
+        pif: 0, // Protection Information Format
+    };
+
+    unsafe {
+        let result = nvme_io(&mut args, nvme_io_opcode_nvme_cmd_write.try_into().unwrap());
+        match check_error(result) {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
 }
 
+pub fn write(slba: u64, fd: RawFd, timeout: u32, nsid: u32, block_size: u64, data: &mut [u8]) -> Result<(), NVMeError> {
+    if data.len().rem(block_size as usize) != 0 {
+        return Err(NVMeError::UnalignedDataBuffer {
+            want: block_size,
+            has: data.len() as u64,
+        });
+    }
+
+    // Zero based value, so subtract by 1
+    let nlb = data.len() as u64 / block_size - 1;
+
+    let mut args = nvme_io_args {
+        slba,
+        storage_tag: 0,                    // End to end protection
+        result: null::<u32>() as *mut u32, // submit_io in nvme-cli sets this as null
+        data: data.as_mut_ptr() as *mut c_void,
+        metadata: nullptr,
+        args_size: size_of::<nvme_io_args>() as i32,
+        fd,
+        timeout,
+        nsid,
+        reftag: 0,
+        data_len: data.len() as u32,
+        metadata_len: 0,
+        nlb: nlb as u16,
+        control: 0, // Not applicable in our case. It's DWORD12 in the command set spec
+        apptag: 0,
+        appmask: 0,
+        // Dataset Management (DW13). This could be experimented but unsure of impact
+        dspec: 0,
+        dsm: 0,
+        rsvd1: [0],
+        reftag_u64: 0,
+        sts: 0, // Storage tag size
+        pif: 0, // Protection Information Format
+    };
+
+    unsafe {
+        let result = nvme_io(&mut args, nvme_io_opcode_nvme_cmd_write.try_into().unwrap());
+        match check_error(result) {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+}
 /// Reads data from a ZNS (Zoned Namespace) NVMe device.
 ///
 /// # Arguments
