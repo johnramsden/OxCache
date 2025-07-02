@@ -47,7 +47,10 @@ impl ZoneList {
             return Err(());
         }
 
-        let mut zone = self.available_zones.pop_front().unwrap();
+        let mut zone = match self.available_zones.pop_front() {
+			Some(z) => z,
+			None => return Err(()),
+		};
         if zone.chunks_available > 1 {
             zone.chunks_available -= 1;
             self.available_zones.push_front(zone);
@@ -63,7 +66,10 @@ impl ZoneList {
             return Err(());
         }
 
-        let mut zone = self.available_zones.pop_front().unwrap();
+        let mut zone = match self.available_zones.pop_front() {
+			Some(z) => z,
+			None => return Err(()),
+		};
         let chunk_idx = self.chunks_per_zone - zone.chunks_available;
         if zone.chunks_available > 1 {
             zone.chunks_available -= 1;
@@ -284,7 +290,12 @@ impl Device for BlockInterface {
         let state = mtx.lock().unwrap();
         let chunk_location = self.get_free_zone()?;
         
-        // TODO: we will probably need to call 
+        let mut mut_data = Vec::clone(&data);
+
+        // match nvme::ops::write(chunk_location.zone * , mut_data.as_mut_slice()) {
+            // Ok(_) => todo!(),
+            // Err(_) => todo!(),
+        // }
 
         Ok(ChunkLocation::new(0, 0))
     }
