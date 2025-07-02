@@ -1,5 +1,5 @@
 use crate::cache::Cache;
-use crate::eviction::Evictor;
+use crate::eviction::{str_to_eviction, EvictionPolicy, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
@@ -18,9 +18,8 @@ use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::cache::bucket::{Chunk, ChunkLocation};
+use crate::cache::bucket::Chunk;
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {
@@ -35,6 +34,8 @@ pub struct ServerConfig {
     pub writer_threads: usize,
     pub reader_threads: usize,
     pub remote: ServerRemoteConfig,
+    pub eviction_type: String,
+    pub chunk_size: usize,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -63,7 +64,11 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
         
-        let device = device::get_device(self.config.disk.as_str())?;
+        let device = device::get_device(
+            self.config.disk.as_str(),
+            self.config.chunk_size,
+            str_to_eviction(self.config.eviction_type.as_str())
+        )?;
 
         let evictor = Evictor::start();
         let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&device)));

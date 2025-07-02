@@ -50,10 +50,16 @@ fn main() {
     // Tell cargo to look for shared libraries in the specified directory
     println!("cargo:rustc-link-search={}/src", build_dir);
     println!("cargo:rustc-link-lib=nvme");
-    println!("cargo:rustc-link-lib=nvme-mi");
+	println!("cargo:rustc-link-lib=libnvme_wrapper");
 
     emit_rerun_if_changed_recursive("external/libnvme");
     println!("cargo:rerun-if-changed=src/libnvme_wrapper.h");
+    println!("cargo:rerun-if-changed=src/libnvme_wrapper.c");
+
+	cc::Build::new()
+		.file("src/libnvme_wrapper.c")
+		.include(format!("{}/src", libnvme_dir))
+		.compile("libnvme_wrapper");
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
