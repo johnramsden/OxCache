@@ -240,7 +240,6 @@ impl Device for Zoned {
         let mtx = Arc::clone(&self.evict_policy);
         let policy = mtx.lock().unwrap();
         match policy.get_evict_targets(num_eviction) {
-            // Will this cause a deadlock? 
             Some(evict_targets) => {
                 let zone_mtx = Arc::clone(&self.zones);
                 let mut zones = zone_mtx.lock().unwrap();
