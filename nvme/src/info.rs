@@ -71,19 +71,21 @@ fn oxcache_id_zns_ctrl(fd: RawFd) -> Result<nvme_zns_id_ctrl, NVMeError> {
     }
 }
 
+fn device_name(device: &str) -> &str {
+    if device.starts_with("/dev/") {
+        device.trim_start_matches("/dev/")
+    } else {
+        device
+    }
+}
+
 /// Retrieves ZNS configuration and metadata for a device by opening it and querying its properties.
 /// Returns a `ZNSConfig` struct on success or an `NVMeError` on failure.
 pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
     // Trim the device name so that it's only the filename after /dev/
-    let device_name: &str = {
-        if device.starts_with("/dev/") {
-            device.trim_start_matches("/dev/")
-        } else {
-            device
-        }
-    };
+    let device_name_ = device_name(device);
 
-    let fd: RawFd = match zns_open(device_name) {
+    let fd: RawFd = match zns_open(device_name_) {
         Ok(opened_fd) => opened_fd,
         Err(err) => return Err(err),
     };
@@ -256,7 +258,9 @@ pub fn report_zones(
 }
 
 pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
-    let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device))?;
+    let device_name_ = device_name(device);
+    
+    let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device_name_))?;
     match zoned.as_str() {
         "host-managed" => Ok(true),
         "host-aware" => Ok(true),
