@@ -1,5 +1,5 @@
 use crate::cache::Cache;
-use crate::eviction::{str_to_eviction, EvictionPolicy, Evictor};
+use crate::eviction::{EvictionPolicyWrapper, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
@@ -67,7 +67,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(
             self.config.disk.as_str(),
             self.config.chunk_size,
-            str_to_eviction(self.config.eviction_type.as_str())
+            Arc::new(std::sync::Mutex::new(EvictionPolicyWrapper::new(self.config.eviction_type.as_str())?))
         )?;
 
         let evictor = Evictor::start();

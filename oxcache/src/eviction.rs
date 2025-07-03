@@ -4,34 +4,117 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use core::fmt::Debug;
+use crate::cache::bucket::ChunkLocation;
 
-pub fn str_to_eviction(str: &str) -> Arc<Mutex<dyn EvictionPolicy>> {
-    match str {
-        "dummy" => Arc::new(Mutex::new(DummyEvictionPolicy{})),
-        _ => panic!("Error"),
+pub enum EvictionPolicyWrapper {
+    Dummy(DummyEvictionPolicy),
+    Promotional(PromotionalEvictionPolicy),
+    Chunk(ChunkEvictionPolicy),
+}
+
+impl EvictionPolicyWrapper {
+    pub fn new(identifier: &str) -> tokio::io::Result<Self> {
+        match identifier.to_lowercase().as_str() {
+            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
+            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new())),
+            "promotional" => Ok(EvictionPolicyWrapper::Promotional(PromotionalEvictionPolicy::new())),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, identifier)),
+        }
+    }
+    
+    pub fn write_update(&self, chunk: ChunkLocation) {
+        match self { 
+            EvictionPolicyWrapper::Dummy(dummy) => dummy.write_update(chunk),
+            EvictionPolicyWrapper::Promotional(promotional) => promotional.write_update(chunk),
+            EvictionPolicyWrapper::Chunk(c) => c.write_update(chunk),
+        }
+    }    
+    pub fn read_update(&self, chunk: ChunkLocation) {
+        match self {
+            EvictionPolicyWrapper::Dummy(dummy) => dummy.read_update(chunk),
+            EvictionPolicyWrapper::Promotional(promotional) => promotional.read_update(chunk),
+            EvictionPolicyWrapper::Chunk(c) => c.read_update(chunk),
+        }
     }
 }
 
 pub trait EvictionPolicy: Send + Sync {
-    fn write_update(&self, zone_index: usize);
-    fn read_update(&self, zone_index: usize);
-    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<usize>>;
-    fn get_evict_target(&self) -> Option<usize>;
+    type Target: Clone + Send + Sync + 'static;
+
+    fn write_update(&self, chunk: ChunkLocation);
+    fn read_update(&self, chunk: ChunkLocation);
+    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>>;
+    fn get_evict_target(&self) -> Option<Self::Target>;
 }
 
 pub struct DummyEvictionPolicy {}
 
+impl DummyEvictionPolicy {
+    pub fn new() -> Self { DummyEvictionPolicy {} }
+}
+
 impl EvictionPolicy for DummyEvictionPolicy {
-    fn write_update(&self, _zone_index: usize) {}
+    type Target = usize;
+    fn write_update(&self, chunk: ChunkLocation) {}
 
-    fn read_update(&self, _zone_index: usize) {}
+    fn read_update(&self, chunk: ChunkLocation) {}
 
-    fn get_evict_targets(&self, _num_evict: usize) -> Option<Vec<usize>> {
-        panic!("Not implemented for dummy");
+    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>> {
+        unimplemented!();
     }
 
-    fn get_evict_target(&self) -> Option<usize> {
-        panic!("Not implemented for dummy");
+    fn get_evict_target(&self) -> Option<Self::Target> {
+        unimplemented!();
+    }
+}
+
+pub struct PromotionalEvictionPolicy {}
+
+impl PromotionalEvictionPolicy {
+    pub fn new() -> Self { PromotionalEvictionPolicy {} }
+}
+
+impl EvictionPolicy for PromotionalEvictionPolicy {
+    type Target = usize;
+    fn write_update(&self, chunk: ChunkLocation) {
+        unimplemented!();
+    }
+
+    fn read_update(&self, chunk: ChunkLocation) {
+        unimplemented!();
+    }
+
+    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>> {
+        unimplemented!();
+    }
+
+    fn get_evict_target(&self) -> Option<Self::Target> {
+        unimplemented!();
+    }
+}
+
+pub struct ChunkEvictionPolicy {}
+
+impl ChunkEvictionPolicy {
+    pub fn new() -> Self { ChunkEvictionPolicy {} }
+}
+
+impl EvictionPolicy for ChunkEvictionPolicy {
+    type Target = ChunkLocation;
+    fn write_update(&self, chunk: ChunkLocation) {
+        unimplemented!();
+    }
+
+    fn read_update(&self, chunk: ChunkLocation) {
+        unimplemented!();
+    }
+
+    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>> {
+        unimplemented!();
+    }
+
+    fn get_evict_target(&self) -> Option<Self::Target> {
+        unimplemented!();
     }
 }
 

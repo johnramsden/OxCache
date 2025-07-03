@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
-use crate::eviction::EvictionPolicy;
+use crate::eviction::{EvictionPolicy, EvictionPolicyWrapper};
 
 #[derive(Copy, Clone)]
 struct Zone {
@@ -105,7 +105,7 @@ impl ZoneList {
 pub struct Zoned {
     config: ZNSConfig,
     zones: Arc<Mutex<ZoneList>>,
-    evict_policy: Arc<Mutex<dyn EvictionPolicy>>,
+    evict_policy: Arc<Mutex<EvictionPolicyWrapper>>,
 }
 
 #[derive(Clone)]
@@ -133,13 +133,13 @@ impl BlockDeviceState {
 pub struct BlockInterface {
     fd: RawFd,
     state: Arc<Mutex<BlockDeviceState>>,
-    evict_policy: Arc<Mutex<dyn EvictionPolicy>>
+    evict_policy: Arc<Mutex<EvictionPolicyWrapper>>
 }
 
 pub trait Device: Send + Sync {
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
 
-    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Self>
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Self>
     where
         Self: Sized; // Args
 
@@ -150,12 +150,12 @@ pub trait Device: Send + Sync {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 }
 
-pub fn get_device(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Arc<dyn Device>> {
+pub fn get_device(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
-        return Ok(Arc::new(device::Zoned::new(device, chunk_size, eviction_policy)?));
+        Ok(Arc::new(device::Zoned::new(device, chunk_size, eviction_policy)?))
     } else {
-        return Ok(Arc::new(device::BlockInterface::new(device, chunk_size, eviction_policy)?));
+        Ok(Arc::new(device::BlockInterface::new(device, chunk_size, eviction_policy)?))
     }
 }
 
@@ -175,7 +175,7 @@ impl Zoned {
 
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
-    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Self> {
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Self> {
         match nvme::info::zns_get_info(device) {
             Ok(mut config) => {
                 config.chunks_per_zone = config.zone_size / chunk_size as u64;
@@ -202,7 +202,7 @@ impl Device for Zoned {
             Ok(lba) => {
                 let mtx = Arc::clone(&self.evict_policy);
                 let policy = mtx.lock().unwrap();
-                policy.write_update(zone_index);
+                policy.write_update(ChunkLocation::new(zone_index, lba)); // TODO: LBA correct?
 
                 Ok(ChunkLocation::new(zone_index, lba))
             },
@@ -223,7 +223,7 @@ impl Device for Zoned {
             Ok(()) => {
                 let mtx = Arc::clone(&self.evict_policy);
                 let policy = mtx.lock().unwrap();
-                policy.read_update(location.zone);
+                policy.read_update(ChunkLocation::new(location.zone, location.addr));
                 Ok(())
             },
             Err(err) => Err(err.try_into().unwrap()),
@@ -239,14 +239,24 @@ impl Device for Zoned {
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
         let mtx = Arc::clone(&self.evict_policy);
         let policy = mtx.lock().unwrap();
-        match policy.get_evict_targets(num_eviction) {
-            Some(evict_targets) => {
-                let zone_mtx = Arc::clone(&self.zones);
-                let mut zones = zone_mtx.lock().unwrap();
-                zones.reset_zones(evict_targets);
+        match &*policy {
+            EvictionPolicyWrapper::Dummy(p) => {
                 Ok(())
+            },
+            EvictionPolicyWrapper::Chunk(p) => {
+                unimplemented!()
+            },
+            EvictionPolicyWrapper::Promotional(p) => {
+                match p.get_evict_targets(num_eviction) {
+                    Some(evict_targets) => {
+                        let zone_mtx = Arc::clone(&self.zones);
+                        let mut zones = zone_mtx.lock().unwrap();
+                        zones.reset_zones(evict_targets);
+                        Ok(())
+                    }
+                    None => Err(Error::new(std::io::ErrorKind::Other, "No items to evict")),
+                }
             }
-            None => Err(Error::new(std::io::ErrorKind::Other, "No items to evict")),
         }
     }
 }
@@ -272,7 +282,7 @@ impl BlockInterface {
 
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
-    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<dyn EvictionPolicy>>) -> std::io::Result<Self> {
+    fn new(device: &str, chunk_size: usize, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Self> {
         let handle = OpenOptions::new().read(true).write(true).open(device)?;
         let fd = handle.as_raw_fd();
 
@@ -285,11 +295,11 @@ impl Device for BlockInterface {
     }
 
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
-        let mtx = self.state.clone();
-        let state = mtx.lock().unwrap();
-        let chunk_location = self.get_free_zone()?;
-        
-        let mut mut_data = Vec::clone(&data);
+        // TODO: Uncommenting the following 4 lines causes a Deadlock:
+        // let mtx = self.state.clone();
+        // let state = mtx.lock().unwrap();
+        // let chunk_location = self.get_free_zone()?;
+        // let mut mut_data = Vec::clone(&data);
 
         // match nvme::ops::write(chunk_location.zone * , mut_data.as_mut_slice()) {
             // Ok(_) => todo!(),
