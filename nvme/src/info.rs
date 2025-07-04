@@ -140,6 +140,7 @@ pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
         total_size_in_bytes,
         current_lba_index,
         lba_perf: 0,
+        timeout: 0, // Unimplemented
     })
 }
 
@@ -178,7 +179,6 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
         zasl: zasl,
         zone_descriptor_extension_size: zdesc_ext_size,
         zone_size: zone_size,
-        timeout: 0,
         chunks_per_zone: 0,
         chunk_size: 0,
     })
@@ -270,11 +270,16 @@ pub fn report_zones(
 
 pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
     let device_name_ = device_name(device);
-    
+
     let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device_name_))?;
     match zoned.as_str() {
         "host-managed" => Ok(true),
         "host-aware" => Ok(true),
         _ => Ok(false),
     }
+}
+
+/// Zone size is in logical blocks
+pub fn get_address_at(zone_index: u64, chunk_index: u64, zone_size: u64, chunk_size: u64) -> u64 {
+    zone_size * zone_index + chunk_index * chunk_size
 }

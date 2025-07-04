@@ -48,6 +48,7 @@ pub struct NVMeConfig {
     pub total_size_in_bytes: u64,
     pub current_lba_index: usize,
     pub lba_perf: u64, // Unimplemented
+    pub timeout: u32,  // Default 0
 }
 
 // Assumes that the zone capacity is the same for every zone
@@ -64,16 +65,19 @@ pub struct ZNSConfig {
     pub zone_size: u64,                      // This is in number of logical blocks
 
     pub chunks_per_zone: u64, // Number of chunks that can be allocated in a zone
-    pub chunk_size: usize,
+    pub chunk_size: usize,    // This is in logical blocks
 
     pub num_zones: u64,
-    pub timeout: u32, // Default 0
 }
 
 impl ZNSConfig {
     // The ZSLBA field is referenced in logical blocks
     pub fn get_starting_addr(&self, zone_index: u64) -> u64 {
         self.zone_size * zone_index
+    }
+
+    pub fn get_address_at(&self, zone_index: u64, chunk_index: u64) -> u64 {
+        self.zone_size * zone_index + chunk_index * self.chunk_size as u64
     }
 }
 

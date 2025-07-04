@@ -112,7 +112,7 @@ pub fn zns_append(
         metadata: nullptr, // type *mut c_void
         args_size: size_of::<nvme_zns_append_args>() as i32,
         fd: nvme_config.fd,
-        timeout: config.timeout,
+        timeout: nvme_config.timeout,
         nsid: nvme_config.nsid,
         // Only used for end-to-end protection
         ilbrt: 0,                    // Initial logical block reference tag
@@ -157,7 +157,7 @@ pub fn zns_write(
         metadata: nullptr,
         args_size: size_of::<nvme_io_args>() as i32,
         fd: nvme_config.fd,
-        timeout: config.timeout,
+        timeout: nvme_config.timeout,
         nsid: nvme_config.nsid,
         reftag: 0,
         data_len: data.len() as u32,
@@ -236,6 +236,7 @@ pub fn write(
         }
     }
 }
+
 /// Reads data from a ZNS (Zoned Namespace) NVMe device.
 ///
 /// # Arguments
@@ -270,9 +271,17 @@ pub fn zns_read(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
     zone_index: u64,
-    offset: u64,
+    chunk_index: u64,
     read_buffer: &mut [u8],
 ) -> Result<(), NVMeError> {
+    read(
+        nvme_config,
+        config.get_address_at(zone_index, chunk_index),
+        read_buffer,
+    )
+}
+
+pub fn read(nvme_config: &NVMeConfig, slba: u64, read_buffer: &mut [u8]) -> Result<(), NVMeError> {
     if read_buffer
         .len()
         .rem(nvme_config.logical_block_size as usize)
@@ -288,14 +297,14 @@ pub fn zns_read(
     let nlb = read_buffer.len() as u64 / nvme_config.logical_block_size - 1;
 
     let mut args = nvme_io_args {
-        slba: config.get_starting_addr(zone_index) + offset,
+        slba: slba,
         storage_tag: 0,                    // End to end protection
         result: null::<u32>() as *mut u32, // submit_io in nvme-cli sets this as null
         data: read_buffer.as_mut_ptr() as *mut c_void,
         metadata: nullptr,
         args_size: size_of::<nvme_io_args>() as i32,
         fd: nvme_config.fd,
-        timeout: config.timeout,
+        timeout: nvme_config.timeout,
         nsid: nvme_config.nsid,
         reftag: 0,
         data_len: read_buffer.len() as u32,
@@ -337,7 +346,7 @@ fn zone_op(
         data: nullptr,
         args_size: size_of::<nvme_zns_mgmt_send_args>() as i32,
         fd: nvme_config.fd,
-        timeout: config.timeout,
+        timeout: nvme_config.timeout,
         nsid: nvme_config.nsid,
         zsa: action,
         data_len: 0,

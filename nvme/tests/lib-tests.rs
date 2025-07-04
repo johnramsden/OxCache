@@ -33,7 +33,8 @@ fn test_config(nvme_config: &NVMeConfig, config: &ZNSConfig) {
 }
 
 fn test_append(nvme_config: &NVMeConfig, config: &ZNSConfig) {
-    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones).expect("Failed to reset zones");
+    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones)
+        .expect("Failed to reset zones");
 
     let string = "hello world. this is a test\n".as_bytes();
     let mut buf = vec![0_u8; nvme_config.logical_block_size as usize];
@@ -51,7 +52,8 @@ fn test_append(nvme_config: &NVMeConfig, config: &ZNSConfig) {
 }
 
 fn test_append_multiple_zones(nvme_config: &NVMeConfig, config: &ZNSConfig) {
-    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones).expect("Failed to reset zones");
+    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones)
+        .expect("Failed to reset zones");
 
     let string = "hello world. this is a test\n".as_bytes();
     let mut buf = vec![0_u8; nvme_config.logical_block_size as usize];
@@ -75,7 +77,8 @@ fn test_append_multiple_zones(nvme_config: &NVMeConfig, config: &ZNSConfig) {
 }
 
 fn test_append_offset(nvme_config: &NVMeConfig, config: &ZNSConfig) {
-    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones).expect("Failed to reset zones");
+    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones)
+        .expect("Failed to reset zones");
 
     let string = "hello world. this is a test\n".as_bytes();
     let mut buf = vec![0_u8; nvme_config.logical_block_size as usize];
@@ -108,7 +111,8 @@ fn test_append_offset(nvme_config: &NVMeConfig, config: &ZNSConfig) {
 }
 
 fn test_reset_zone(nvme_config: &NVMeConfig, config: &ZNSConfig) {
-    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones).expect("Failed to reset all zones");
+    reset_zone(nvme_config, config, nvme::types::PerformOn::AllZones)
+        .expect("Failed to reset all zones");
 
     let string = "hello world. this is a test\n".as_bytes();
     let mut buf = vec![0_u8; nvme_config.logical_block_size as usize];
@@ -118,8 +122,10 @@ fn test_reset_zone(nvme_config: &NVMeConfig, config: &ZNSConfig) {
     zns_append(nvme_config, config, 1, &mut buf).expect("Failed to append");
     zns_append(nvme_config, config, 2, &mut buf).expect("Failed to append");
 
-    reset_zone(nvme_config, config, nvme::types::PerformOn::Zone(0)).expect("Failed to reset zone 1");
-    reset_zone(nvme_config, config, nvme::types::PerformOn::Zone(2)).expect("Failed to reset zone 2");
+    reset_zone(nvme_config, config, nvme::types::PerformOn::Zone(0))
+        .expect("Failed to reset zone 1");
+    reset_zone(nvme_config, config, nvme::types::PerformOn::Zone(2))
+        .expect("Failed to reset zone 2");
 
     let empty_buf = vec![0_u8; nvme_config.logical_block_size as usize];
     let mut read_buf = vec![0_u8; nvme_config.logical_block_size as usize];
