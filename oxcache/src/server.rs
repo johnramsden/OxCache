@@ -1,5 +1,5 @@
 use crate::cache::Cache;
-use crate::eviction::{str_to_eviction, EvictionPolicy, Evictor};
+use crate::eviction::{EvictionPolicyWrapper, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
@@ -28,13 +28,21 @@ pub struct ServerRemoteConfig {
 }
 
 #[derive(Debug)]
+pub struct ServerEvictionConfig {
+    pub eviction_type: String,
+    pub num_evict: usize,
+    pub high_water_evict: usize,
+    pub low_water_evict: usize,
+}
+
+#[derive(Debug)]
 pub struct ServerConfig {
     pub socket: String,
     pub disk: String,
     pub writer_threads: usize,
     pub reader_threads: usize,
     pub remote: ServerRemoteConfig,
-    pub eviction_type: String,
+    pub eviction: ServerEvictionConfig,
     pub chunk_size: usize,
 }
 
@@ -67,10 +75,17 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(
             self.config.disk.as_str(),
             self.config.chunk_size,
-            str_to_eviction(self.config.eviction_type.as_str())
+            Arc::new(std::sync::Mutex::new(
+                EvictionPolicyWrapper::new(
+                    self.config.eviction.eviction_type.as_str(),
+                    self.config.eviction.num_evict,
+                    self.config.eviction.high_water_evict,
+                    self.config.eviction.low_water_evict,
+                )?
+            ))
         )?;
 
-        let evictor = Evictor::start();
+        let evictor = Evictor::start(Arc::clone(&device));
         let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&device)));
         let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&device)));
 
