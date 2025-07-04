@@ -88,8 +88,7 @@ fn device_name(device: &str) -> &str {
 
 /// Retrieves ZNS configuration and metadata for a device by opening it and querying its properties.
 /// Returns a `ZNSConfig` struct on success or an `NVMeError` on failure.
-pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
-    // Trim the device name so that it's only the filename after /dev/
+// Trim the device name so that it's only the filename after /dev/
 pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
     let device_name_ = device_name(device);
     let fd: RawFd = match open_device(device_name_) {
