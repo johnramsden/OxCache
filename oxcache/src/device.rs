@@ -406,6 +406,22 @@ impl Device for BlockInterface {
     }
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
-        Ok(())
+        let mtx = Arc::clone(&self.evict_policy);
+        let policy = mtx.lock().unwrap();
+        match &*policy {
+            EvictionPolicyWrapper::Dummy(p) => Ok(()),
+            EvictionPolicyWrapper::Chunk(p) => {
+                unimplemented!()
+            }
+            EvictionPolicyWrapper::Promotional(p) => match p.get_evict_targets() {
+                Some(evict_targets) => {
+                    let state_mtx = Arc::clone(&self.state);
+                    let mut state = state_mtx.lock().unwrap();
+                    state.active_zones.reset_zones(evict_targets);
+                    Ok(())
+                }
+                None => Err(Error::new(std::io::ErrorKind::Other, "No items to evict")),
+            },
+        }
     }
 }
