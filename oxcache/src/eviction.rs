@@ -5,6 +5,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use core::fmt::Debug;
 use crate::cache::bucket::ChunkLocation;
+use crate::device;
+use crate::device::Device;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -13,11 +15,11 @@ pub enum EvictionPolicyWrapper {
 }
 
 impl EvictionPolicyWrapper {
-    pub fn new(identifier: &str) -> tokio::io::Result<Self> {
+    pub fn new(identifier: &str, num_evict: usize, high_water: usize, low_water: usize) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
-            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
-            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new())),
-            "promotional" => Ok(EvictionPolicyWrapper::Promotional(PromotionalEvictionPolicy::new())),
+            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new(num_evict, high_water, low_water))),
+            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(num_evict, high_water, low_water))),
+            "promotional" => Ok(EvictionPolicyWrapper::Promotional(PromotionalEvictionPolicy::new(num_evict, high_water, low_water))),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, identifier)),
         }
     }
@@ -43,14 +45,22 @@ pub trait EvictionPolicy: Send + Sync {
 
     fn write_update(&self, chunk: ChunkLocation);
     fn read_update(&self, chunk: ChunkLocation);
-    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>>;
+    fn get_evict_targets(&self) -> Option<Vec<Self::Target>>;
     fn get_evict_target(&self) -> Option<Self::Target>;
 }
 
-pub struct DummyEvictionPolicy {}
+pub struct DummyEvictionPolicy {
+    num_evict: usize,
+    high_water: usize,
+    low_water: usize
+}
 
 impl DummyEvictionPolicy {
-    pub fn new() -> Self { DummyEvictionPolicy {} }
+    pub fn new(num_evict: usize, high_water: usize, low_water: usize) -> Self {
+        Self {
+            num_evict, high_water, low_water
+        }
+    }
 }
 
 impl EvictionPolicy for DummyEvictionPolicy {
@@ -59,7 +69,7 @@ impl EvictionPolicy for DummyEvictionPolicy {
 
     fn read_update(&self, chunk: ChunkLocation) {}
 
-    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>> {
+    fn get_evict_targets(&self) -> Option<Vec<Self::Target>> {
         unimplemented!();
     }
 
@@ -68,10 +78,18 @@ impl EvictionPolicy for DummyEvictionPolicy {
     }
 }
 
-pub struct PromotionalEvictionPolicy {}
+pub struct PromotionalEvictionPolicy {
+    num_evict: usize,
+    high_water: usize,
+    low_water: usize
+}
 
 impl PromotionalEvictionPolicy {
-    pub fn new() -> Self { PromotionalEvictionPolicy {} }
+    pub fn new(num_evict: usize, high_water: usize, low_water: usize) -> Self {
+        Self {
+            num_evict, high_water, low_water
+        }
+    }
 }
 
 impl EvictionPolicy for PromotionalEvictionPolicy {
@@ -84,7 +102,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         unimplemented!();
     }
 
-    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>> {
+    fn get_evict_targets(&self) -> Option<Vec<Self::Target>> {
         unimplemented!();
     }
 
@@ -93,10 +111,18 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     }
 }
 
-pub struct ChunkEvictionPolicy {}
+pub struct ChunkEvictionPolicy {
+    num_evict: usize,
+    high_water: usize,
+    low_water: usize
+}
 
 impl ChunkEvictionPolicy {
-    pub fn new() -> Self { ChunkEvictionPolicy {} }
+    pub fn new(num_evict: usize, high_water: usize, low_water: usize) -> Self {
+        Self {
+            num_evict, high_water, low_water
+        }
+    }
 }
 
 impl EvictionPolicy for ChunkEvictionPolicy {
@@ -109,7 +135,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         unimplemented!();
     }
 
-    fn get_evict_targets(&self, num_evict: usize) -> Option<Vec<Self::Target>> {
+    fn get_evict_targets(&self) -> Option<Vec<Self::Target>> {
         unimplemented!();
     }
 
@@ -121,29 +147,36 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    device: Arc<dyn Device>,
 }
 
 impl Evictor {
     /// Start the evictor background thread
-    pub fn start() -> Self {
+    pub fn start(device: Arc<dyn Device>) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
 
-        let handle = thread::spawn(move || {
-            while !shutdown_clone.load(Ordering::Relaxed) {
-                // TODO: Put eviction logic here
-                println!("Evictor running...");
+        let handle = thread::spawn({
+            let device = Arc::clone(&device);
+            move || {
+                while !shutdown_clone.load(Ordering::Relaxed) {
+                    // TODO: Put eviction logic here
+                    println!("Evictor running...");
 
-                // Sleep to simulate periodic work
-                thread::sleep(Duration::from_secs(5));
+                    device.evict(1).expect("Eviction failed");
+
+                    // Sleep to simulate periodic work
+                    thread::sleep(Duration::from_secs(5));
+                }
+
+                println!("Evictor shutting down.");
             }
-
-            println!("Evictor shutting down.");
         });
 
         Self {
             shutdown,
             handle: Some(handle),
+            device
         }
     }
 

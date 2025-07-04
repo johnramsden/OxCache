@@ -3,7 +3,7 @@ use std::fs;
 use std::process::exit;
 use std::sync::Arc;
 use clap::Parser;
-use oxcache::server::{Server, ServerConfig, ServerRemoteConfig};
+use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
 use serde::Deserialize;
 use oxcache::remote;
 
@@ -37,6 +37,15 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub eviction_policy: Option<String>,
+    
+    #[arg(long)]
+    pub num_evict: Option<usize>,
+    
+    #[arg(long)]
+    pub high_water_evict: Option<usize>,
+    
+    #[arg(long)]
+    pub low_water_evict: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,7 +65,10 @@ pub struct ParsedRemoteConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct ParsedEvictionConfig {
-    pub eviction_policy: Option<String>
+    pub eviction_policy: Option<String>,
+    pub num_evict: Option<usize>,
+    pub high_water_evict: Option<usize>,
+    pub low_water_evict: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,10 +141,32 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     let eviction_policy = cli
         .eviction_policy
         .clone()
-        .or_else(|| config.as_ref()?.eviction.eviction_policy.clone());
-    let eviction_policy = eviction_policy
+        .or_else(|| config.as_ref()?.eviction.eviction_policy.clone())
         .ok_or("Missing eviction policy")?
         .to_lowercase();
+    let num_evict = cli
+        .num_evict
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.num_evict.clone())
+        .ok_or("Missing num_evict")?;
+    let high_water_evict = cli
+        .high_water_evict
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.high_water_evict.clone())
+        .ok_or("Missing high_water_evict")?;
+    let low_water_evict = cli
+        .low_water_evict
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
+        .ok_or("Missing low_water_evict")?;
+    
+    if low_water_evict > high_water_evict {
+        return Err("low_water_evict must be less than high_water_evict".into());
+    }
+    
+    if num_evict == 0 {
+        return Err("num_evict must be greater than 0".into());
+    }
         
     let chunk_size = cli
         .chunk_size
@@ -152,7 +186,12 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
             remote_type,
             bucket: remote_bucket,
         },
-        eviction_type: eviction_policy,
+        eviction: ServerEvictionConfig {
+            eviction_type: eviction_policy,
+            num_evict,
+            high_water_evict,
+            low_water_evict,
+        },        
         chunk_size,
     })
 }

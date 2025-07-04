@@ -233,7 +233,7 @@ impl Device for Zoned {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
         let mut data = vec![0; self.config.chunk_size];
         self.read_into_buffer(location, &mut data)?;
-        return Ok(data);
+        Ok(data)
     }
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
@@ -247,7 +247,7 @@ impl Device for Zoned {
                 unimplemented!()
             },
             EvictionPolicyWrapper::Promotional(p) => {
-                match p.get_evict_targets(num_eviction) {
+                match p.get_evict_targets() {
                     Some(evict_targets) => {
                         let zone_mtx = Arc::clone(&self.zones);
                         let mut zones = zone_mtx.lock().unwrap();
@@ -317,7 +317,7 @@ impl Device for BlockInterface {
     }
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
-        todo!()
+        Ok(())
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {

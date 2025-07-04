@@ -11,4 +11,6 @@ bucket = "S3_BUCKET"
 
 [eviction]
 eviction_policy = "dummy"
-
+num_evict = 1
+high_water_evict = 3
+low_water_evict = 1
