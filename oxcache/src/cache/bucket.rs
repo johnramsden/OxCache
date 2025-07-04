@@ -15,7 +15,7 @@ pub struct Chunk {
 #[derive(Clone)]
 pub struct ChunkLocation {
     pub zone: usize,
-    pub addr: u64,
+    pub addr: u64, // The chunk index
 }
 
 impl ChunkLocation {
