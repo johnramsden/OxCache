@@ -1,3 +1,4 @@
 .idea
 target
 nvme/src/bindings.rs
+nvme-loop.json

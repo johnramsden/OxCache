@@ -1,0 +1,43 @@
+{
+  "hosts": [
+    {
+      "nqn": "hostnqn"
+    }
+  ], 
+  "ports": [
+    {
+      "addr": {
+        "adrfam": "", 
+        "traddr": "", 
+        "treq": "not specified", 
+        "trsvcid": "", 
+        "trtype": "loop"
+      }, 
+      "portid": 1, 
+      "referrals": [], 
+      "subsystems": [
+        "testnqn"
+      ]
+    }
+  ], 
+  "subsystems": [
+    {
+      "allowed_hosts": [
+        "hostnqn"
+      ], 
+      "attr": {
+        "allow_any_host": "0"
+      }, 
+      "namespaces": [
+        {
+          "device": {
+            "path": "/dev/DEVICE"
+          }, 
+          "enable": 1, 
+          "nsid": 1
+        }
+      ], 
+      "nqn": "testnqn"
+    }
+  ]
+}
