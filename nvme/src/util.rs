@@ -1,4 +1,8 @@
-use std::{ffi::{c_void, CStr}, ops::{BitAnd, Shr}, ptr::null};
+use std::{
+    ffi::{CStr, c_void},
+    ops::{BitAnd, Shr},
+    ptr::null,
+};
 
 use errno::errno;
 use libnvme_sys::bindings::{
@@ -129,7 +133,7 @@ pub fn shift_and_mask<ToShift, ShiftAs, Result>(
 ) -> Result
 where
     ToShift: Into<ShiftAs>,
-    ShiftAs: Shr<ShiftAs, Output=ShiftAs> + BitAnd<ShiftAs, Output = ShiftAs> + Into<Result>,
+    ShiftAs: Shr<ShiftAs, Output = ShiftAs> + BitAnd<ShiftAs, Output = ShiftAs> + Into<Result>,
 {
     ((to_shift.into() >> shift) & mask).into()
 }

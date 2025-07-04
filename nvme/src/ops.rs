@@ -9,7 +9,7 @@ use errno::errno;
 use libnvme_sys::bindings::*;
 
 use crate::{
-    types::{NVMeError, PerformOn, ZNSConfig},
+    types::{NVMeConfig, NVMeError, PerformOn, ZNSConfig},
     util::{check_error, nullptr},
 };
 
@@ -32,9 +32,9 @@ use crate::{
 /// ```rust
 /// use nvme::ops::zns_open;
 ///
-/// let fd = zns_open("nvme0n1").expect("Failed to open NVMe device");
+/// let fd = open_device("nvme0n1").expect("Failed to open NVMe device");
 /// ```
-pub fn zns_open(device_name: &str) -> Result<RawFd, NVMeError> {
+pub fn open_device(device_name: &str) -> Result<RawFd, NVMeError> {
     match unsafe { nvme_open(CString::new(device_name).unwrap().as_ptr()) } {
         -1 => Err(NVMeError::Errno(errno())),
         fd => Ok(fd),
@@ -70,7 +70,12 @@ pub fn zns_open(device_name: &str) -> Result<RawFd, NVMeError> {
 /// let mut buffer = vec![0u8; 4096];
 /// let lba = zns_append(config, 0, &mut buffer, 4096).unwrap();
 /// ```
-pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Result<u64, NVMeError> {
+pub fn zns_append(
+    nvme_config: &NVMeConfig,
+    config: &ZNSConfig,
+    zone_index: u64,
+    data: &mut [u8],
+) -> Result<u64, NVMeError> {
     let mut result: u64 = 0;
 
     // See fig. 26 of NVME ZNS Command Set Spec Rev 1.2
@@ -85,9 +90,9 @@ pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Resul
     let ctrl: u16 =
         { lr << 15 | fua << 14 | prinfo << 13 | piremap << 9 | stc << 8 | dtype << 7 | cetype };
 
-    if (data.len() & (config.block_size - 1) as usize) != 0 {
+    if (data.len() & (nvme_config.logical_block_size - 1) as usize) != 0 {
         return Err(NVMeError::UnalignedDataBuffer {
-            want: config.block_size,
+            want: nvme_config.logical_block_size,
             has: data.len() as u64,
         });
     }
@@ -106,14 +111,14 @@ pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Resul
         data: data.as_mut_ptr() as *mut c_void,
         metadata: nullptr, // type *mut c_void
         args_size: size_of::<nvme_zns_append_args>() as i32,
-        fd: config.fd,
+        fd: nvme_config.fd,
         timeout: config.timeout,
-        nsid: config.nsid,
+        nsid: nvme_config.nsid,
         // Only used for end-to-end protection
         ilbrt: 0,                    // Initial logical block reference tag
         data_len: data.len() as u32, // nvme-cli sets these as bytes
         metadata_len: 0,             // Unimplemented
-        nlb: (data.len() / config.block_size as usize - 1) as u16, // 0 based value
+        nlb: (data.len() / nvme_config.logical_block_size as usize - 1) as u16, // 0 based value
         control: ctrl,
         lbat: 0,
         lbatm: 0,
@@ -127,16 +132,22 @@ pub fn zns_append(config: &ZNSConfig, zone_index: u64, data: &mut [u8]) -> Resul
     }
 }
 
-pub fn zns_write(config: &ZNSConfig, zone_index: u64, offset: u64, data: &mut [u8]) -> Result<(), NVMeError> {
-    if data.len().rem(config.block_size as usize) != 0 {
+pub fn zns_write(
+    nvme_config: &NVMeConfig,
+    config: &ZNSConfig,
+    zone_index: u64,
+    offset: u64,
+    data: &mut [u8],
+) -> Result<(), NVMeError> {
+    if data.len().rem(nvme_config.logical_block_size as usize) != 0 {
         return Err(NVMeError::UnalignedDataBuffer {
-            want: config.block_size,
+            want: nvme_config.logical_block_size,
             has: data.len() as u64,
         });
     }
 
     // Zero based value, so subtract by 1
-    let nlb = data.len() as u64 / config.block_size - 1;
+    let nlb = data.len() as u64 / nvme_config.logical_block_size - 1;
 
     let mut args = nvme_io_args {
         slba: config.get_starting_addr(zone_index) + offset,
@@ -145,9 +156,9 @@ pub fn zns_write(config: &ZNSConfig, zone_index: u64, offset: u64, data: &mut [u
         data: data.as_mut_ptr() as *mut c_void,
         metadata: nullptr,
         args_size: size_of::<nvme_io_args>() as i32,
-        fd: config.fd,
+        fd: nvme_config.fd,
         timeout: config.timeout,
-        nsid: config.nsid,
+        nsid: nvme_config.nsid,
         reftag: 0,
         data_len: data.len() as u32,
         metadata_len: 0,
@@ -173,7 +184,14 @@ pub fn zns_write(config: &ZNSConfig, zone_index: u64, offset: u64, data: &mut [u
     }
 }
 
-pub fn write(slba: u64, fd: RawFd, timeout: u32, nsid: u32, block_size: u64, data: &mut [u8]) -> Result<(), NVMeError> {
+pub fn write(
+    slba: u64,
+    fd: RawFd,
+    timeout: u32,
+    nsid: u32,
+    block_size: u64,
+    data: &mut [u8],
+) -> Result<(), NVMeError> {
     if data.len().rem(block_size as usize) != 0 {
         return Err(NVMeError::UnalignedDataBuffer {
             want: block_size,
@@ -249,20 +267,25 @@ pub fn write(slba: u64, fd: RawFd, timeout: u32, nsid: u32, block_size: u64, dat
 /// zns_read(config, 0, 0, &mut buffer).unwrap();
 /// ```
 pub fn zns_read(
+    nvme_config: &NVMeConfig,
     config: &ZNSConfig,
     zone_index: u64,
     offset: u64,
     read_buffer: &mut [u8],
 ) -> Result<(), NVMeError> {
-    if read_buffer.len().rem(config.block_size as usize) != 0 {
+    if read_buffer
+        .len()
+        .rem(nvme_config.logical_block_size as usize)
+        != 0
+    {
         return Err(NVMeError::UnalignedDataBuffer {
-            want: config.block_size,
+            want: nvme_config.logical_block_size,
             has: read_buffer.len() as u64,
         });
     }
 
     // Zero based value, so subtract by 1
-    let nlb = read_buffer.len() as u64 / config.block_size - 1;
+    let nlb = read_buffer.len() as u64 / nvme_config.logical_block_size - 1;
 
     let mut args = nvme_io_args {
         slba: config.get_starting_addr(zone_index) + offset,
@@ -271,9 +294,9 @@ pub fn zns_read(
         data: read_buffer.as_mut_ptr() as *mut c_void,
         metadata: nullptr,
         args_size: size_of::<nvme_io_args>() as i32,
-        fd: config.fd,
+        fd: nvme_config.fd,
         timeout: config.timeout,
-        nsid: config.nsid,
+        nsid: nvme_config.nsid,
         reftag: 0,
         data_len: read_buffer.len() as u32,
         metadata_len: 0,
@@ -300,6 +323,7 @@ pub fn zns_read(
 }
 
 fn zone_op(
+    nvme_config: &NVMeConfig,
     config: &ZNSConfig,
     perform_on: PerformOn,
     action: nvme_zns_send_action,
@@ -312,9 +336,9 @@ fn zone_op(
         result: null::<u32>() as *mut u32,
         data: nullptr,
         args_size: size_of::<nvme_zns_mgmt_send_args>() as i32,
-        fd: config.fd,
+        fd: nvme_config.fd,
         timeout: config.timeout,
-        nsid: config.nsid,
+        nsid: nvme_config.nsid,
         zsa: action,
         data_len: 0,
         select_all: perform_on == PerformOn::AllZones,
@@ -353,8 +377,17 @@ fn zone_op(
 /// };
 /// open_zone(config, PerformOn::Zone(0)).unwrap();
 /// ```
-pub fn open_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
-    zone_op(config, perform_on, nvme_zns_send_action_NVME_ZNS_ZSA_OPEN)
+pub fn open_zone(
+    nvme_config: &NVMeConfig,
+    config: &ZNSConfig,
+    perform_on: PerformOn,
+) -> Result<(), NVMeError> {
+    zone_op(
+        nvme_config,
+        config,
+        perform_on,
+        nvme_zns_send_action_NVME_ZNS_ZSA_OPEN,
+    )
 }
 
 /// Closes a specific zone or all zones on a Zoned Namespace (ZNS) NVMe device.
@@ -382,10 +415,19 @@ pub fn open_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeEr
 ///     nsid: 1,
 ///     block_size: 4096,
 /// };
-/// close_zone(config, PerformOn::Zone(0)).unwrap();
+/// close_zone(nvme_config, config, PerformOn::Zone(0)).unwrap();
 /// ```
-pub fn close_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
-    zone_op(config, perform_on, nvme_zns_send_action_NVME_ZNS_ZSA_CLOSE)
+pub fn close_zone(
+    nvme_config: &NVMeConfig,
+    config: &ZNSConfig,
+    perform_on: PerformOn,
+) -> Result<(), NVMeError> {
+    zone_op(
+        nvme_config,
+        config,
+        perform_on,
+        nvme_zns_send_action_NVME_ZNS_ZSA_CLOSE,
+    )
 }
 
 /// Resets a specific zone or all zones on a Zoned Namespace (ZNS) NVMe device.
@@ -413,8 +455,17 @@ pub fn close_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeE
 ///     nsid: 1,
 ///     block_size: 4096,
 /// };
-/// reset_zone(config, PerformOn::Zone(0)).unwrap();
+/// reset_zone(nvme_config, config, PerformOn::Zone(0)).unwrap();
 /// ```
-pub fn reset_zone(config: &ZNSConfig, perform_on: PerformOn) -> Result<(), NVMeError> {
-    zone_op(config, perform_on, nvme_zns_send_action_NVME_ZNS_ZSA_RESET)
+pub fn reset_zone(
+    nvme_config: &NVMeConfig,
+    config: &ZNSConfig,
+    perform_on: PerformOn,
+) -> Result<(), NVMeError> {
+    zone_op(
+        nvme_config,
+        config,
+        perform_on,
+        nvme_zns_send_action_NVME_ZNS_ZSA_RESET,
+    )
 }

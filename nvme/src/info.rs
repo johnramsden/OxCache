@@ -1,10 +1,17 @@
-use std::{ffi::c_void, fs::{self, File}, io::{self, Read}, mem, os::fd::RawFd, ptr::null};
+use std::{
+    ffi::c_void,
+    fs::{self, File},
+    io::{self, Read},
+    mem,
+    os::fd::RawFd,
+    ptr::null,
+};
 
 use libnvme_sys::bindings::*;
 
 use crate::{
-    ops::zns_open,
-    types::{NVMeError, ZNSConfig, ZNSZoneDescriptor},
+    ops::open_device,
+    types::{NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor},
     util::{check_error, nullptr, shift_and_mask},
 };
 
@@ -71,9 +78,7 @@ fn oxcache_id_zns_ctrl(fd: RawFd) -> Result<nvme_zns_id_ctrl, NVMeError> {
     }
 }
 
-/// Retrieves ZNS configuration and metadata for a device by opening it and querying its properties.
-/// Returns a `ZNSConfig` struct on success or an `NVMeError` on failure.
-pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
+pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
     // Trim the device name so that it's only the filename after /dev/
     let device_name: &str = {
         if device.starts_with("/dev/") {
@@ -83,7 +88,7 @@ pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
         }
     };
 
-    let fd: RawFd = match zns_open(device_name) {
+    let fd: RawFd = match open_device(device_name) {
         Ok(opened_fd) => opened_fd,
         Err(err) => return Err(err),
     };
@@ -99,7 +104,6 @@ pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
 
     let ns_data = oxcache_id_ns(fd, nsid)?;
 
-    // This specifies the index of the current LBA format and zone format
     let current_lba_index = {
         // Lower 4 bits
         let mut bits: u32 = shift_and_mask(
@@ -122,18 +126,30 @@ pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
 
     // LBA format
     let lbaf_fmt = ns_data.lbaf[current_lba_index];
-    let lba_size = 1 << lbaf_fmt.ds;
+    let logical_block_size = 1 << lbaf_fmt.ds;
     // We can also get the total size of the controller via nvme_id_ctrl
-    let total_size_in_lb = ns_data.nuse;
-    let total_size_in_bytes = total_size_in_lb * lba_size;
+    let total_size_in_bytes = ns_data.nuse * logical_block_size;
 
-    let zns_ns_data = oxcache_id_zns_ns(fd, nsid)?;
+    Ok(NVMeConfig {
+        fd,
+        nsid,
+        logical_block_size,
+        total_size_in_bytes,
+        current_lba_index,
+        lba_perf: 0,
+    })
+}
+
+/// Retrieves ZNS configuration and metadata for a device by opening it and querying its properties.
+/// Returns a `ZNSConfig` struct on success or an `NVMeError` on failure.
+pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
+    let zns_ns_data = oxcache_id_zns_ns(nvme_config.fd, nvme_config.nsid)?;
     // Max active & open resources
     // Add 1 because mar and mor ar 0 based values
     let mar = zns_ns_data.mar + 1;
     let mor = zns_ns_data.mor + 1;
 
-    let zone_fmt = zns_ns_data.lbafe[current_lba_index];
+    let zone_fmt = zns_ns_data.lbafe[nvme_config.current_lba_index];
     let zone_size = zone_fmt.zsze;
     let zdesc_ext_size = (zone_fmt.zdes * 64) as u64;
     let variable_zone_cap = zns_ns_data.zoc & 1 == 1;
@@ -143,28 +159,22 @@ pub fn zns_get_info(device: &str) -> Result<ZNSConfig, NVMeError> {
     }
 
     // Zone append size limit
-    let zns_ctrl_data = oxcache_id_zns_ctrl(fd)?;
-    let zasl = (1 << zns_ctrl_data.zasl) * lba_size as u32;
+    let zns_ctrl_data = oxcache_id_zns_ctrl(nvme_config.fd)?;
+    let zasl = (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as u32;
 
     // Number of zones
-    let nzones = match get_num_zones(fd, nsid) {
+    let nzones = match get_num_zones(nvme_config.fd, nvme_config.nsid) {
         Ok(nz) => nz,
         Err(err) => return Err(err),
     };
 
     Ok(ZNSConfig {
-        fd: fd,
-        nsid: nsid,
-        total_size_in_bytes: total_size_in_bytes,
         max_active_resources: mar,
         max_open_resources: mor,
         num_zones: nzones,
-        block_size: lba_size,
-        total_size_in_lbs: total_size_in_lb,
         zasl: zasl,
         zone_descriptor_extension_size: zdesc_ext_size,
         zone_size: zone_size,
-        lba_perf: 0, // Unimplemented, but can be queried in nvme id namespace
         timeout: 0,
         chunks_per_zone: 0,
         chunk_size: 0,
