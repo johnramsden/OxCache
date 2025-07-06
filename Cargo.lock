@@ -227,7 +227,7 @@ dependencies = [
  "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
- "lru",
+ "lru 0.12.5",
  "percent-encoding",
  "regex-lite",
  "sha2",
@@ -1795,6 +1795,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86ea4e65087ff52f3862caff188d489f1fab49a0cb09e01b2e3f1a617b10aaed"
+dependencies = [
+ "hashbrown 0.15.3",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1948,6 +1957,7 @@ dependencies = [
  "flume",
  "futures",
  "libnvme-sys",
+ "lru 0.16.0",
  "nvme",
  "rand",
  "rand_pcg",

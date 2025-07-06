@@ -173,7 +173,6 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .or_else(|| config.as_ref()?.server.chunk_size);
     let chunk_size = chunk_size
         .ok_or("Missing chunk size")?;
-    
 
     // TODO: Add secrets from env vars
 

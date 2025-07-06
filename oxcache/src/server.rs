@@ -3,7 +3,6 @@ use crate::eviction::{EvictionPolicyWrapper, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
-
 // use tokio::spawn;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -27,7 +26,7 @@ pub struct ServerRemoteConfig {
     pub bucket: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServerEvictionConfig {
     pub eviction_type: String,
     pub num_evict: usize,
@@ -75,14 +74,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(
             self.config.disk.as_str(),
             self.config.chunk_size,
-            Arc::new(std::sync::Mutex::new(
-                EvictionPolicyWrapper::new(
-                    self.config.eviction.eviction_type.as_str(),
-                    self.config.eviction.num_evict,
-                    self.config.eviction.high_water_evict,
-                    self.config.eviction.low_water_evict,
-                )?
-            ))
+            self.config.eviction.clone()
         )?;
 
         let evictor = Evictor::start(Arc::clone(&device));

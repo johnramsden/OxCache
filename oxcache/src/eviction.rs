@@ -4,9 +4,13 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use core::fmt::Debug;
+use std::collections::{HashMap, VecDeque};
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::device::Device;
+
+use lru::LruCache;
+use std::num::NonZeroUsize;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -15,11 +19,11 @@ pub enum EvictionPolicyWrapper {
 }
 
 impl EvictionPolicyWrapper {
-    pub fn new(identifier: &str, num_evict: usize, high_water: usize, low_water: usize) -> tokio::io::Result<Self> {
+    pub fn new(identifier: &str, num_evict: usize, high_water: usize, low_water: usize, nr_zones: usize, nr_chunks_per_zone: usize) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
-            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new(num_evict, high_water, low_water))),
-            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(num_evict, high_water, low_water))),
-            "promotional" => Ok(EvictionPolicyWrapper::Promotional(PromotionalEvictionPolicy::new(num_evict, high_water, low_water))),
+            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new(num_evict, high_water, low_water, nr_zones, nr_chunks_per_zone))),
+            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(num_evict, high_water, low_water, nr_zones, nr_chunks_per_zone))),
+            "promotional" => Ok(EvictionPolicyWrapper::Promotional(PromotionalEvictionPolicy::new(num_evict, high_water, low_water, nr_zones, nr_chunks_per_zone))),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, identifier)),
         }
     }
@@ -52,13 +56,15 @@ pub trait EvictionPolicy: Send + Sync {
 pub struct DummyEvictionPolicy {
     num_evict: usize,
     high_water: usize,
-    low_water: usize
+    low_water: usize,
+    nr_zones: usize,
+    nr_chunks_per_zone: usize
 }
 
 impl DummyEvictionPolicy {
-    pub fn new(num_evict: usize, high_water: usize, low_water: usize) -> Self {
+    pub fn new(num_evict: usize, high_water: usize, low_water: usize, nr_zones: usize, nr_chunks_per_zone: usize) -> Self {
         Self {
-            num_evict, high_water, low_water
+            num_evict, high_water, low_water, nr_zones, nr_chunks_per_zone
         }
     }
 }
@@ -81,21 +87,28 @@ impl EvictionPolicy for DummyEvictionPolicy {
 pub struct PromotionalEvictionPolicy {
     num_evict: usize,
     high_water: usize,
-    low_water: usize
+    low_water: usize,
+    nr_zones: usize,
+    nr_chunks_per_zone: usize,
+    lru: LruCache<usize, ()>
 }
 
 impl PromotionalEvictionPolicy {
-    pub fn new(num_evict: usize, high_water: usize, low_water: usize) -> Self {
+    pub fn new(num_evict: usize, high_water: usize, low_water: usize, nr_zones: usize, nr_chunks_per_zone: usize) -> Self {
+        let lru = LruCache::new(NonZeroUsize::new(nr_zones).unwrap());
         Self {
-            num_evict, high_water, low_water
+            num_evict, high_water, low_water, nr_zones, nr_chunks_per_zone, lru
         }
     }
 }
 
 impl EvictionPolicy for PromotionalEvictionPolicy {
+    /// Promotional LRU
+    /// Performs LRU based on full zones
     type Target = usize;
+    
     fn write_update(&self, chunk: ChunkLocation) {
-        unimplemented!();
+        // in pq, map zone id to
     }
 
     fn read_update(&self, chunk: ChunkLocation) {
@@ -114,13 +127,15 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
 pub struct ChunkEvictionPolicy {
     num_evict: usize,
     high_water: usize,
-    low_water: usize
+    low_water: usize,
+    nr_zones: usize,
+    nr_chunks_per_zone: usize
 }
 
 impl ChunkEvictionPolicy {
-    pub fn new(num_evict: usize, high_water: usize, low_water: usize) -> Self {
+    pub fn new(num_evict: usize, high_water: usize, low_water: usize, nr_zones: usize, nr_chunks_per_zone: usize) -> Self {
         Self {
-            num_evict, high_water, low_water
+            num_evict, high_water, low_water, nr_zones, nr_chunks_per_zone
         }
     }
 }

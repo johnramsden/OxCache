@@ -5,7 +5,8 @@
 
 Create the nvme device:
 
-```shell 
+```shell
+sudo modprobe nvmet nvmet-loop nvme-loop
 sudo nvmetcli restore nvme-loop.json 
 sudo nvme connect -t loop -n testnqn -q hostnqn 
 lsblk
