@@ -29,7 +29,6 @@ pub struct ServerRemoteConfig {
 #[derive(Debug, Clone)]
 pub struct ServerEvictionConfig {
     pub eviction_type: String,
-    pub num_evict: usize,
     pub high_water_evict: usize,
     pub low_water_evict: usize,
 }

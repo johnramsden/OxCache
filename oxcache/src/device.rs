@@ -223,7 +223,6 @@ impl Device for Zoned {
 
                 let eviction_policy = Arc::new(Mutex::new(EvictionPolicyWrapper::new(
                     eviction_config.eviction_type.as_str(),
-                    eviction_config.num_evict,
                     eviction_config.high_water_evict,
                     eviction_config.low_water_evict,
                     config.num_zones as usize,
@@ -254,7 +253,7 @@ impl Device for Zoned {
                 let chunk = lba / self.config.chunk_size as u64;
 
                 let mtx = Arc::clone(&self.evict_policy);
-                let policy = mtx.lock().unwrap();
+                let mut policy = mtx.lock().unwrap();
                 policy.write_update(ChunkLocation::new(
                     zone_index, chunk, // addr should be in chunks
                 ));
@@ -282,7 +281,7 @@ impl Device for Zoned {
         ) {
             Ok(()) => {
                 let mtx = Arc::clone(&self.evict_policy);
-                let policy = mtx.lock().unwrap();
+                let mut policy = mtx.lock().unwrap();
                 policy.read_update(ChunkLocation::new(location.zone, location.addr));
                 Ok(())
             }
@@ -298,8 +297,8 @@ impl Device for Zoned {
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
         let mtx = Arc::clone(&self.evict_policy);
-        let policy = mtx.lock().unwrap();
-        match &*policy {
+        let mut policy = mtx.lock().unwrap();
+        match &mut *policy {
             EvictionPolicyWrapper::Dummy(p) => Ok(()),
             EvictionPolicyWrapper::Chunk(p) => {
                 unimplemented!()
@@ -342,7 +341,6 @@ impl Device for BlockInterface {
 
         let eviction_policy = Arc::new(Mutex::new(EvictionPolicyWrapper::new(
             eviction_config.eviction_type.as_str(),
-            eviction_config.num_evict,
             eviction_config.high_water_evict,
             eviction_config.low_water_evict,
             num_zones,
@@ -392,7 +390,14 @@ impl Device for BlockInterface {
             self.nvme_config.logical_block_size,
             mut_data.as_mut_slice(),
         ) {
-            Ok(()) => Ok(chunk_location),
+            Ok(()) => {
+                let mtx = Arc::clone(&self.evict_policy);
+                let mut policy = mtx.lock().unwrap();
+                policy.write_update(ChunkLocation::new(
+                    chunk_location.zone, chunk_location.addr, // addr should be in chunks
+                ));
+                Ok(chunk_location)
+            },
             Err(err) => Err(err.try_into().unwrap()),
         }
     }
@@ -426,8 +431,8 @@ impl Device for BlockInterface {
 
     fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
         let mtx = Arc::clone(&self.evict_policy);
-        let policy = mtx.lock().unwrap();
-        match &*policy {
+        let mut policy = mtx.lock().unwrap();
+        match &mut *policy {
             EvictionPolicyWrapper::Dummy(p) => Ok(()),
             EvictionPolicyWrapper::Chunk(p) => {
                 unimplemented!()

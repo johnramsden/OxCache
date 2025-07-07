@@ -10,7 +10,6 @@ remote_type = "emulated" # emulated | S3
 bucket = "S3_BUCKET"
 
 [eviction]
-eviction_policy = "dummy"
-num_evict = 1
-high_water_evict = 3
-low_water_evict = 1
+eviction_policy = "promotional"
+high_water_evict = 1 # Number remaining from end
+low_water_evict = 3

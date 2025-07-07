@@ -160,8 +160,8 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
         .ok_or("Missing low_water_evict")?;
     
-    if low_water_evict > high_water_evict {
-        return Err("low_water_evict must be less than high_water_evict".into());
+    if low_water_evict < high_water_evict {
+        return Err("low_water_evict must be greater than high_water_evict".into());
     }
     
     if num_evict == 0 {
@@ -187,7 +187,6 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         },
         eviction: ServerEvictionConfig {
             eviction_type: eviction_policy,
-            num_evict,
             high_water_evict,
             low_water_evict,
         },        
