@@ -162,7 +162,7 @@ pub trait Device: Send + Sync {
         read_buffer: &mut [u8],
     ) -> std::io::Result<()>;
 
-    fn evict(&self, num_eviction: usize) -> std::io::Result<()>;
+    fn evict(&self) -> std::io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 }
@@ -295,7 +295,7 @@ impl Device for Zoned {
         Ok(data)
     }
 
-    fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
+    fn evict(&self) -> std::io::Result<()> {
         let mtx = Arc::clone(&self.evict_policy);
         let mut policy = mtx.lock().unwrap();
         match &mut *policy {
@@ -310,7 +310,7 @@ impl Device for Zoned {
                     zones.reset_zones(evict_targets);
                     Ok(())
                 }
-                None => Err(Error::new(std::io::ErrorKind::Other, "No items to evict")),
+                None => Ok(()) // Nothing to evict,
             },
         }
     }
@@ -429,7 +429,7 @@ impl Device for BlockInterface {
         Ok(buffer)
     }
 
-    fn evict(&self, num_eviction: usize) -> std::io::Result<()> {
+    fn evict(&self) -> std::io::Result<()> {
         let mtx = Arc::clone(&self.evict_policy);
         let mut policy = mtx.lock().unwrap();
         match &mut *policy {
@@ -444,7 +444,7 @@ impl Device for BlockInterface {
                     state.active_zones.reset_zones(evict_targets);
                     Ok(())
                 }
-                None => Err(Error::new(std::io::ErrorKind::Other, "No items to evict")),
+                None => Ok(()) // Nothing to evict,
             },
         }
     }

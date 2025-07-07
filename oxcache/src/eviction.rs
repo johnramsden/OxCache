@@ -195,7 +195,7 @@ impl Evictor {
                     // TODO: Put eviction logic here
                     println!("Evictor running...");
 
-                    device.evict(1).expect("Eviction failed");
+                    device.evict().expect("Eviction failed");
 
                     // Sleep to simulate periodic work
                     thread::sleep(Duration::from_secs(5));

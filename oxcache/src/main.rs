@@ -39,9 +39,6 @@ pub struct CliArgs {
     pub eviction_policy: Option<String>,
     
     #[arg(long)]
-    pub num_evict: Option<usize>,
-    
-    #[arg(long)]
     pub high_water_evict: Option<usize>,
     
     #[arg(long)]
@@ -66,7 +63,6 @@ pub struct ParsedRemoteConfig {
 #[derive(Debug, Deserialize)]
 pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
-    pub num_evict: Option<usize>,
     pub high_water_evict: Option<usize>,
     pub low_water_evict: Option<usize>,
 }
@@ -144,11 +140,6 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .or_else(|| config.as_ref()?.eviction.eviction_policy.clone())
         .ok_or("Missing eviction policy")?
         .to_lowercase();
-    let num_evict = cli
-        .num_evict
-        .clone()
-        .or_else(|| config.as_ref()?.eviction.num_evict.clone())
-        .ok_or("Missing num_evict")?;
     let high_water_evict = cli
         .high_water_evict
         .clone()
@@ -164,9 +155,6 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         return Err("low_water_evict must be greater than high_water_evict".into());
     }
     
-    if num_evict == 0 {
-        return Err("num_evict must be greater than 0".into());
-    }
         
     let chunk_size = cli
         .chunk_size
