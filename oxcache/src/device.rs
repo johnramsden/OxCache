@@ -303,14 +303,11 @@ impl Device for Zoned {
             EvictionPolicyWrapper::Chunk(p) => {
                 unimplemented!()
             }
-            EvictionPolicyWrapper::Promotional(p) => match p.get_evict_targets() {
-                Some(evict_targets) => {
-                    let zone_mtx = Arc::clone(&self.zones);
-                    let mut zones = zone_mtx.lock().unwrap();
-                    zones.reset_zones(evict_targets);
-                    Ok(())
-                }
-                None => Ok(()) // Nothing to evict,
+            EvictionPolicyWrapper::Promotional(p) => {
+                let zone_mtx = Arc::clone(&self.zones);
+                let mut zones = zone_mtx.lock().unwrap();
+                zones.reset_zones(p.get_evict_targets());
+                Ok(())
             },
         }
     }
@@ -437,14 +434,11 @@ impl Device for BlockInterface {
             EvictionPolicyWrapper::Chunk(p) => {
                 unimplemented!()
             }
-            EvictionPolicyWrapper::Promotional(p) => match p.get_evict_targets() {
-                Some(evict_targets) => {
-                    let state_mtx = Arc::clone(&self.state);
-                    let mut state = state_mtx.lock().unwrap();
-                    state.active_zones.reset_zones(evict_targets);
-                    Ok(())
-                }
-                None => Ok(()) // Nothing to evict,
+            EvictionPolicyWrapper::Promotional(p) => {
+                let state_mtx = Arc::clone(&self.state);
+                let mut state = state_mtx.lock().unwrap();
+                state.active_zones.reset_zones(p.get_evict_targets());
+                Ok(())
             },
         }
     }

@@ -49,8 +49,7 @@ pub trait EvictionPolicy: Send + Sync {
 
     fn write_update(&mut self, chunk: ChunkLocation);
     fn read_update(&mut self, chunk: ChunkLocation);
-    fn get_evict_targets(&mut self) -> Option<Vec<Self::Target>>;
-    fn get_evict_target(&mut self) -> Option<Self::Target>;
+    fn get_evict_targets(&mut self) -> Vec<Self::Target>;
 }
 
 pub struct DummyEvictionPolicy {
@@ -74,11 +73,7 @@ impl EvictionPolicy for DummyEvictionPolicy {
 
     fn read_update(&mut self, chunk: ChunkLocation) {}
 
-    fn get_evict_targets(&mut self) -> Option<Vec<Self::Target>> {
-        unimplemented!();
-    }
-
-    fn get_evict_target(&mut self) -> Option<Self::Target> {
+    fn get_evict_targets(&mut self) -> Vec<Self::Target> {
         unimplemented!();
     }
 }
@@ -122,10 +117,10 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         }
     }
 
-    fn get_evict_targets(&mut self) -> Option<Vec<Self::Target>> {
+    fn get_evict_targets(&mut self) -> Vec<Self::Target> {
         let high_water_mark =  self.nr_zones-self.high_water;
         if self.lru.len() < high_water_mark {
-            return None;
+            return vec![];
         }
 
         let mut targets = Vec::with_capacity(self.lru.len() - self.low_water);
@@ -134,11 +129,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
             targets.push(self.lru.pop_lru().unwrap().0)
         }
 
-        Some(targets)
-    }
-
-    fn get_evict_target(&mut self) -> Option<Self::Target> {
-        Some(0)
+        targets
     }
 }
 
@@ -167,11 +158,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         unimplemented!();
     }
 
-    fn get_evict_targets(&mut self) -> Option<Vec<Self::Target>> {
-        unimplemented!();
-    }
-
-    fn get_evict_target(&mut self) -> Option<Self::Target> {
+    fn get_evict_targets(&mut self) -> Vec<Self::Target> {
         unimplemented!();
     }
 }
@@ -258,7 +245,7 @@ mod tests {
         policy.write_update(ChunkLocation::new(3, 0));
         compare_order(&mut policy, vec![]);
         let et = policy.get_evict_targets();
-        let expect_none: Option<Vec<usize>> = None;
+        let expect_none: Vec<usize> = vec![];
         assert_eq!(expect_none, et, "Expected = {:?}, but got {:?}", expect_none, et);
         
         // zone=[_,_,_,_], lru=()
@@ -290,7 +277,7 @@ mod tests {
         compare_order(&mut policy, vec![1, 2, 3]);
 
         let et = policy.get_evict_targets();
-        let expect = Some(vec![3, 2]);
+        let expect = vec![3, 2];
         assert_eq!(expect, et, "Expected = {:?}, but got {:?}", expect, et);
 
         compare_order(&mut policy, vec![1]);
