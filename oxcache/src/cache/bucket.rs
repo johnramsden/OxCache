@@ -15,12 +15,12 @@ pub struct Chunk {
 #[derive(Clone)]
 pub struct ChunkLocation {
     pub zone: usize,
-    pub addr: u64, // The chunk index
+    pub index: u64, // The chunk index
 }
 
 impl ChunkLocation {
     pub fn new(zone: usize, addr: u64) -> Self {
-        Self { zone, addr }
+        Self { zone, index: addr }
     }
 }
 
