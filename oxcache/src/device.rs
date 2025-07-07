@@ -79,7 +79,7 @@ impl ZoneList {
 
         Ok(ChunkLocation {
             zone: zone.index,
-            addr: chunk_idx as u64,
+            index: chunk_idx as u64,
         })
     }
 
@@ -276,13 +276,13 @@ impl Device for Zoned {
             &self.nvme_config,
             &self.config,
             location.zone as u64,
-            location.addr,
+            location.index,
             read_buffer,
         ) {
             Ok(()) => {
                 let mtx = Arc::clone(&self.evict_policy);
                 let mut policy = mtx.lock().unwrap();
-                policy.read_update(ChunkLocation::new(location.zone, location.addr));
+                policy.read_update(ChunkLocation::new(location.zone, location.index));
                 Ok(())
             }
             Err(err) => Err(err.try_into().unwrap()),
@@ -380,7 +380,7 @@ impl Device for BlockInterface {
         match nvme::ops::write(
             get_address_at(
                 chunk_location.zone as u64,
-                chunk_location.addr,
+                chunk_location.index,
                 (self.chunks_per_zone * self.chunk_size) as u64,
                 self.chunk_size as u64,
             ),
@@ -394,7 +394,7 @@ impl Device for BlockInterface {
                 let mtx = Arc::clone(&self.evict_policy);
                 let mut policy = mtx.lock().unwrap();
                 policy.write_update(ChunkLocation::new(
-                    chunk_location.zone, chunk_location.addr, // addr should be in chunks
+                    chunk_location.zone, chunk_location.index, // addr should be in chunks
                 ));
                 Ok(chunk_location)
             },
@@ -412,7 +412,7 @@ impl Device for BlockInterface {
     {
         let slba = get_address_at(
             location.zone as u64,
-            location.addr,
+            location.index,
             (self.chunks_per_zone * self.chunk_size) as u64,
             self.chunk_size as u64,
         );

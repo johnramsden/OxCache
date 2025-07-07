@@ -108,7 +108,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     fn write_update(&mut self, chunk: ChunkLocation) {
         assert!(!self.lru.contains(&chunk.zone));
         // We only want to put it in the LRU once the zone is full
-        if (chunk.addr as usize == self.nr_chunks_per_zone-1) {
+        if (chunk.index as usize == self.nr_chunks_per_zone-1) {
             self.lru.put(chunk.zone, ());
         }
     }
