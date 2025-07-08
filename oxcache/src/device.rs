@@ -167,6 +167,15 @@ pub trait Device: Send + Sync {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 }
 
+fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
+    return if buffer_size.rem_euclid(block_size) != 0 {
+        buffer_size + (block_size - buffer_size.rem_euclid(block_size))
+    } else {
+        buffer_size
+    }
+}
+
+
 pub fn get_device(
     device: &str,
     chunk_size: usize,
@@ -242,7 +251,11 @@ impl Device for Zoned {
 
     fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
         let zone_index = self.get_free_zone()?;
-        let mut mut_data = Vec::clone(&data);
+        // Note: this performs a copy every time because we need to
+        // pass in a mutable vector to libnvme
+        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
+        mut_data[..data.len()].copy_from_slice(&data[..]);
+
         match zns_append(
             &self.nvme_config,
             &self.config,
@@ -372,7 +385,8 @@ impl Device for BlockInterface {
         };
         drop(state);
 
-        let mut mut_data = Vec::clone(&data);
+        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
+        mut_data[..data.len()].copy_from_slice(&data[..]);
 
         match nvme::ops::write(
             get_address_at(
