@@ -11,16 +11,15 @@ pub struct Chunk {
     pub size: usize,
 }
 
-#[derive(Debug)]
-#[derive(Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct ChunkLocation {
     pub zone: usize,
-    pub index: u64, // The chunk index
+    pub index: u64,
 }
 
 impl ChunkLocation {
-    pub fn new(zone: usize, addr: u64) -> Self {
-        Self { zone, index: addr }
+    pub fn new(zone: usize, index: u64) -> Self {
+        Self { zone, index }
     }
 }
 
