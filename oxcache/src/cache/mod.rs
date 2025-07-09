@@ -21,7 +21,7 @@ impl Cache {
     pub fn new(num_zones: usize) -> Self {
         Self {
             buckets: RwLock::new(HashMap::new()),
-            zone_to_entry: Mutex::new(vec![Vec::new(); num_zones])
+            zone_to_entry: Mutex::new(vec![Vec::with_capacity(chunks_per_zone); num_zones])
         }
     }
     
