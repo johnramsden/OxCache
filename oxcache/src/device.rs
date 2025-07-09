@@ -165,6 +165,8 @@ pub trait Device: Send + Sync {
     fn evict(&self) -> std::io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
+
+    fn get_num_zones(&self) -> usize;
 }
 
 fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
@@ -324,6 +326,10 @@ impl Device for Zoned {
             },
         }
     }
+
+    fn get_num_zones(&self) -> usize {
+        self.config.num_zones as usize
+    }
 }
 
 impl BlockInterface {
@@ -455,5 +461,9 @@ impl Device for BlockInterface {
                 Ok(())
             },
         }
+    }
+
+    fn get_num_zones(&self) -> usize {
+        self.num_zones
     }
 }
