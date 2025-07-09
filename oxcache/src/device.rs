@@ -146,7 +146,7 @@ pub struct BlockInterface {
 }
 
 pub trait Device: Send + Sync {
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
+    fn append(&self, data: &mut [u8]) -> std::io::Result<ChunkLocation>;
 
     fn new(
         device: &str,
@@ -249,18 +249,14 @@ impl Device for Zoned {
         }
     }
 
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+    fn append(&self, data: &mut [u8]) -> std::io::Result<ChunkLocation> {
         let zone_index = self.get_free_zone()?;
-        // Note: this performs a copy every time because we need to
-        // pass in a mutable vector to libnvme
-        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
-        mut_data[..data.len()].copy_from_slice(&data[..]);
 
         match zns_append(
             &self.nvme_config,
             &self.config,
             zone_index as u64,
-            mut_data.as_mut_slice(),
+            data,
         ) {
             Ok(lba) => {
                 let chunk = lba / self.config.chunk_size as u64;
@@ -371,7 +367,7 @@ impl Device for BlockInterface {
         })
     }
 
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+    fn append(&self, data: &mut[u8]) -> std::io::Result<ChunkLocation> {
         let mtx = self.state.clone();
         let mut state = mtx.lock().unwrap();
         let chunk_location = match state.active_zones.remove_chunk_location() {
@@ -385,9 +381,6 @@ impl Device for BlockInterface {
         };
         drop(state);
 
-        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
-        mut_data[..data.len()].copy_from_slice(&data[..]);
-
         match nvme::ops::write(
             get_address_at(
                 chunk_location.zone as u64,
@@ -399,7 +392,7 @@ impl Device for BlockInterface {
             0,
             self.nvme_config.nsid,
             self.nvme_config.logical_block_size,
-            mut_data.as_mut_slice(),
+            data,
         ) {
             Ok(()) => {
                 let mtx = Arc::clone(&self.evict_policy);
