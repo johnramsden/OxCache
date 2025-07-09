@@ -121,6 +121,20 @@ impl Cache {
             }
         }
     }   
+
+    pub async fn remove_zone(&self, zone_index: usize) -> tokio::io::Result<()> {
+        let mut map_guard = self.buckets.write().await;
+        let mut guard = self.zone_to_entry.lock().await;
+
+        for chunk in &guard[zone_index] {
+            map_guard.remove(chunk);
+        }
+
+        guard[zone_index].clear();
+
+        Ok(())
+    }
+
 }
 
 
@@ -345,7 +359,7 @@ impl Cache {
         let entry = Chunk::new(String::from("fake-uuid"), 120, 10);
         let chunk_loc = ChunkLocation::new(0, 20);
 
-        let entry2 = Chunk::new(String::from("fake-uuid"), 120, 10);
+        let entry2 = Chunk::new(String::from("fake-uuid"), 121, 10);
         let chunk_loc2 = ChunkLocation::new(0, 21);
 
         // Insert
