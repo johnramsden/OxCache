@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
+use futures::lock::Mutex;
 use tokio::sync::{Notify, RwLock};
 use crate::cache::bucket::{ChunkLocation, Chunk, ChunkState};
 use crate::readerpool::ReaderPool;
@@ -13,12 +14,14 @@ pub mod bucket;
 #[derive(Debug)]
 pub struct Cache {
     buckets: RwLock<HashMap<Chunk, Arc<RwLock<ChunkState>>>>,
+    zone_to_entry: Mutex<Vec<Vec<Chunk>>>
 }
 
 impl Cache {
     pub fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
         Self {
             buckets: RwLock::new(HashMap::new()),
+            zone_to_entry: Mutex::new(vec![Vec::with_capacity(chunks_per_zone); num_zones])
         }
     }
     
@@ -114,7 +117,10 @@ impl Cache {
                         return Err(e);
                     },
                     Ok(location) => {
+                        let zone = location.zone;
                         *chunk_loc_guard = ChunkState::Ready(Arc::new(location));
+                        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+                        reverse_mapping_guard[zone].push(key);
                     }
                 }
                 return Ok(())
@@ -137,6 +143,10 @@ impl Cache {
 
 }
 
+#[cfg(test)]
+mod mod_tests {
+
+    use std::sync::Arc;
 
     use crate::cache::{bucket::{Chunk, ChunkLocation}, Cache};
 
@@ -335,7 +345,7 @@ impl Cache {
 
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn test_multiple_remove() {
         let cache = Cache::new(10, 100);
 
@@ -421,5 +431,4 @@ impl Cache {
             }).await);
 
     }
-
 }

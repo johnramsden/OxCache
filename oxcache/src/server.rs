@@ -1,4 +1,5 @@
 use crate::cache::Cache;
+use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
@@ -48,14 +49,22 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
     cache: Arc<Cache>,
     config: ServerConfig,
     remote: Arc<T>,
+    device: Arc<dyn Device>,
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
+        let device = device::get_device(
+            config.disk.as_str(),
+            config.chunk_size,
+            config.eviction.clone()
+        )?;
+
         Ok(Self {
             cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
             remote,
             config,
+            device,
         })
     }
 
