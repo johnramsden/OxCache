@@ -53,7 +53,7 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
-            cache: Arc::new(Cache::new()),
+            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
             remote,
             config,
         })
