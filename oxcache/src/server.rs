@@ -61,7 +61,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         )?;
 
         Ok(Self {
-            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
+            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone(), config.chunk_size)),
             remote,
             config,
             device,
@@ -169,6 +169,18 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                 println!("Received: {:?}", request);
                 match request {
                     request::Request::Get(req) => {
+                        if let Err(e) = req.validate(cache.chunk_size) {
+                            let encoded = bincode::serde::encode_to_vec(
+                                request::GetResponse::Error(e.to_string()),
+                                bincode::config::standard()
+                            ).unwrap();
+                            {
+                                let mut w = writer.lock().await;
+                                w.send(Bytes::from(encoded)).await?;
+                            }
+
+                            continue;
+                        }
                         println!("Received get request: {:?}", req);
                         let chunk: Chunk = req.into();
                         cache.get_or_insert_with(
