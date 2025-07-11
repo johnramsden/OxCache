@@ -191,10 +191,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                         cache.get_or_insert_with(
                             chunk.clone(),
                             {
-                                // println!("HIT {:?}", chunk);
                                 let writer = Arc::clone(&writer);
                                 let reader_pool = Arc::clone(&reader_pool);
+                                // let chunk = chunk.clone();
                                 |location| async move {
+                                    // println!("HIT {:?}", chunk);
                                     let location = location.as_ref().clone();
 
                                     let (tx, rx) = flume::bounded(1);
@@ -233,14 +234,13 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     Ok(())
                                 }
                             },
-                            {
-                                // println!("MISS {:?}", chunk);
-                                
+                            {                                
                                 let chunk = chunk.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);
                                 let writer_pool = Arc::clone(&writer_pool);
                                 move || async move {
+                                    // println!("MISS {:?}", chunk);
                                     let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
                                         Ok(resp) => resp,
                                         Err(e) => {
