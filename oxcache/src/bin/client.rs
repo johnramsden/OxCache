@@ -32,12 +32,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
     let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
     
-    let work = vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
-    for number in work {
+    let work = vec![
+        ("0", 0, 4096, true), ("0", 0, 4096, true),
+        ("Aligned chunk size", 8192, 8192, true), ("Aligned chunk size", 8192, 8192, true),
+        ("Unaligned", 7, 4096, false),
+        ("Too large", 8192, 9000, false),
+    ];
+    for req in work {
         let msg = Request::Get(GetRequest {
-            key: number.to_string(),
-            offset: number,
-            size: 4096
+            key: req.0.to_string(),
+            offset: req.1,
+            size: req.2,
         });
         
         println!("Sending: {:?}", msg);
@@ -55,7 +60,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bytes = f.as_ref();
             let msg: Result<(request::GetResponse, usize), DecodeError> =
                 bincode::serde::decode_from_slice(bytes, bincode::config::standard());
-            println!("Received: {:?}", msg);
+            match msg?.0 {
+                (request::GetResponse::Error(s)) => {
+                    assert!(!req.3, "Expected success, recieved error {}", s);
+                },
+                (request::GetResponse::Response(_)) => {
+                    assert!(req.3, "Expected error, recieved success");
+                }
+            }
         }
 
         sleep(Duration::from_secs(2)).await;
