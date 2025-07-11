@@ -86,7 +86,7 @@ impl RemoteBackend for S3Backend {
 impl RemoteBackend for EmulatedBackend {
     async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
         // TODO: Implement
-        println!("GET {} {} {}", key, offset, size);
+        // println!("GET {} {} {}", key, offset, size);
         self.gen_random_buffer(key, offset, size)
     }
 }
