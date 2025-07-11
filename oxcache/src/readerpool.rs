@@ -30,7 +30,7 @@ impl Reader {
     fn run(self) {
         println!("Reader {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
-            println!("Reader {} processing: {:?}", self.id, msg);
+            // println!("Reader {} processing: {:?}", self.id, msg);
             let resp = ReadResponse { data: self.device.read(msg.location) };
             let snd = msg.responder.send(resp);
             if snd.is_err() {

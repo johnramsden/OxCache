@@ -1,0 +1,141 @@
+use std::fmt::format;
+use std::io::ErrorKind;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use bincode::error::DecodeError;
+use bytes::Bytes;
+use clap::Parser;
+use futures::{SinkExt, StreamExt};
+use rand::{rng};
+use rand::distr::weighted::Error;
+use rand::prelude::IndexedRandom;
+use tokio;
+use tokio::io::split;
+use tokio::net::UnixStream;
+use tokio::task::JoinHandle;
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use uuid::Uuid;
+use oxcache::request;
+use oxcache::request::{GetRequest, Request};
+use std::time::Instant;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Cli {
+    /// Path to the unix socket to connect to
+    #[arg(long)]
+    socket: String,
+
+    #[arg(long)]
+    num_clients: usize,
+
+    #[arg(long)]
+    data_file: String,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let nr_queries = 10000;
+    let nr_uuids = 1000;
+    let mut queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let args = Cli::parse();
+    let counter = Arc::new(AtomicUsize::new(0));
+
+    let mut rng = rng(); // uses fast, thread-local RNG
+
+    let mut uuids = Vec::with_capacity(nr_uuids);
+    for _ in 0..nr_uuids {
+        uuids.push(Uuid::new_v4());
+    }
+
+    {
+        let mut queries = queries.lock().unwrap();
+        for _ in 0..nr_queries {
+            let uuid = uuids
+                .choose(&mut rng)
+                .expect("uuids vec should not be empty")
+                .clone();
+            
+            queries.push(GetRequest {
+                key: uuid.to_string(),
+                size: 8192,
+                offset: 0,
+            });
+        }
+    }
+
+    if args.num_clients <= 0 {
+        return Err(format!("num_clients={} must be at least 1", args.num_clients).into());
+    }
+
+    let mut handles: Vec<JoinHandle<tokio::io::Result<()>>> = Vec::new();
+
+    let start = Instant::now();
+
+    for c in 0..args.num_clients {
+        let sock = args.socket.clone();
+        let queries = Arc::clone(&queries);
+        let counter = Arc::clone(&counter);
+        handles.push(tokio::spawn(async move {
+            let stream = UnixStream::connect(&sock).await?;
+            println!("[t.{}] Client connected to {}", c, sock);
+
+            let (read_half, write_half) = split(stream);
+            let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
+            let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+            
+            loop {
+                let query_num = counter.fetch_add(1, Ordering::Relaxed) + 1;
+
+                let q: GetRequest;
+                {
+                    let mut queries = queries.lock().unwrap();
+                    if queries.len() == 0 {
+                        println!("[t.{}] Client completed", c);
+                        return Ok(());
+                    }
+                    q = queries.pop().unwrap();
+                }
+
+                if query_num % 100 == 0 {
+                    println!("[t.{}] Query num: {}/{}", c, query_num, nr_queries);
+                }
+
+                let encoded = bincode::serde::encode_to_vec(
+                    Request::Get(q),
+                    bincode::config::standard()
+                ).unwrap();
+                writer.send(Bytes::from(encoded)).await?;
+
+                // wait for a response after each send
+
+                if let Some(frame) = reader.next().await {
+                    let f = frame?;
+                    let bytes = f.as_ref();
+                    let msg: Result<(request::GetResponse, usize), DecodeError> =
+                        bincode::serde::decode_from_slice(bytes, bincode::config::standard());
+                    match msg.unwrap().0 {
+                        (request::GetResponse::Error(s)) => {
+                            return Err(std::io::Error::new(ErrorKind::Other, format!(
+                                "[t.{}] Received error {} from client",
+                                c, s
+                            )));
+                        },
+                        (request::GetResponse::Response(_)) => {}
+                    }
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.await?;
+    }
+
+    let duration = start.elapsed(); // Stop the timer
+
+    println!("Executed {} queries across {} clients", nr_queries, args.num_clients);
+    println!("Total run time: {:.2?}", duration);
+    
+    Ok(())
+}
