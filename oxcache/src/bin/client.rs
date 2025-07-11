@@ -34,8 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let work = vec![
         ("0", 0, 4096, true), ("0", 0, 4096, true),
+        ("Aligned chunk size", 8192, 8192, true), ("Aligned chunk size", 8192, 8192, true),
         ("Unaligned", 7, 4096, false),
-        ("Too large", 7, 8096, false),
+        ("Too large", 8192, 9000, false),
     ];
     for req in work {
         let msg = Request::Get(GetRequest {
