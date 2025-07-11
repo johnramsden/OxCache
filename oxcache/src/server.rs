@@ -163,11 +163,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
         let bytes = f.as_ref();
         let msg: Result<(request::Request, usize), DecodeError> =
             bincode::serde::decode_from_slice(bytes, bincode::config::standard());
-        println!("Received: {:?}", msg);
+        // println!("Received: {:?}", msg);
 
         match msg {
             Ok((request, _)) => {
-                println!("Received: {:?}", request);
+                // println!("Received: {:?}", request);
                 match request {
                     request::Request::Get(req) => {
                         if let Err(e) = req.validate(chunk_size) {
@@ -185,12 +185,13 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                             continue;
                         }
 
-                        println!("Received get request: {:?}", req);
+                        // println!("Received get request: {:?}", req);
                         let chunk: Chunk = req.into();
 
                         cache.get_or_insert_with(
                             chunk.clone(),
                             {
+                                // println!("HIT {:?}", chunk);
                                 let writer = Arc::clone(&writer);
                                 let reader_pool = Arc::clone(&reader_pool);
                                 |location| async move {
@@ -233,6 +234,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 }
                             },
                             {
+                                // println!("MISS {:?}", chunk);
+                                
                                 let chunk = chunk.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);

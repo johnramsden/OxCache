@@ -35,12 +35,12 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nr_queries = 10000;
+    let nr_queries = 1000000;
     let nr_uuids = 1000;
     let mut queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let args = Cli::parse();
     let counter = Arc::new(AtomicUsize::new(0));
-
+    let step = nr_queries / 10; // 10%
     let mut rng = rng(); // uses fast, thread-local RNG
 
     let mut uuids = Vec::with_capacity(nr_uuids);
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .choose(&mut rng)
                 .expect("uuids vec should not be empty")
                 .clone();
-            
+
             queries.push(GetRequest {
                 key: uuid.to_string(),
                 size: 8192,
@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (read_half, write_half) = split(stream);
             let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
             let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
-            
+
             loop {
                 let query_num = counter.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -97,9 +97,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     q = queries.pop().unwrap();
                 }
 
-                if query_num % 100 == 0 {
-                    println!("[t.{}] Query num: {}/{}", c, query_num, nr_queries);
+                if query_num % step == 0 {
+                    let percent = (query_num as f64 / nr_queries as f64) * 100.0;
+                    println!("[t.{}] Query num: {}/{} ({:.0}%)", c, query_num, nr_queries, percent);
                 }
+
 
                 let encoded = bincode::serde::encode_to_vec(
                     Request::Get(q),
@@ -136,6 +138,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Executed {} queries across {} clients", nr_queries, args.num_clients);
     println!("Total run time: {:.2?}", duration);
-    
+
     Ok(())
 }
