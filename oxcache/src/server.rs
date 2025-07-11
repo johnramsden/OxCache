@@ -61,7 +61,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         )?;
 
         Ok(Self {
-            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone(), config.chunk_size)),
+            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
             remote,
             config,
             device,
@@ -123,9 +123,9 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let writerpool = Arc::clone(&writerpool);
                                 let readerpool = Arc::clone(&readerpool);
                                 let cache = Arc::clone(&self.cache);
+                                let chunk_size = self.config.chunk_size;
                                 async move {
-                                    
-                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache).await {
+                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache, chunk_size).await {
                                     eprintln!("Connection error: {}", e);
                                 }
                             }});
@@ -152,6 +152,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     reader_pool: Arc<ReaderPool>,
     remote: Arc<T>,
     cache: Arc<Cache>,
+    chunk_size: usize,
 ) -> tokio::io::Result<()> {
     let (read_half, write_half) = split(stream);
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
@@ -169,7 +170,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                 println!("Received: {:?}", request);
                 match request {
                     request::Request::Get(req) => {
-                        if let Err(e) = req.validate(cache.chunk_size) {
+                        if let Err(e) = req.validate(chunk_size) {
                             let encoded = bincode::serde::encode_to_vec(
                                 request::GetResponse::Error(e.to_string()),
                                 bincode::config::standard()

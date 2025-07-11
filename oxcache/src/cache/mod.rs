@@ -14,16 +14,14 @@ pub mod bucket;
 #[derive(Debug)]
 pub struct Cache {
     buckets: RwLock<HashMap<Chunk, Arc<RwLock<ChunkState>>>>,
-    zone_to_entry: Mutex<Vec<Vec<Chunk>>>,
-    pub chunk_size: usize,
+    zone_to_entry: Mutex<Vec<Vec<Chunk>>>
 }
 
 impl Cache {
-    pub fn new(num_zones: usize, chunks_per_zone: usize, chunk_size: usize) -> Self {
+    pub fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
         Self {
             buckets: RwLock::new(HashMap::new()),
-            zone_to_entry: Mutex::new(vec![Vec::with_capacity(chunks_per_zone); num_zones]),
-            chunk_size
+            zone_to_entry: Mutex::new(vec![Vec::with_capacity(chunks_per_zone); num_zones])
         }
     }
     
@@ -154,7 +152,7 @@ mod mod_tests {
 
     #[tokio::test]
     async fn test_insert() {
-        let cache = Cache::new(10, 100, 4096);
+        let cache = Cache::new(10, 100);
         match cache.get_or_insert_with(Chunk::new(String::from("fake-uuid"), 120, 10),
             |_| async move {
                 assert!(false, "Shouldn't reach here");
@@ -186,7 +184,7 @@ mod mod_tests {
 
     #[tokio::test]
     async fn test_insert_similar() {
-        let cache = Cache::new(10, 100, 4096);
+        let cache = Cache::new(10, 100);
 
         let fail_path = async |_: Arc<ChunkLocation>| {
             assert!(false, "Shouldn't reach here");
@@ -291,7 +289,7 @@ mod mod_tests {
 
     #[tokio::test]
     async fn test_remove() {
-        let cache = Cache::new(10, 100, 4096);
+        let cache = Cache::new(10, 100);
 
         let fail_path = async |_: Arc<ChunkLocation>| {
             assert!(false, "Shouldn't reach here");
@@ -349,7 +347,7 @@ mod mod_tests {
 
     #[tokio::test]
     async fn test_multiple_remove() {
-        let cache = Cache::new(10, 100, 4096);
+        let cache = Cache::new(10, 100);
 
         let fail_path = async |_: Arc<ChunkLocation>| {
             assert!(false, "Shouldn't reach here");
