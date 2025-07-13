@@ -448,7 +448,7 @@ impl Device for BlockInterface {
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
         let mut buffer = vec![0; self.chunk_size];
-        self.read_into_buffer(location, &mut buffer);
+        self.read_into_buffer(location, &mut buffer)?;
         Ok(buffer)
     }
 
