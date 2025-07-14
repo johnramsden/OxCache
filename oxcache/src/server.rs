@@ -56,16 +56,11 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
         let device = device::get_device(
             config.disk.as_str(),
-            config.chunk_size,
-            config.eviction.clone()
+            config.chunk_size
         )?;
+        let cache = Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone()));
 
-        Ok(Self {
-            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
-            remote,
-            config,
-            device,
-        })
+        Ok(Self { cache, remote, config, device })
     }
 
     pub async fn run(&self) -> tokio::io::Result<()> {
@@ -79,9 +74,17 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
 
-        let evictor = Evictor::start(Arc::clone(&self.device));
-        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&self.device)));
-        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&self.device)));
+        let eviction_policy = Arc::new(std::sync::Mutex::new(EvictionPolicyWrapper::new(
+            self.config.eviction.eviction_type.as_str(),
+            self.config.eviction.high_water_evict,
+            self.config.eviction.low_water_evict,
+            self.device.get_num_zones(),
+            self.device.get_chunks_per_zone()
+        )?));
+
+        let evictor = Evictor::start(Arc::clone(&self.device), &eviction_policy)?;
+        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&self.device), &eviction_policy));
+        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&self.device), &eviction_policy));
 
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());

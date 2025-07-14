@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use core::fmt::Debug;
 use std::collections::{HashMap, VecDeque};
-use crate::cache::bucket::ChunkLocation;
+use crate::{cache::bucket::ChunkLocation, server::ServerEvictionConfig};
 use crate::device;
 use crate::device::Device;
 
@@ -180,11 +180,12 @@ pub struct Evictor {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     device: Arc<dyn Device>,
+    evict_policy: Arc<Mutex<EvictionPolicyWrapper>>,
 }
 
 impl Evictor {
     /// Start the evictor background thread
-    pub fn start(device: Arc<dyn Device>) -> Self {
+    pub fn start(device: Arc<dyn Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
 
@@ -194,6 +195,9 @@ impl Evictor {
                 while !shutdown_clone.load(Ordering::Relaxed) {
                     // TODO: Put eviction logic here
                     println!("Evictor running...");
+
+                    let policy = eviction_policy.lock().unwrap();
+                    policy.get_evict
 
                     device.evict().expect("Eviction failed");
 
@@ -205,11 +209,12 @@ impl Evictor {
             }
         });
 
-        Self {
+        Ok(Self {
             shutdown,
             handle: Some(handle),
-            device
-        }
+            device,
+            evict_policy: eviction_policy.clone()
+        })
     }
 
     /// Request the evictor to stop and wait for thread to finish

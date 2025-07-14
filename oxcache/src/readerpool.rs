@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use flume::{Receiver, Sender, unbounded};
 use std::thread::{self, JoinHandle};
+use crate::eviction::EvictionPolicyWrapper;
 use crate::{cache, device};
 use crate::writerpool::WriteResponse;
 
@@ -20,18 +21,25 @@ struct Reader {
     device: Arc<dyn device::Device>,
     id: usize,
     receiver: Receiver<ReadRequest>,
+    eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>
 }
 
 impl Reader {
-    fn new(id: usize, receiver: Receiver<ReadRequest>, device: Arc<dyn device::Device>) -> Self {
-        Self { device, id, receiver }
+    fn new(id: usize, receiver: Receiver<ReadRequest>, device: Arc<dyn device::Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> Self {
+        Self { device, id, receiver, eviction_policy: eviction_policy.clone() }
     }
 
     fn run(self) {
         println!("Reader {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             println!("Reader {} processing: {:?}", self.id, msg);
-            let resp = ReadResponse { data: self.device.read(msg.location) };
+            let result = self.device.read(msg.location.clone());
+            if result.is_ok() {
+                let mtx = Arc::clone(&self.eviction_policy);
+                let mut policy = mtx.lock().unwrap();
+                policy.write_update(msg.location);
+            }
+            let resp = ReadResponse { data: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
                 eprintln!("Failed to send response from writer: {}", snd.err().unwrap());
@@ -50,13 +58,13 @@ pub struct ReaderPool {
 
 impl ReaderPool {
     /// Creates and starts the reader pool with a given number of threads
-    pub fn start(num_readers: usize, device: Arc<dyn device::Device>) -> Self {
+    pub fn start(num_readers: usize, device: Arc<dyn device::Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> Self {
         let (sender, receiver): (Sender<ReadRequest>, Receiver<ReadRequest>) = unbounded();
         let mut handles = Vec::with_capacity(num_readers);
 
         for id in 0..num_readers {
             let rx_clone = receiver.clone();
-            let reader = Reader::new(id, rx_clone, device.clone());
+            let reader = Reader::new(id, rx_clone, device.clone(), eviction_policy);
             let handle = thread::spawn(move || reader.run());
             handles.push(handle);
         }
