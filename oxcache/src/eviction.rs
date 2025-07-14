@@ -18,6 +18,11 @@ pub enum EvictionPolicyWrapper {
     Chunk(ChunkEvictionPolicy),
 }
 
+pub enum EvictTarget {
+    Chunk(Vec<ChunkLocation>),
+    Zone(Vec<usize>)
+}
+
 impl EvictionPolicyWrapper {
     pub fn new(identifier: &str, high_water: usize, low_water: usize, nr_zones: usize, nr_chunks_per_zone: usize) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
@@ -42,6 +47,14 @@ impl EvictionPolicyWrapper {
             EvictionPolicyWrapper::Chunk(c) => c.read_update(chunk),
         }
     }
+
+    pub fn get_evict_targets(&mut self) -> EvictTarget {
+        match self {
+            EvictionPolicyWrapper::Dummy(dummy) => EvictTarget::Zone(dummy.get_evict_targets()),
+            EvictionPolicyWrapper::Promotional(promotional) => EvictTarget::Zone(promotional.get_evict_targets()),
+            EvictionPolicyWrapper::Chunk(c) => EvictTarget::Chunk(c.get_evict_targets())
+        }
+    }
 }
 
 pub trait EvictionPolicy: Send + Sync {
@@ -49,7 +62,7 @@ pub trait EvictionPolicy: Send + Sync {
 
     fn write_update(&mut self, chunk: ChunkLocation);
     fn read_update(&mut self, chunk: ChunkLocation);
-    fn get_evict_targets(&mut self) -> Vec<Self::Target>;
+    fn get_evict_targets(&mut self) -> Self::Target;
 }
 
 pub struct DummyEvictionPolicy {
@@ -68,12 +81,12 @@ impl DummyEvictionPolicy {
 }
 
 impl EvictionPolicy for DummyEvictionPolicy {
-    type Target = usize;
+    type Target = Vec<usize>;
     fn write_update(&mut self, chunk: ChunkLocation) {}
 
     fn read_update(&mut self, chunk: ChunkLocation) {}
 
-    fn get_evict_targets(&mut self) -> Vec<Self::Target> {
+    fn get_evict_targets(&mut self) -> Self::Target {
         unimplemented!();
     }
 }
@@ -98,7 +111,7 @@ impl PromotionalEvictionPolicy {
 impl EvictionPolicy for PromotionalEvictionPolicy {
     /// Promotional LRU
     /// Performs LRU based on full zones
-    type Target = usize;
+    type Target = Vec<usize>;
     
     fn write_update(&mut self, chunk: ChunkLocation) {
         assert!(!self.lru.contains(&chunk.zone));
@@ -117,7 +130,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         }
     }
 
-    fn get_evict_targets(&mut self) -> Vec<Self::Target> {
+    fn get_evict_targets(&mut self) -> Self::Target {
         let high_water_mark =  self.nr_zones-self.high_water;
         if self.lru.len() < high_water_mark {
             return vec![];
@@ -150,7 +163,7 @@ impl ChunkEvictionPolicy {
 }
 
 impl EvictionPolicy for ChunkEvictionPolicy {
-    type Target = ChunkLocation;
+    type Target = Vec<ChunkLocation>;
     fn write_update(&mut self, chunk: ChunkLocation) {
         self.lru.put(chunk, ());
     }
@@ -160,7 +173,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         self.lru.put(chunk, ());
     }
 
-    fn get_evict_targets(&mut self) -> Vec<Self::Target> {
+    fn get_evict_targets(&mut self) -> Self::Target {
         let high_water_mark =  self.nr_zones*self.nr_chunks_per_zone-self.high_water;
         if self.lru.len() < high_water_mark {
             return vec![];
@@ -180,7 +193,6 @@ pub struct Evictor {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     device: Arc<dyn Device>,
-    evict_policy: Arc<Mutex<EvictionPolicyWrapper>>,
 }
 
 impl Evictor {
@@ -188,6 +200,7 @@ impl Evictor {
     pub fn start(device: Arc<dyn Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
+        let eviction_policy = eviction_policy.clone();
 
         let handle = thread::spawn({
             let device = Arc::clone(&device);
@@ -196,10 +209,9 @@ impl Evictor {
                     // TODO: Put eviction logic here
                     println!("Evictor running...");
 
-                    let policy = eviction_policy.lock().unwrap();
-                    policy.get_evict
-
-                    device.evict().expect("Eviction failed");
+                    let mut policy = eviction_policy.lock().unwrap();
+                    let targets = policy.get_evict_targets();
+                    device.evict(targets).expect("Eviction failed");
 
                     // Sleep to simulate periodic work
                     thread::sleep(Duration::from_secs(5));
@@ -213,7 +225,6 @@ impl Evictor {
             shutdown,
             handle: Some(handle),
             device,
-            evict_policy: eviction_policy.clone()
         })
     }
 

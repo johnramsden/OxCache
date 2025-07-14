@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
-use crate::eviction::{EvictionPolicy, EvictionPolicyWrapper};
+use crate::eviction::{EvictionPolicy, EvictionPolicyWrapper, EvictTarget};
 use crate::server::ServerEvictionConfig;
 
 #[derive(Copy, Clone)]
@@ -159,9 +159,7 @@ pub trait Device: Send + Sync {
         read_buffer: &mut [u8],
     ) -> std::io::Result<()>;
 
-    fn evict_chunks(&self, locations: &[ChunkLocation]) -> std::io::Result<()>;
-
-    fn evict_zones(&self, locations: &[usize]) -> std::io::Result<()>;
+    fn evict(&self, locations: EvictTarget) -> std::io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
 
@@ -286,15 +284,16 @@ impl Device for Zoned {
         Ok(data)
     }
 
-    fn evict_chunks(&self, _locations: &[ChunkLocation]) -> std::io::Result<()> {
-        unimplemented!();
-    }
-
-    fn evict_zones(&self, locations: &[usize]) -> std::io::Result<()> {
-        let zone_mtx = Arc::clone(&self.zones);
-        let mut zones = zone_mtx.lock().unwrap();
-        zones.reset_zones(locations);
-        Ok(())
+    fn evict(&self, locations: EvictTarget) -> std::io::Result<()> {
+        match locations {
+            EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
+            EvictTarget::Zone(zones_to_evict) => {
+                let zone_mtx = Arc::clone(&self.zones);
+                let mut zones = zone_mtx.lock().unwrap();
+                zones.reset_zones(&zones_to_evict);
+                Ok(())
+            },
+        }
     }
 
     fn get_num_zones(&self) -> usize {
@@ -304,6 +303,7 @@ impl Device for Zoned {
     fn get_chunks_per_zone(&self) -> usize {
         self.config.chunks_per_zone as usize
     }
+
 }
 
 impl BlockInterface {
@@ -371,14 +371,7 @@ impl Device for BlockInterface {
             self.nvme_config.logical_block_size,
             mut_data.as_mut_slice(),
         ) {
-            Ok(()) => {
-                let mtx = Arc::clone(&self.evict_policy);
-                let mut policy = mtx.lock().unwrap();
-                policy.write_update(ChunkLocation::new(
-                    chunk_location.zone, chunk_location.index, // addr should be in chunks
-                ));
-                Ok(chunk_location)
-            },
+            Ok(()) => Ok(chunk_location),
             Err(err) => Err(err.try_into().unwrap()),
         }
     }
@@ -410,15 +403,16 @@ impl Device for BlockInterface {
         Ok(buffer)
     }
 
-    fn evict_chunks(&self, _locations: &[ChunkLocation]) -> std::io::Result<()> {
-        unimplemented!();
-    }
-    
-    fn evict_zones(&self, locations: &[usize]) -> std::io::Result<()> {
-        let state_mtx = Arc::clone(&self.state);
-        let mut state = state_mtx.lock().unwrap();
-        state.active_zones.reset_zones(locations);
-        Ok(())
+    fn evict(&self, locations: EvictTarget) -> std::io::Result<()> {
+        match locations {
+            EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
+            EvictTarget::Zone(locations) => {
+                let state_mtx = Arc::clone(&self.state);
+                let mut state = state_mtx.lock().unwrap();
+                state.active_zones.reset_zones(&locations);
+                Ok(())
+            },
+        }
     }
 
     fn get_num_zones(&self) -> usize {
