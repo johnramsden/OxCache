@@ -1,3 +1,6 @@
 [submodule "libnvme"]
 	path = libnvme-sys/external/libnvme
 	url = https://github.com/linux-nvme/libnvme.git
+[submodule "vendor/workloadgen"]
+	path = vendor/workloadgen
+	url = git@github.com:johnramsden/OxCache-YCSB.git
