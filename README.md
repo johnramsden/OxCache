@@ -13,7 +13,7 @@ WARNING, DESTRUCTIVE TO DISK USED, WIPES DATA
 See options via:
 
 ```
-cargo run --package oxcache --bin oxcache -- --help
+oxcache --help
 ```
 
 Set config via CLI or toml file. See [example.server.toml](example.server.toml)
@@ -21,7 +21,8 @@ Set config via CLI or toml file. See [example.server.toml](example.server.toml)
 EG:
 
 ```
-cargo run --package oxcache --bin oxcache -- -- --config ../example.server.toml
+cargo build --package oxcache --bin oxcache
+./target/debug/oxcache --config ./cortes.server.zns.toml
 ```
 
 ## Running Clients
@@ -35,14 +36,13 @@ The sample clients currently exist:
 To run:
 
 ```
-cargo run --package oxcache --bin CLIENT -- ARGS
+CLIENT -- ARGS
 ```
 
 EG:
 
 ```
-cargo run --package oxcache \
-    --bin simpleevaluationclient -- \
-    --socket /tmp/oxcache.sock \
-    --num-clients 32
+cargo build --package oxcache --bin simpleevaluationclient
+./target/debug/simpleevaluationclient --help
+./target/debug/simpleevaluationclient --socket /tmp/oxcache.sock --num-clients 32
 ```
