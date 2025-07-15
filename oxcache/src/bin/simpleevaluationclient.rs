@@ -28,43 +28,33 @@ struct Cli {
 
     #[arg(long)]
     num_clients: usize,
-
-    #[arg(long)]
-    data_file: String,
 }
-
-use std::fs::File;
-use std::io::{self, Read, BufReader};
-use byteorder::{LittleEndian, ReadBytesExt};
-
-fn read_queries(path: &str) -> io::Result<Vec<i32>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut vec = Vec::new();
-
-    while let Ok(value) = reader.read_i32::<LittleEndian>() {
-        vec.push(value);
-    }
-
-    Ok(vec)
-}
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Cli::parse();
-    let mut query_inputs = read_queries(&args.data_file)?;
-    let nr_queries = query_inputs.len();
+    let nr_queries = 1000000;
+    let nr_uuids = 1000;
     let mut queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
-    
+    let args = Cli::parse();
     let counter = Arc::new(AtomicUsize::new(0));
     let step = nr_queries / 10; // 10%
+    let mut rng = rng(); // uses fast, thread-local RNG
+
+    let mut uuids = Vec::with_capacity(nr_uuids);
+    for _ in 0..nr_uuids {
+        uuids.push(Uuid::new_v4());
+    }
 
     {
         let mut queries = queries.lock().unwrap();
         for _ in 0..nr_queries {
+            let uuid = uuids
+                .choose(&mut rng)
+                .expect("uuids vec should not be empty")
+                .clone();
+
             queries.push(GetRequest {
-                key: query_inputs.pop().unwrap().to_string(),
+                key: uuid.to_string(),
                 size: 8192,
                 offset: 0,
             });
@@ -75,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("num_clients={} must be at least 1", args.num_clients).into());
     }
 
-    let mut handles: Vec<JoinHandle<io::Result<()>>> = Vec::new();
+    let mut handles: Vec<JoinHandle<tokio::io::Result<()>>> = Vec::new();
 
     let start = Instant::now();
 
