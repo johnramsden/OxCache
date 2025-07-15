@@ -1,0 +1,15 @@
+[server]
+socket = "/tmp/oxcache.sock"
+disk = "/dev/nvme1n1"
+writer_threads = 14
+reader_threads = 14
+chunk_size = 8192
+
+[remote]
+remote_type = "emulated" # emulated | S3
+bucket = "S3_BUCKET"
+
+[eviction]
+eviction_policy = "promotional"
+high_water_evict = 1 # Number remaining from end, evicts if reaches here
+low_water_evict = 3  # Evict until below mark
