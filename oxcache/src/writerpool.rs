@@ -33,7 +33,7 @@ impl Writer {
     fn run(self) {
         println!("Writer {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
-            println!("Writer {} processing: {:?}", self.id, msg);
+            // println!("Writer {} processing: {:?}", self.id, msg);
             let resp = WriteResponse { location: self.device.append(msg.data) };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
