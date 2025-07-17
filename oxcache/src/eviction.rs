@@ -214,7 +214,9 @@ impl Evictor {
                     drop(policy);
 
                     match targets {
-                        EvictTarget::Chunk(ref _chunk_locations) => todo!(),
+                        EvictTarget::Chunk(ref _chunk_locations) => {
+                            
+                        },
                         EvictTarget::Zone(ref zones) => {
                             let handle = Handle::current();
                             handle.block_on((async || {

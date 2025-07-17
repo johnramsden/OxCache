@@ -128,7 +128,9 @@ impl Cache {
                 return Ok(())
             }
         }
-    }   
+    }
+ 
+    ///
 
     /// Remove zones from the map
     pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
@@ -148,6 +150,12 @@ impl Cache {
         }
 
         Ok(())
+    }
+
+    /// Updates entries 
+    pub async fn update_entries<R, W, RFut, WFut>(&self, to_relocate: &[ChunkLocation], writer: W) {
+        // TODO: to_relocate is a list of ChunkLocations that the caller wants to update
+        // We pass in each chunk location and the writer should return back with the 
     }
 
     /// Modify entries
