@@ -21,6 +21,10 @@ impl ChunkLocation {
     pub fn new(zone: usize, index: u64) -> Self {
         Self { zone, index }
     }
+
+    pub fn as_index(&self) -> [usize; 2] {
+        [self.zone, self.index as usize]
+    }
 }
 
 impl Chunk {

@@ -82,7 +82,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.device.get_chunks_per_zone()
         )?));
 
-        let evictor = Evictor::start(Arc::clone(&self.device), &eviction_policy)?;
+        let evictor = Evictor::start(Arc::clone(&self.device), &eviction_policy, Arc::clone(&self.cache))?;
         let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&self.device), &eviction_policy));
         let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&self.device), &eviction_policy));
 
@@ -121,9 +121,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let readerpool = Arc::clone(&readerpool);
                                 let cache = Arc::clone(&self.cache);
                                 async move {
-                                    
-                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache).await {
-                                    eprintln!("Connection error: {}", e);
+                                    if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache).await {
+                                        eprintln!("Connection error: {}", e);
                                 }
                             }});
                         },

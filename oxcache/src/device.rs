@@ -3,7 +3,7 @@ use nvme::ops::{zns_append, zns_read};
 use nvme::types::{NVMeConfig, ZNSConfig};
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::{Error};
+use std::io::{self, Error};
 use std::ops::Deref;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
@@ -106,6 +106,12 @@ impl ZoneList {
     }
 }
 
+/// Describes chunks that need to be moved
+pub struct MovedChunk {
+    from: ChunkLocation,
+    to: ChunkLocation
+}
+
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
@@ -144,12 +150,12 @@ pub struct BlockInterface {
 }
 
 pub trait Device: Send + Sync {
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
+    fn append(&self, data: Vec<u8>) -> io::Result<ChunkLocation>;
 
     fn new(
         device: &str,
         chunk_size: usize,
-    ) -> std::io::Result<Self>
+    ) -> io::Result<Self>
     where
         Self: Sized; // Args
 
@@ -157,11 +163,11 @@ pub trait Device: Send + Sync {
         &self,
         location: ChunkLocation,
         read_buffer: &mut [u8],
-    ) -> std::io::Result<()>;
+    ) -> io::Result<()>;
 
-    fn evict(&self, locations: EvictTarget) -> std::io::Result<()>;
+    fn evict(&self, locations: EvictTarget) -> io::Result<Vec<MovedChunk>>;
 
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
+    fn read(&self, location: ChunkLocation) -> io::Result<Vec<u8>>;
 
     fn get_num_zones(&self) -> usize;
 
@@ -180,7 +186,7 @@ fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
 pub fn get_device(
     device: &str,
     chunk_size: usize,
-) -> std::io::Result<Arc<dyn Device>> {
+) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
         Ok(Arc::new(device::Zoned::new(
@@ -196,13 +202,13 @@ pub fn get_device(
 }
 
 impl Zoned {
-    fn get_free_zone(&self) -> std::io::Result<usize> {
+    fn get_free_zone(&self) -> io::Result<usize> {
         let mtx = Arc::clone(&self.zones);
         let mut zone_list = mtx.lock().unwrap();
         match zone_list.remove() {
             Ok(zone_idx) => Ok(zone_idx),
-            Err(()) => Err(std::io::Error::new(
-                std::io::ErrorKind::StorageFull,
+            Err(()) => Err(io::Error::new(
+                io::ErrorKind::StorageFull,
                 "Cache is full",
             )),
         }
@@ -214,7 +220,7 @@ impl Device for Zoned {
     fn new(
         device: &str,
         chunk_size: usize,
-    ) -> std::io::Result<Self> {
+    ) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
@@ -237,7 +243,7 @@ impl Device for Zoned {
         }
     }
 
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+    fn append(&self, data: Vec<u8>) -> io::Result<ChunkLocation> {
         let zone_index = self.get_free_zone()?;
         // Note: this performs a copy every time because we need to
         // pass in a mutable vector to libnvme
@@ -262,7 +268,7 @@ impl Device for Zoned {
         &self,
         location: ChunkLocation,
         read_buffer: &mut [u8],
-    ) -> std::io::Result<()>
+    ) -> io::Result<()>
     where
         Self: Sized,
     {
@@ -278,20 +284,20 @@ impl Device for Zoned {
         }
     }
 
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+    fn read(&self, location: ChunkLocation) -> io::Result<Vec<u8>> {
         let mut data = vec![0; self.config.chunk_size];
         self.read_into_buffer(location, &mut data)?;
         Ok(data)
     }
 
-    fn evict(&self, locations: EvictTarget) -> std::io::Result<()> {
+    fn evict(&self, locations: EvictTarget) -> io::Result<Vec<MovedChunk>> {
         match locations {
             EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
             EvictTarget::Zone(zones_to_evict) => {
                 let zone_mtx = Arc::clone(&self.zones);
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict);
-                Ok(())
+                Ok(Vec::new())
             },
         }
     }
@@ -306,18 +312,12 @@ impl Device for Zoned {
 
 }
 
-impl BlockInterface {
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
-        Ok(Vec::new())
-    }
-}
-
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
     fn new(
         device: &str,
         chunk_size: usize,
-    ) -> std::io::Result<Self> {
+    ) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
@@ -341,14 +341,14 @@ impl Device for BlockInterface {
         })
     }
 
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+    fn append(&self, data: Vec<u8>) -> io::Result<ChunkLocation> {
         let mtx = self.state.clone();
         let mut state = mtx.lock().unwrap();
         let chunk_location = match state.active_zones.remove_chunk_location() {
             Ok(location) => location,
             Err(()) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::StorageFull,
+                return Err(io::Error::new(
+                    io::ErrorKind::StorageFull,
                     "Cache is full",
                 ));
             }
@@ -380,7 +380,7 @@ impl Device for BlockInterface {
         &self,
         location: ChunkLocation,
         read_buffer: &mut [u8],
-    ) -> std::io::Result<()>
+    ) -> io::Result<()>
     where
         Self: Sized,
     {
@@ -397,20 +397,20 @@ impl Device for BlockInterface {
         }
     }
 
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
+    fn read(&self, location: ChunkLocation) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0; self.chunk_size];
         self.read_into_buffer(location, &mut buffer)?;
         Ok(buffer)
     }
 
-    fn evict(&self, locations: EvictTarget) -> std::io::Result<()> {
+    fn evict(&self, locations: EvictTarget) -> io::Result<Vec<MovedChunk>> {
         match locations {
             EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
             EvictTarget::Zone(locations) => {
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations);
-                Ok(())
+                Ok(Vec::new())
             },
         }
     }

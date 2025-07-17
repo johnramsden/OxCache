@@ -5,11 +5,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use core::fmt::Debug;
 use std::collections::{HashMap, VecDeque};
-use crate::{cache::bucket::ChunkLocation, server::ServerEvictionConfig};
+use crate::{cache::{bucket::ChunkLocation, Cache}, server::ServerEvictionConfig};
 use crate::device;
 use crate::device::Device;
 
 use lru::LruCache;
+use tokio::{runtime::Handle, task::spawn_blocking};
 use std::num::NonZeroUsize;
 
 pub enum EvictionPolicyWrapper {
@@ -197,7 +198,7 @@ pub struct Evictor {
 
 impl Evictor {
     /// Start the evictor background thread
-    pub fn start(device: Arc<dyn Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<Self> {
+    pub fn start(device: Arc<dyn Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>, cache: Arc<Cache>) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
         let eviction_policy = eviction_policy.clone();
@@ -206,11 +207,24 @@ impl Evictor {
             let device = Arc::clone(&device);
             move || {
                 while !shutdown_clone.load(Ordering::Relaxed) {
-                    // TODO: Put eviction logic here
-                    println!("Evictor running...");
 
+                    println!("Evictor running...");
                     let mut policy = eviction_policy.lock().unwrap();
                     let targets = policy.get_evict_targets();
+                    drop(policy);
+
+                    match targets {
+                        EvictTarget::Chunk(ref _chunk_locations) => todo!(),
+                        EvictTarget::Zone(ref zones) => {
+                            let handle = Handle::current();
+                            handle.block_on((async || {
+                                match cache.remove_zones(zones).await {
+                                    Ok(()) => {},
+                                    Err(err) => panic!("Shouldn't get an error: {}", err),
+                                }
+                            })());
+                        },
+                    }
                     device.evict(targets).expect("Eviction failed");
 
                     // Sleep to simulate periodic work

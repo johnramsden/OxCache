@@ -1,27 +1,31 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::sync::Arc;
 use futures::lock::Mutex;
+use ndarray::{s, Array2, ArrayBase};
 use tokio::sync::{Notify, RwLock};
 use crate::cache::bucket::{ChunkLocation, Chunk, ChunkState};
-use crate::readerpool::ReaderPool;
-use crate::writerpool::WriterPool;
-use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 
 pub mod bucket;
 
+// An entry 
+type EntryType = Arc<RwLock<ChunkState>>;
+fn new_entry() -> EntryType {
+    Arc::new(RwLock::new(ChunkState::Waiting(Arc::new(Notify::new()))))
+}
+
 #[derive(Debug)]
 pub struct Cache {
-    buckets: RwLock<HashMap<Chunk, Arc<RwLock<ChunkState>>>>,
-    zone_to_entry: Mutex<Vec<Vec<Chunk>>>
+    buckets: RwLock<HashMap<Chunk, EntryType>>,
+    zone_to_entry: Mutex<Array2<Option<Chunk>>>
 }
 
 impl Cache {
     pub fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
         Self {
             buckets: RwLock::new(HashMap::new()),
-            zone_to_entry: Mutex::new(vec![Vec::with_capacity(chunks_per_zone); num_zones])
+            // zone_to_entry: Mutex::new(vec![vec![; chunks_per_zone]; num_zones])
+            zone_to_entry: Mutex::new(ArrayBase::from_elem((num_zones, chunks_per_zone), Option::None))
         }
     }
     
@@ -92,12 +96,11 @@ impl Cache {
                 };
             } else {
                 // Otherwise we need to write, the entire map is still locked
-                let locked_chunk_location: Arc<RwLock<ChunkState>> = Arc::new(RwLock::new(ChunkState::Waiting(Arc::new(Notify::new()))));
+                let locked_chunk_location = new_entry();
                 let mut chunk_loc_guard = locked_chunk_location.write().await;
                 // We now have something in the waiting state
                 // It is locked and should not be unlocked until it's out of the waiting state
                 bucket_guard.insert(key.clone(), Arc::clone(&locked_chunk_location)); // Place locked waiting state
-
                 drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
                 let write_result = writer().await;
                 match write_result {
@@ -117,10 +120,9 @@ impl Cache {
                         return Err(e);
                     },
                     Ok(location) => {
-                        let zone = location.zone;
-                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location));
+                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
                         let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
-                        reverse_mapping_guard[zone].push(key);
+                        reverse_mapping_guard[location.as_index()] = Some(key);
                     }
                 }
                 return Ok(())
@@ -128,19 +130,81 @@ impl Cache {
         }
     }   
 
-    pub async fn remove_zone(&self, zone_index: usize) -> tokio::io::Result<()> {
+    /// Remove zones from the map
+    pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
         let mut map_guard = self.buckets.write().await;
         let mut guard = self.zone_to_entry.lock().await;
+        for zone_index in zone_indices {
+            guard.slice(s![*zone_index, ..])
+                .iter()
+                .filter_map(|chunk| chunk.clone()) // Remove None instances
+                .for_each(|chunk| {
+                    map_guard.remove(&chunk);
+                });
 
-        for chunk in &guard[zone_index] {
-            map_guard.remove(chunk);
+            guard.slice_mut(s![*zone_index, ..]).map_inplace(|v| {
+                *v = None;
+            });
         }
-
-        guard[zone_index].clear();
 
         Ok(())
     }
 
+    /// Modify entries
+    /// Returns an error if the entry doesn't exist
+    pub async fn modify_entry<R, W, RFut, WFut>(
+        &self,
+        key: Chunk,
+        writer: W,
+    ) -> tokio::io::Result<()>
+    where
+        W: FnOnce() -> WFut + Send + 'static,
+        WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static {
+            let mut bucket_guard = self.buckets.write().await;
+            let state = bucket_guard.get(&key).ok_or(std::io::Error::new(ErrorKind::NotFound, "Couldn't find entry"))?;
+
+            // We now have the entry
+            let bucket_state_guard = Arc::clone(state);
+            let bucket_state_guard = bucket_state_guard.write().await;
+
+            match &*bucket_state_guard {
+                ChunkState::Waiting(_) => {
+                    drop(bucket_guard);
+                    Err(std::io::Error::new(ErrorKind::Other, "Another thread is already modifying the entry"))
+                }
+                ChunkState::Ready(_) => {
+                    let locked_chunk_location = new_entry();
+                    let mut chunk_loc_guard = locked_chunk_location.write().await;
+                    bucket_guard.insert(key.clone(), Arc::clone(&locked_chunk_location));     
+                    drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
+
+                    let write_result = writer().await;
+                    match write_result {
+                        Err(e) => {
+                            let mut bucket_guard = self.buckets.write().await;
+                            bucket_guard.remove(&key);
+                            match &*chunk_loc_guard {
+                                ChunkState::Waiting(notify) => {
+                                    notify.notify_waiters();
+                                },
+                                _ => {
+                                    // This should never happen here
+                                    panic!("Chunk was not in waiting state");
+                                }
+                            }
+                            // This is the condition where you could be left with something in the waiting state
+                            Err(e)
+                        },
+                        Ok(location) => {
+                            *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
+                            let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+                            reverse_mapping_guard[location.as_index()] = Some(key);
+                            Ok(())
+                        }
+                    }
+                }
+            }
+        }
 }
 
 #[cfg(test)]
@@ -333,7 +397,7 @@ mod mod_tests {
         ).await);
 
         // Remove
-        check_err(cache.remove_zone(0).await);
+        check_err(cache.remove_zones(&[0]).await);
 
         // Check insertion is removed
         check_err(cache.get_or_insert_with(entry.clone(),
@@ -413,7 +477,7 @@ mod mod_tests {
         ).await);
 
         // Remove
-        check_err(cache.remove_zone(0).await);
+        check_err(cache.remove_zones(&[0]).await);
 
         // Check insertion is removed
         check_err(cache.get_or_insert_with(entry.clone(),
