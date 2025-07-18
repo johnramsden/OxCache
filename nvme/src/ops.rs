@@ -74,7 +74,7 @@ pub fn zns_append(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
     zone_index: u64,
-    data: &mut [u8],
+    data: &[u8],
 ) -> Result<u64, NVMeError> {
     let mut result: u64 = 0;
 
@@ -108,7 +108,7 @@ pub fn zns_append(
     let mut args: nvme_zns_append_args = nvme_zns_append_args {
         zslba: config.get_starting_addr(zone_index),
         result: &mut result,
-        data: data.as_mut_ptr() as *mut c_void,
+        data: data.as_ptr() as *mut c_void,
         metadata: nullptr, // type *mut c_void
         args_size: size_of::<nvme_zns_append_args>() as i32,
         fd: nvme_config.fd,
@@ -137,7 +137,7 @@ pub fn zns_write(
     config: &ZNSConfig,
     zone_index: u64,
     offset: u64,
-    data: &mut [u8],
+    data: &[u8],
 ) -> Result<(), NVMeError> {
     if data.len().rem(nvme_config.logical_block_size as usize) != 0 {
         return Err(NVMeError::UnalignedDataBuffer {
@@ -153,7 +153,7 @@ pub fn zns_write(
         slba: config.get_starting_addr(zone_index) + offset,
         storage_tag: 0,                    // End to end protection
         result: null::<u32>() as *mut u32, // submit_io in nvme-cli sets this as null
-        data: data.as_mut_ptr() as *mut c_void,
+        data: data.as_ptr() as *mut c_void,
         metadata: nullptr,
         args_size: size_of::<nvme_io_args>() as i32,
         fd: nvme_config.fd,
@@ -190,7 +190,7 @@ pub fn write(
     timeout: u32,
     nsid: u32,
     block_size: u64,
-    data: &mut [u8],
+    data: &[u8],
 ) -> Result<(), NVMeError> {
     if data.len().rem(block_size as usize) != 0 {
         return Err(NVMeError::UnalignedDataBuffer {
@@ -206,7 +206,7 @@ pub fn write(
         slba,
         storage_tag: 0,                    // End to end protection
         result: null::<u32>() as *mut u32, // submit_io in nvme-cli sets this as null
-        data: data.as_mut_ptr() as *mut c_void,
+        data: data.as_ptr() as *mut c_void,
         metadata: nullptr,
         args_size: size_of::<nvme_io_args>() as i32,
         fd,
