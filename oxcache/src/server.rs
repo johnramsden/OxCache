@@ -260,7 +260,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     Ok(())
                                 }
                             },
-                            {                                
+                            {
                                 let chunk = chunk.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);

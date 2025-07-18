@@ -8,9 +8,10 @@ use std::ops::Deref;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
+use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
-use crate::eviction::{EvictionPolicy, EvictionPolicyWrapper, EvictTarget};
+use crate::eviction::{EvictTarget, EvictionPolicy, EvictionPolicyWrapper};
 use crate::server::ServerEvictionConfig;
 
 #[derive(Copy, Clone)]
@@ -109,7 +110,7 @@ impl ZoneList {
 /// Describes chunks that need to be moved
 pub struct MovedChunk {
     from: ChunkLocation,
-    to: ChunkLocation
+    to: ChunkLocation,
 }
 
 pub struct Zoned {
@@ -152,20 +153,13 @@ pub struct BlockInterface {
 pub trait Device: Send + Sync {
     fn append(&self, data: Vec<u8>) -> io::Result<ChunkLocation>;
 
-    fn new(
-        device: &str,
-        chunk_size: usize,
-    ) -> io::Result<Self>
+    fn new(device: &str, chunk_size: usize) -> io::Result<Self>
     where
         Self: Sized; // Args
 
-    fn read_into_buffer(
-        &self,
-        location: ChunkLocation,
-        read_buffer: &mut [u8],
-    ) -> io::Result<()>;
+    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>;
 
-    fn evict(&self, locations: EvictTarget) -> io::Result<Vec<MovedChunk>>;
+    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<Vec<MovedChunk>>;
 
     fn read(&self, location: ChunkLocation) -> io::Result<Vec<u8>>;
 
@@ -179,25 +173,15 @@ fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
         buffer_size + (block_size - buffer_size.rem_euclid(block_size))
     } else {
         buffer_size
-    }
+    };
 }
 
-
-pub fn get_device(
-    device: &str,
-    chunk_size: usize,
-) -> io::Result<Arc<dyn Device>> {
+pub fn get_device(device: &str, chunk_size: usize) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
-        Ok(Arc::new(device::Zoned::new(
-            device,
-            chunk_size
-        )?))
+        Ok(Arc::new(device::Zoned::new(device, chunk_size)?))
     } else {
-        Ok(Arc::new(device::BlockInterface::new(
-            device,
-            chunk_size
-        )?))
+        Ok(Arc::new(device::BlockInterface::new(device, chunk_size)?))
     }
 }
 
@@ -207,20 +191,14 @@ impl Zoned {
         let mut zone_list = mtx.lock().unwrap();
         match zone_list.remove() {
             Ok(zone_idx) => Ok(zone_idx),
-            Err(()) => Err(io::Error::new(
-                io::ErrorKind::StorageFull,
-                "Cache is full",
-            )),
+            Err(()) => Err(io::Error::new(io::ErrorKind::StorageFull, "Cache is full")),
         }
     }
 }
 
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
-    fn new(
-        device: &str,
-        chunk_size: usize,
-    ) -> io::Result<Self> {
+    fn new(device: &str, chunk_size: usize) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
@@ -247,7 +225,11 @@ impl Device for Zoned {
         let zone_index = self.get_free_zone()?;
         // Note: this performs a copy every time because we need to
         // pass in a mutable vector to libnvme
-        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
+        let mut mut_data =
+            vec![
+                0u8;
+                get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)
+            ];
         mut_data[..data.len()].copy_from_slice(&data[..]);
 
         match zns_append(
@@ -264,11 +246,7 @@ impl Device for Zoned {
         }
     }
 
-    fn read_into_buffer(
-        &self,
-        location: ChunkLocation,
-        read_buffer: &mut [u8],
-    ) -> io::Result<()>
+    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>
     where
         Self: Sized,
     {
@@ -290,15 +268,18 @@ impl Device for Zoned {
         Ok(data)
     }
 
-    fn evict(&self, locations: EvictTarget) -> io::Result<Vec<MovedChunk>> {
+    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<Vec<MovedChunk>> {
         match locations {
             EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
             EvictTarget::Zone(zones_to_evict) => {
+                // Clear out the cache first
+
                 let zone_mtx = Arc::clone(&self.zones);
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict);
+
                 Ok(Vec::new())
-            },
+            }
         }
     }
 
@@ -309,15 +290,11 @@ impl Device for Zoned {
     fn get_chunks_per_zone(&self) -> usize {
         self.config.chunks_per_zone as usize
     }
-
 }
 
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
-    fn new(
-        device: &str,
-        chunk_size: usize,
-    ) -> io::Result<Self> {
+    fn new(device: &str, chunk_size: usize) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
@@ -348,9 +325,7 @@ impl Device for BlockInterface {
         let chunk_location = match state.active_zones.remove_chunk_location() {
             Ok(location) => location,
             Err(()) => {
-                eprintln!(
-                    "[append] Failed to allocate chunk: no available space in active zones"
-                );
+                eprintln!("[append] Failed to allocate chunk: no available space in active zones");
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::StorageFull,
                     "Cache is full",
@@ -359,7 +334,8 @@ impl Device for BlockInterface {
         };
         drop(state);
 
-        let aligned_size = get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize);
+        let aligned_size =
+            get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize);
         let mut mut_data = vec![0u8; aligned_size];
         mut_data[..data.len()].copy_from_slice(&data[..]);
 
@@ -369,7 +345,7 @@ impl Device for BlockInterface {
             (self.chunks_per_zone * self.chunk_size) as u64,
             self.chunk_size as u64,
         );
-        
+
         // println!("[append] writing chunk to {} bytes at addr {}", chunk_location.zone, write_addr);
 
         match nvme::ops::write(
@@ -385,12 +361,7 @@ impl Device for BlockInterface {
         }
     }
 
-
-    fn read_into_buffer(
-        &self,
-        location: ChunkLocation,
-        read_buffer: &mut [u8],
-    ) -> io::Result<()>
+    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>
     where
         Self: Sized,
     {
@@ -413,7 +384,7 @@ impl Device for BlockInterface {
         Ok(buffer)
     }
 
-    fn evict(&self, locations: EvictTarget) -> io::Result<Vec<MovedChunk>> {
+    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<Vec<MovedChunk>> {
         match locations {
             EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
             EvictTarget::Zone(locations) => {
@@ -421,7 +392,7 @@ impl Device for BlockInterface {
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations);
                 Ok(Vec::new())
-            },
+            }
         }
     }
 
