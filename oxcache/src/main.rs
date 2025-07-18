@@ -1,11 +1,11 @@
+use clap::Parser;
 use oxcache;
+use oxcache::remote;
+use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
+use serde::Deserialize;
 use std::fs;
 use std::process::exit;
 use std::sync::Arc;
-use clap::Parser;
-use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
-use serde::Deserialize;
-use oxcache::remote;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -25,22 +25,22 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub reader_threads: Option<usize>,
-    
+
     #[arg(long)]
     pub chunk_size: Option<usize>,
 
     #[arg(long)]
     pub remote_type: Option<String>,
-    
+
     #[arg(long)]
     pub remote_bucket: Option<String>,
 
     #[arg(long)]
     pub eviction_policy: Option<String>,
-    
+
     #[arg(long)]
     pub high_water_evict: Option<usize>,
-    
+
     #[arg(long)]
     pub low_water_evict: Option<usize>,
 }
@@ -51,7 +51,7 @@ pub struct ParsedServerConfig {
     pub disk: Option<String>,
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
-    pub chunk_size: Option<usize>
+    pub chunk_size: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,7 +73,6 @@ pub struct AppConfig {
     pub remote: ParsedRemoteConfig,
     pub eviction: ParsedEvictionConfig,
 }
-
 
 fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let config = if let Some(path) = &cli.config {
@@ -125,15 +124,15 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     let remote_type = remote_type
         .ok_or("Missing required `remote_type` (in CLI or file)")?
         .to_lowercase();
-    
+
     if remote_type != "emulated" && remote_type != "s3" {
         return Err("remote_type must be either `emulated` or `S3`".into());
     }
-    
+
     if remote_type != "emulated" && remote_bucket.is_none() {
         return Err("remote_bucket must be set if remote_type is not `emulated`".into());
     }
-    
+
     let eviction_policy = cli
         .eviction_policy
         .clone()
@@ -150,17 +149,15 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .clone()
         .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
         .ok_or("Missing low_water_evict")?;
-    
+
     if low_water_evict < high_water_evict {
         return Err("low_water_evict must be greater than high_water_evict".into());
     }
-    
-        
+
     let chunk_size = cli
         .chunk_size
         .or_else(|| config.as_ref()?.server.chunk_size);
-    let chunk_size = chunk_size
-        .ok_or("Missing chunk size")?;
+    let chunk_size = chunk_size.ok_or("Missing chunk size")?;
 
     // TODO: Add secrets from env vars
 
@@ -177,7 +174,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
             eviction_type: eviction_policy,
             high_water_evict,
             low_water_evict,
-        },        
+        },
         chunk_size,
     })
 }
@@ -193,17 +190,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Error: {}", err);
         exit(1);
     });
-    
+
+    let chunk_size = config.chunk_size;
+
     match remote {
         remote::RemoteBackendType::Emulated => {
-            Server::new(config, Arc::new(remote::EmulatedBackend::new()))?.run().await?;
-        },
+            Server::new(config, Arc::new(remote::EmulatedBackend::new(chunk_size)))?
+                .run()
+                .await?;
+        }
         remote::RemoteBackendType::S3 => {
             let bucket = config.remote.bucket.clone().unwrap();
-            Server::new(config, Arc::new(remote::S3Backend::new(bucket)))?.run().await?;
+            Server::new(config, Arc::new(remote::S3Backend::new(bucket, chunk_size)))?
+                .run()
+                .await?;
         }
     }
 
-    
     Ok(())
 }

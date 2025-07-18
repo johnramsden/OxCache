@@ -344,27 +344,36 @@ impl Device for BlockInterface {
     fn append(&self, data: Vec<u8>) -> io::Result<ChunkLocation> {
         let mtx = self.state.clone();
         let mut state = mtx.lock().unwrap();
+
         let chunk_location = match state.active_zones.remove_chunk_location() {
             Ok(location) => location,
             Err(()) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::StorageFull,
+                eprintln!(
+                    "[append] Failed to allocate chunk: no available space in active zones"
+                );
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
                     "Cache is full",
                 ));
             }
         };
         drop(state);
 
-        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
+        let aligned_size = get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize);
+        let mut mut_data = vec![0u8; aligned_size];
         mut_data[..data.len()].copy_from_slice(&data[..]);
 
+        let write_addr = get_address_at(
+            chunk_location.zone as u64,
+            chunk_location.index,
+            (self.chunks_per_zone * self.chunk_size) as u64,
+            self.chunk_size as u64,
+        );
+        
+        // println!("[append] writing chunk to {} bytes at addr {}", chunk_location.zone, write_addr);
+
         match nvme::ops::write(
-            get_address_at(
-                chunk_location.zone as u64,
-                chunk_location.index,
-                (self.chunks_per_zone * self.chunk_size) as u64,
-                self.chunk_size as u64,
-            ),
+            write_addr,
             self.nvme_config.fd,
             0,
             self.nvme_config.nsid,
@@ -375,6 +384,7 @@ impl Device for BlockInterface {
             Err(err) => Err(err.try_into().unwrap()),
         }
     }
+
 
     fn read_into_buffer(
         &self,

@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
-use flume::{Receiver, Sender, unbounded};
-use std::thread::{self, JoinHandle};
 use crate::eviction::EvictionPolicyWrapper;
-use crate::{cache, device};
 use crate::writerpool::WriteResponse;
+use crate::{cache, device};
+use flume::{Receiver, Sender, unbounded};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -21,12 +21,22 @@ struct Reader {
     device: Arc<dyn device::Device>,
     id: usize,
     receiver: Receiver<ReadRequest>,
-    eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>
+    eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
 }
 
 impl Reader {
-    fn new(id: usize, receiver: Receiver<ReadRequest>, device: Arc<dyn device::Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> Self {
-        Self { device, id, receiver, eviction_policy: eviction_policy.clone() }
+    fn new(
+        id: usize,
+        receiver: Receiver<ReadRequest>,
+        device: Arc<dyn device::Device>,
+        eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>,
+    ) -> Self {
+        Self {
+            device,
+            id,
+            receiver,
+            eviction_policy: eviction_policy.clone(),
+        }
     }
 
     fn run(self) {
@@ -42,7 +52,10 @@ impl Reader {
             let resp = ReadResponse { data: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
-                eprintln!("Failed to send response from writer: {}", snd.err().unwrap());
+                eprintln!(
+                    "Failed to send response from writer: {}",
+                    snd.err().unwrap()
+                );
             }
         }
         println!("Reader {} exiting", self.id);
@@ -58,7 +71,11 @@ pub struct ReaderPool {
 
 impl ReaderPool {
     /// Creates and starts the reader pool with a given number of threads
-    pub fn start(num_readers: usize, device: Arc<dyn device::Device>, eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>) -> Self {
+    pub fn start(
+        num_readers: usize,
+        device: Arc<dyn device::Device>,
+        eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>,
+    ) -> Self {
         let (sender, receiver): (Sender<ReadRequest>, Receiver<ReadRequest>) = unbounded();
         let mut handles = Vec::with_capacity(num_readers);
 
@@ -75,7 +92,10 @@ impl ReaderPool {
     /// Send a message to the reader pool
     pub async fn send(&self, message: ReadRequest) -> std::io::Result<()> {
         self.sender.send_async(message).await.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("WriterPool::send_async failed: {}", e))
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("WriterPool::send_async failed: {}", e),
+            )
         })
     }
 

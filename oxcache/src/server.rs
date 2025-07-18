@@ -5,7 +5,7 @@ use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
 // use tokio::spawn;
-use tokio::io::{split, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, split};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -14,12 +14,12 @@ use crate::{device, remote, request};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::cache::bucket::Chunk;
 use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::cache::bucket::Chunk;
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {
@@ -54,13 +54,18 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
-        let device = device::get_device(
-            config.disk.as_str(),
-            config.chunk_size
-        )?;
-        let cache = Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone()));
+        let device = device::get_device(config.disk.as_str(), config.chunk_size)?;
+        let cache = Arc::new(Cache::new(
+            device.get_num_zones(),
+            device.get_chunks_per_zone(),
+        ));
 
-        Ok(Self { cache, remote, config, device })
+        Ok(Self {
+            cache,
+            remote,
+            config,
+            device,
+        })
     }
 
     pub async fn run(&self) -> tokio::io::Result<()> {
@@ -79,12 +84,24 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.config.eviction.high_water_evict,
             self.config.eviction.low_water_evict,
             self.device.get_num_zones(),
-            self.device.get_chunks_per_zone()
+            self.device.get_chunks_per_zone(),
         )?));
 
-        let evictor = Evictor::start(Arc::clone(&self.device), &eviction_policy, Arc::clone(&self.cache))?;
-        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&self.device), &eviction_policy));
-        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&self.device), &eviction_policy));
+        let evictor = Evictor::start(
+            Arc::clone(&self.device),
+            &eviction_policy,
+            Arc::clone(&self.cache),
+        )?;
+        let writerpool = Arc::new(WriterPool::start(
+            self.config.writer_threads,
+            Arc::clone(&self.device),
+            &eviction_policy,
+        ));
+        let readerpool = Arc::new(ReaderPool::start(
+            self.config.reader_threads,
+            Arc::clone(&self.device),
+            &eviction_policy,
+        ));
 
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());
@@ -120,9 +137,10 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let writerpool = Arc::clone(&writerpool);
                                 let readerpool = Arc::clone(&readerpool);
                                 let cache = Arc::clone(&self.cache);
+                                let chunk_size = self.config.chunk_size;
                                 async move {
-                                    if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache).await {
-                                        eprintln!("Connection error: {}", e);
+                                if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache, chunk_size).await {
+                                    eprintln!("Connection error: {}", e);
                                 }
                             }});
                         },
@@ -148,80 +166,107 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     reader_pool: Arc<ReaderPool>,
     remote: Arc<T>,
     cache: Arc<Cache>,
+    chunk_size: usize,
 ) -> tokio::io::Result<()> {
     let (read_half, write_half) = split(stream);
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LengthDelimitedCodec::new())));
+    let writer = Arc::new(Mutex::new(FramedWrite::new(
+        write_half,
+        LengthDelimitedCodec::new(),
+    )));
 
     while let Some(frame) = reader.next().await {
-        let f = frame?;
+        let f = frame.map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("frame read failed: {}", e),
+            )
+        })?;
         let bytes = f.as_ref();
         let msg: Result<(request::Request, usize), DecodeError> =
             bincode::serde::decode_from_slice(bytes, bincode::config::standard());
-        println!("Received: {:?}", msg);
+        // println!("Received: {:?}", msg);
 
         match msg {
             Ok((request, _)) => {
-                println!("Received: {:?}", request);
+                // println!("Received: {:?}", request);
                 match request {
                     request::Request::Get(req) => {
-                        println!("Received get request: {:?}", req);
+                        if let Err(e) = req.validate(chunk_size) {
+                            let encoded = bincode::serde::encode_to_vec(
+                                request::GetResponse::Error(e.to_string()),
+                                bincode::config::standard(),
+                            )
+                            .unwrap();
+                            {
+                                let mut w = writer.lock().await;
+                                w.send(Bytes::from(encoded)).await.map_err(|e| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        format!("failed to send validation error: {}", e),
+                                    )
+                                })?;
+                            }
+
+                            continue;
+                        }
+
+                        // println!("Received get request: {:?}", req);
                         let chunk: Chunk = req.into();
+
                         cache.get_or_insert_with(
                             chunk.clone(),
-                            // Data was in map, read and return it
                             {
                                 let writer = Arc::clone(&writer);
                                 let reader_pool = Arc::clone(&reader_pool);
+                                // let chunk = chunk.clone();
                                 |location| async move {
-                                    let location = location.as_ref().clone(); // Owned copy
-                                    // Read from disk via channel
-                                    // Proceed with writing to disk
+                                    // println!("HIT {:?}", chunk);
+                                    let location = location.as_ref().clone();
+
                                     let (tx, rx) = flume::bounded(1);
                                     let read_req = ReadRequest {
                                         location,
                                         responder: tx,
                                     };
-                                    reader_pool.send(read_req).await?;
+                                    reader_pool.send(read_req).await.map_err(|e| {
+                                        std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read request: {}", e))
+                                    })?;
 
-                                    // Recieve read val
                                     let recv_err = rx.recv_async().await;
                                     let read_response = match recv_err {
-                                        Ok(wr) => {
-                                            match wr.data {
-                                                Ok(loc) => loc,
-                                                Err(e) => {
-                                                    return Err(e);
-                                                }
+                                        Ok(wr) => match wr.data {
+                                            Ok(loc) => loc,
+                                            Err(e) => {
+                                                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("read data error: {}", e)));
                                             }
                                         },
                                         Err(e) => {
-                                            eprintln!("Failed to get read response {:?}", e);
-                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
-                                        },
+                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("recv_async failed for read: {}", e)));
+                                        }
                                     };
 
-                                    // Send to user
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(read_response),
                                         bincode::config::standard()
                                     ).unwrap();
                                     {
                                         let mut w = writer.lock().await;
-                                        w.send(Bytes::from(encoded)).await?;
+                                        w.send(Bytes::from(encoded)).await.map_err(|e| {
+                                            std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read response: {}", e))
+                                        })?;
                                     }
-                                    
+
                                     Ok(())
                                 }
                             },
-                            // Data wasn't in map, request it and write it
-                            {
+                            {                                
                                 let chunk = chunk.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);
                                 let writer_pool = Arc::clone(&writer_pool);
                                 move || async move {
-                                    // Call remote (S3, ...)
+                                    // println!("MISS {:?}", chunk);
                                     let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
                                         Ok(resp) => resp,
                                         Err(e) => {
@@ -231,51 +276,50 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             ).unwrap();
                                             {
                                                 let mut w = writer.lock().await;
-                                                w.send(Bytes::from(encoded)).await?;
+                                                w.send(Bytes::from(encoded)).await.map_err(|e| {
+                                                    std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send remote error response: {}", e))
+                                                })?;
                                             }
-                                            // Fatal error, or keep accepting? Currently fatal, closes connection.
-                                            return Err(e);
+                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("remote.get failed: {}", e)));
                                         }
                                     };
-                                    
-                                    // Send to user
+
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(resp.clone()),
                                         bincode::config::standard()
                                     ).unwrap();
                                     {
                                         let mut w = writer.lock().await;
-                                        w.send(Bytes::from(encoded)).await?;
+                                        w.send(Bytes::from(encoded)).await.map_err(|e| {
+                                            std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send remote get response: {}", e))
+                                        })?;
                                     }
 
-                                    // Proceed with writing to disk
                                     let (tx, rx) = flume::bounded(1);
                                     let write_req = WriteRequest {
                                         data: resp,
                                         responder: tx,
                                     };
-                                    writer_pool.send(write_req).await?;
+                                    writer_pool.send(write_req).await.map_err(|e| {
+                                        std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send write request: {}", e))
+                                    })?;
 
-                                    // Recieve written val
                                     let recv_err = rx.recv_async().await;
                                     let write_response = match recv_err {
-                                        Ok(wr) => {
-                                            match wr.location {
-                                                Ok(loc) => loc,
-                                                Err(e) => {
-                                                    return Err(e);
-                                                }
+                                        Ok(wr) => match wr.location {
+                                            Ok(loc) => loc,
+                                            Err(e) => {
+                                                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("write location error: {}", e)));
                                             }
                                         },
                                         Err(e) => {
-                                            eprintln!("Failed to get write response {:?}", e);
-                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, recv_err.unwrap_err()));
-                                        },
+                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("recv_async failed for write: {}", e)));
+                                        }
                                     };
                                     Ok(write_response)
                                 }
                             },
-                        ).await?;                        
+                        ).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("cache.get_or_insert_with failed: {}", e)))?;
                     }
                     request::Request::Close => {
                         println!("Received close request");
