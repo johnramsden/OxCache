@@ -198,11 +198,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     match remote {
         remote::RemoteBackendType::Emulated => {
-            Server::new(config, Arc::new(remote::EmulatedBackend::new(chunk_size)))?.run().await?;
+            Server::new(config, remote::EmulatedBackend::new(chunk_size))?.run().await?;
         },
         remote::RemoteBackendType::S3 => {
             let bucket = config.remote.bucket.clone().unwrap();
-            Server::new(config, Arc::new(remote::S3Backend::new(bucket, chunk_size)))?.run().await?;
+            Server::new(config, remote::S3Backend::new(bucket, chunk_size))?.run().await?;
         }
     }
 

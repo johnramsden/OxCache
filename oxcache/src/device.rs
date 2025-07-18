@@ -7,7 +7,8 @@ use std::io::{Error};
 use std::ops::Deref;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
-
+use bytes::BytesMut;
+use bytes::Bytes;
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::eviction::{EvictionPolicy, EvictionPolicyWrapper};
@@ -146,7 +147,7 @@ pub struct BlockInterface {
 }
 
 pub trait Device: Send + Sync {
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation>;
+    fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation>;
 
     fn new(
         device: &str,
@@ -164,11 +165,12 @@ pub trait Device: Send + Sync {
 
     fn evict(&self) -> std::io::Result<()>;
 
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>>;
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
     fn get_num_zones(&self) -> usize;
 
     fn get_chunks_per_zone(&self) -> usize;
+    fn get_block_size(&self) -> usize;
 }
 
 fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
@@ -253,18 +255,17 @@ impl Device for Zoned {
         }
     }
 
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+    fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
         let zone_index = self.get_free_zone()?;
         // Note: this performs a copy every time because we need to
         // pass in a mutable vector to libnvme
-        let mut mut_data = vec![0u8; get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize)];
-        mut_data[..data.len()].copy_from_slice(&data[..]);
-
+        assert_eq!(data.as_ptr() as usize % self.nvme_config.logical_block_size as usize, 0);
+        
         match zns_append(
             &self.nvme_config,
             &self.config,
             zone_index as u64,
-            mut_data.as_mut_slice(),
+            data.as_ref(),
         ) {
             Ok(lba) => {
                 let chunk = lba / self.config.chunk_size as u64;
@@ -306,10 +307,11 @@ impl Device for Zoned {
         }
     }
 
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
-        let mut data = vec![0; self.config.chunk_size];
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
+        let mut data = vec![0u8; self.config.chunk_size];
         self.read_into_buffer(location, &mut data)?;
-        Ok(data)
+        
+        Ok(Bytes::from(data))
     }
 
     fn evict(&self) -> std::io::Result<()> {
@@ -335,6 +337,10 @@ impl Device for Zoned {
 
     fn get_chunks_per_zone(&self) -> usize {
         self.config.chunks_per_zone as usize
+    }
+
+    fn get_block_size(&self) -> usize {
+        self.nvme_config.logical_block_size as usize
     }
 }
 
@@ -383,7 +389,7 @@ impl Device for BlockInterface {
         })
     }
 
-    fn append(&self, data: Vec<u8>) -> std::io::Result<ChunkLocation> {
+    fn append(&self, mut data: Bytes) -> std::io::Result<ChunkLocation> {
         let mtx = self.state.clone();
         let mut state = mtx.lock().unwrap();
 
@@ -401,9 +407,7 @@ impl Device for BlockInterface {
         };
         drop(state);
 
-        let aligned_size = get_aligned_buffer_size(data.len(), self.nvme_config.logical_block_size as usize);
-        let mut mut_data = vec![0u8; aligned_size];
-        mut_data[..data.len()].copy_from_slice(&data[..]);
+        assert_eq!(data.len() % self.nvme_config.logical_block_size as usize, 0);
 
         let write_addr = get_address_at(
             chunk_location.zone as u64,
@@ -420,7 +424,7 @@ impl Device for BlockInterface {
             0,
             self.nvme_config.nsid,
             self.nvme_config.logical_block_size,
-            mut_data.as_mut_slice(),
+            data.as_ref(),
         ) {
             Ok(()) => {
                 let mtx = Arc::clone(&self.evict_policy);
@@ -467,10 +471,10 @@ impl Device for BlockInterface {
         }
     }
 
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Vec<u8>> {
-        let mut buffer = vec![0; self.chunk_size];
-        self.read_into_buffer(location, &mut buffer);
-        Ok(buffer)
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
+        let mut data = vec![0u8; self.chunk_size];
+        self.read_into_buffer(location, &mut data)?;
+        Ok(Bytes::from(data))
     }
 
     fn evict(&self) -> std::io::Result<()> {
@@ -496,5 +500,9 @@ impl Device for BlockInterface {
 
     fn get_chunks_per_zone(&self) -> usize {
         self.chunks_per_zone
+    }
+    
+    fn get_block_size(&self) -> usize {
+        self.nvme_config.logical_block_size as usize
     }
 }

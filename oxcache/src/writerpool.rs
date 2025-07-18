@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use flume::{Receiver, Sender, unbounded};
 use std::thread::{self, JoinHandle};
+use bytes::BytesMut;
+use bytes::Bytes;
 use crate::{cache, device};
 
 #[derive(Debug)]
@@ -10,7 +12,7 @@ pub struct WriteResponse {
 
 #[derive(Debug)]
 pub struct WriteRequest {
-    pub data: Vec<u8>,
+    pub data: Bytes,
     pub responder: Sender<WriteResponse>,
 }
 

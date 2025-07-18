@@ -53,16 +53,18 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
-    pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(config: ServerConfig, mut remote: T) -> Result<Self, Box<dyn Error>> {
         let device = device::get_device(
             config.disk.as_str(),
             config.chunk_size,
             config.eviction.clone()
         )?;
+        
+        remote.set_blocksize(device.get_block_size());
 
         Ok(Self {
             cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
-            remote,
+            remote: Arc::new(remote),
             config,
             device,
         })
@@ -221,7 +223,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     };
 
                                     let encoded = bincode::serde::encode_to_vec(
-                                        request::GetResponse::Response(read_response),
+                                        request::GetResponse::Response(read_response.clone()), 
                                         bincode::config::standard()
                                     ).unwrap();
                                     {
@@ -257,7 +259,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("remote.get failed: {}", e)));
                                         }
                                     };
-
+                                    
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(resp.clone()),
                                         bincode::config::standard()
@@ -271,7 +273,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     let (tx, rx) = flume::bounded(1);
                                     let write_req = WriteRequest {
-                                        data: resp,
+                                        data: resp.clone(),
                                         responder: tx,
                                     };
                                     writer_pool.send(write_req).await.map_err(|e| {
