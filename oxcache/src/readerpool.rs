@@ -1,12 +1,13 @@
 use std::sync::Arc;
 use flume::{Receiver, Sender, unbounded};
 use std::thread::{self, JoinHandle};
+use bytes::{Bytes, BytesMut};
 use crate::{cache, device};
 use crate::writerpool::WriteResponse;
 
 #[derive(Debug)]
 pub struct ReadResponse {
-    pub data: std::io::Result<Vec<u8>>,
+    pub data: std::io::Result<Bytes>,
 }
 
 #[derive(Debug)]

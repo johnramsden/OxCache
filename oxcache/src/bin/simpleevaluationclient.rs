@@ -32,7 +32,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nr_queries = 1000000;
+    let nr_queries = 10000;
     let nr_uuids = 1000;
     let mut queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let args = Cli::parse();
