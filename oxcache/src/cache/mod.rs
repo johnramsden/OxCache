@@ -147,17 +147,18 @@ impl Cache {
     /// exist in the reverse mapping
     pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
         let mut map_guard = self.buckets.write().await;
-        let mut guard = self.zone_to_entry.lock().await;
+        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
         for zone_index in zone_indices {
-            guard
-                .slice(s![*zone_index, ..])
-                .iter()
-                .filter_map(|chunk| chunk.clone()) // Remove None instances
-                .for_each(|chunk| {
-                    map_guard.remove(&chunk);
-                });
+            let zone_slice = s![*zone_index, ..];
+            while let Some(chunk_itr) = reverse_mapping_guard.slice(zone_slice).into_iter().next() {
+                // Skip if there is "None" in the reverse mapping
+                let Some(chunk) = chunk_itr else { continue; };
+                let entry = map_guard.remove(chunk).ok_or(entry_not_found())?;
+                // Get the write lock so that we can be sure that no one is reading this chunk anymore
+                let _ = entry.write().await;
+            }
 
-            guard.slice_mut(s![*zone_index, ..]).map_inplace(|v| {
+            reverse_mapping_guard.slice_mut(zone_slice).map_inplace(|v| {
                 *v = None;
             });
         }
