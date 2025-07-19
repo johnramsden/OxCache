@@ -13,6 +13,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::util::execute_async;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use tokio::{runtime::Handle, task::spawn_blocking};
@@ -270,7 +271,9 @@ impl Evictor {
                     drop(policy);
 
                     match targets {
-                        EvictTarget::Chunk(ref _chunk_locations) => {}
+                        EvictTarget::Chunk(ref _chunk_locations) => {
+                            // TODO!
+                        }
                         EvictTarget::Zone(ref zones) => {
                             let handle = Handle::current();
                             handle.block_on((async || match cache.remove_zones(zones).await {

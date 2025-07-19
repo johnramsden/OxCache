@@ -1,9 +1,9 @@
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{zns_append, zns_read};
-use nvme::types::{NVMeConfig, ZNSConfig};
+use nvme::ops::{reset_zone, zns_append, zns_read};
+use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::{self, Error};
+use std::io::{self, Error, ErrorKind};
 use std::ops::Deref;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
@@ -13,6 +13,7 @@ use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::eviction::{EvictTarget, EvictionPolicy, EvictionPolicyWrapper};
 use crate::server::ServerEvictionConfig;
+use crate::util::execute_async;
 
 #[derive(Copy, Clone)]
 struct Zone {
@@ -107,12 +108,6 @@ impl ZoneList {
     }
 }
 
-/// Describes chunks that need to be moved
-pub struct MovedChunk {
-    from: ChunkLocation,
-    to: ChunkLocation,
-}
-
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
@@ -159,7 +154,7 @@ pub trait Device: Send + Sync {
 
     fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>;
 
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<Vec<MovedChunk>>;
+    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> io::Result<Vec<u8>>;
 
@@ -186,6 +181,28 @@ pub fn get_device(device: &str, chunk_size: usize) -> io::Result<Arc<dyn Device>
 }
 
 impl Zoned {
+    fn compact_zone(
+        &self,
+        zone_to_compact: usize,
+        chunks_to_keep: &[ChunkLocation],
+        buffer: &mut [u8],
+    ) -> io::Result<Vec<ChunkLocation>> {
+        let mut new_locations = Vec::with_capacity(chunks_to_keep.len());
+        for chunk in chunks_to_keep {
+            let starting_byte_loc = chunk.index as usize * self.config.chunk_size;
+            let ending_byte_loc = (chunk.index + 1) as usize * self.config.chunk_size;
+            let new_idx = zns_append(
+                &self.nvme_config,
+                &self.config,
+                zone_to_compact as u64,
+                &mut buffer[starting_byte_loc..ending_byte_loc],
+            )
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?;
+            new_locations.push(ChunkLocation::new(zone_to_compact, new_idx));
+        }
+        Ok(new_locations)
+    }
+
     fn get_free_zone(&self) -> io::Result<usize> {
         let mtx = Arc::clone(&self.zones);
         let mut zone_list = mtx.lock().unwrap();
@@ -268,17 +285,67 @@ impl Device for Zoned {
         Ok(data)
     }
 
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<Vec<MovedChunk>> {
+    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
-            EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
+            EvictTarget::Chunk(mut chunk_locations) => {
+                // Check all zones are the same, this isn't a
+                // restriction but it makes implementation
+                // easier. This can be changed later
+                assert!(
+                    chunk_locations
+                        .iter()
+                        .all(|loc| loc.zone == chunk_locations[0].zone)
+                );
+                let zone_to_evict = chunk_locations[0].zone;
+
+                // TODO: Does this need to be aligned?
+                let mut read_buf = vec![
+                    0_u8;
+                    (self.config.zone_size * self.nvme_config.logical_block_size)
+                        as usize
+                ];
+                self.read_into_buffer(
+                    ChunkLocation::new(zone_to_evict, 0),
+                    read_buf.as_mut_slice(),
+                )?;
+                let zones_to_reset = [chunk_locations[0].zone];
+
+                chunk_locations.sort_by(|cl1, cl2| cl1.index.cmp(&cl2.index));
+
+                let mut to_keep: Vec<ChunkLocation> = Vec::new();
+                // Iterates through the chunks to discard, skipping
+                // them and adding the chunks between instead.
+                chunk_locations.iter().fold(0, |prev, cur| {
+                    to_keep.extend(
+                        (prev..cur.index)
+                            .map(|chunk_idx| ChunkLocation::new(zone_to_evict, chunk_idx)),
+                    );
+                    cur.index + 1
+                });
+
+                execute_async(cache.remove_zones_and_update_entries(
+                    &zones_to_reset,
+                    &to_keep,
+                    || Ok(self.compact_zone(zone_to_evict, &to_keep, &mut read_buf)?),
+                ))
+            }
             EvictTarget::Zone(zones_to_evict) => {
-                // Clear out the cache first
+                execute_async(cache.remove_zones(&zones_to_evict))?;
 
                 let zone_mtx = Arc::clone(&self.zones);
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict);
 
-                Ok(Vec::new())
+                for zone_idx in zones_to_evict {
+                    reset_zone(
+                        &self.nvme_config,
+                        &self.config,
+                        PerformOn::Zone(zone_idx as u64),
+                    )
+                    .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?
+                }
+
+                Ok(())
             }
         }
     }
@@ -384,14 +451,22 @@ impl Device for BlockInterface {
         Ok(buffer)
     }
 
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<Vec<MovedChunk>> {
+    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
-            EvictTarget::Chunk(_chunk_locations) => unimplemented!(),
+            EvictTarget::Chunk(chunk_locations) => {
+                execute_async(cache.remove_entries(&chunk_locations))?;
+                let state_mtx = Arc::clone(&self.state);
+                let _state = state_mtx.lock().unwrap();
+                // Need to change the block interface bookkeeping so
+                // that it can keep track of the list of empty chunks
+                todo!();
+            }
             EvictTarget::Zone(locations) => {
+                execute_async(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations);
-                Ok(Vec::new())
+                Ok(())
             }
         }
     }
