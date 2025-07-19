@@ -270,18 +270,6 @@ impl Evictor {
                     let targets = policy.get_evict_targets();
                     drop(policy);
 
-                    match targets {
-                        EvictTarget::Chunk(ref _chunk_locations) => {
-                            // TODO!
-                        }
-                        EvictTarget::Zone(ref zones) => {
-                            let handle = Handle::current();
-                            handle.block_on((async || match cache.remove_zones(zones).await {
-                                Ok(()) => {}
-                                Err(err) => panic!("Shouldn't get an error: {}", err),
-                            })());
-                        }
-                    }
                     device
                         .evict(targets, cache.clone())
                         .expect("Eviction failed");

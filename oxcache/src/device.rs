@@ -106,6 +106,13 @@ impl ZoneList {
             });
         }
     }
+
+    fn reset_zone_with_capacity(&mut self, idx: usize, remaining: usize) {
+        self.available_zones.push_back(Zone {
+            index: idx,
+            chunks_available: remaining,
+        });
+    }
 }
 
 pub struct Zoned {
@@ -154,6 +161,7 @@ pub trait Device: Send + Sync {
 
     fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>;
 
+    /// This is expected to remove elements from the cache as well
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> io::Result<Vec<u8>>;
@@ -327,7 +335,15 @@ impl Device for Zoned {
                     &zones_to_reset,
                     &to_keep,
                     || Ok(self.compact_zone(zone_to_evict, &to_keep, &mut read_buf)?),
-                ))
+                ))?;
+
+                let zone_mtx = Arc::clone(&self.zones);
+                let mut zones = zone_mtx.lock().unwrap();
+                zones.reset_zone_with_capacity(
+                    zone_to_evict,
+                    self.get_chunks_per_zone() - to_keep.len(),
+                );
+                Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
                 execute_async(cache.remove_zones(&zones_to_evict))?;
