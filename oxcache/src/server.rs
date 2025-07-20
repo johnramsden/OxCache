@@ -148,6 +148,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     }
 }
 
+const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
+
 async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     stream: UnixStream,
     writer_pool: Arc<WriterPool>,
@@ -156,9 +158,14 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     cache: Arc<Cache>,
     chunk_size: usize,
 ) -> tokio::io::Result<()> {
-    let (read_half, write_half) = split(stream);
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LengthDelimitedCodec::new())));
+    let (read_half, write_half) = tokio::io::split(stream);
+
+    let codec = LengthDelimitedCodec::builder()
+        .max_frame_length(MAX_FRAME_LENGTH)
+        .new_codec();
+
+    let mut reader = FramedRead::new(read_half, codec.clone());
+    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, codec)));
 
     while let Some(frame) = reader.next().await {
         let f = frame.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("frame read failed: {}", e)))?;
@@ -169,7 +176,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
         match msg {
             Ok((request, _)) => {
-                // println!("Received: {:?}", request);
+                println!("Received req");
                 match request {
                     request::Request::Get(req) => {
                         if let Err(e) = req.validate(chunk_size) {
@@ -259,11 +266,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("remote.get failed: {}", e)));
                                         }
                                     };
-                                    
+
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(resp.clone()),
                                         bincode::config::standard()
-                                    ).unwrap();
+                                    ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("serialization failed: {}", e)))?;
                                     {
                                         let mut w = writer.lock().await;
                                         w.send(Bytes::from(encoded)).await.map_err(|e| {
