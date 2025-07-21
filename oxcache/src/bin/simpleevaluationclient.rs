@@ -134,8 +134,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+
     for handle in handles {
-        handle.await?;
+        let res = handle.await;
+        match res {
+            Err(join_err) => {
+                eprintln!("Task panicked or was cancelled: {join_err}");
+            }
+            Ok(Err(io_err)) => {
+                eprintln!("Task exited with error: {io_err}");
+            }
+            Ok(Ok(())) => {
+                // success
+            }
+        }
     }
 
     let duration = start.elapsed(); // Stop the timer
