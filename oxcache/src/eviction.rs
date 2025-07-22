@@ -159,7 +159,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     type Target = Vec<usize>;
 
     fn write_update(&mut self, chunk: ChunkLocation) {
-        // assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
+        assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
         
         // We only want to put it in the LRU once the zone is full
         if (chunk.index as usize == self.nr_chunks_per_zone - 1) {
@@ -177,13 +177,21 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     }
 
     fn get_evict_targets(&mut self) -> Self::Target {
+        let lru_len = self.lru.len();
         let high_water_mark = self.nr_zones - self.high_water;
-        if self.lru.len() < high_water_mark {
+        if lru_len < high_water_mark {
             return vec![];
         }
-
-        let mut targets = Vec::with_capacity(self.lru.len() - self.low_water);
+        
         let low_water_mark = self.nr_zones - self.low_water;
+        if lru_len < low_water_mark {
+            return vec![];
+        }
+        
+        let cap = lru_len - low_water_mark;
+
+        let mut targets = Vec::with_capacity(cap);;
+
         while self.lru.len() >= low_water_mark {
             targets.push(self.lru.pop_lru().unwrap().0)
         }
@@ -229,14 +237,22 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     }
 
     fn get_evict_targets(&mut self) -> Self::Target {
-        let high_water_mark = self.nr_zones * self.nr_chunks_per_zone - self.high_water;
-        if self.lru.len() < high_water_mark {
+        let lru_len = self.lru.len();
+        let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
+        let high_water_mark = nr_chunks - self.high_water;
+        if lru_len < high_water_mark {
             return vec![];
         }
 
-        let mut targets = Vec::with_capacity(self.lru.len() - self.low_water);
-        let low_water_mark = self.nr_zones * self.nr_chunks_per_zone - self.low_water;
-        while self.lru.len() >= low_water_mark {
+        let low_water_mark = nr_chunks - self.low_water;
+        if lru_len < low_water_mark {
+            return vec![];
+        }
+
+        let cap = lru_len - low_water_mark;
+
+        let mut targets = Vec::with_capacity(cap);
+        while lru_len >= low_water_mark {
             targets.push(self.lru.pop_lru().unwrap().0)
         }
 

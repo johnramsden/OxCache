@@ -33,7 +33,7 @@ impl Cache {
             buckets: RwLock::new(HashMap::new()),
             zone_to_entry: Mutex::new(ArrayBase::from_elem(
                 (num_zones, chunks_per_zone),
-                Option::None,
+                None,
             )),
         }
     }

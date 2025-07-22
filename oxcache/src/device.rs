@@ -387,7 +387,7 @@ impl Device for BlockInterface {
         // Num_zones: how to get?
         let num_zones = 100;
         // Chunks per zone: how to get?
-        let chunks_per_zone = 100;
+        let chunks_per_zone = 2;
 
         Ok(Self {
             nvme_config,
@@ -468,6 +468,11 @@ impl Device for BlockInterface {
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
             EvictTarget::Chunk(chunk_locations) => {
+                if chunk_locations.is_empty() {
+                    println!("[evict:Chunk] No zones to evict");
+                    return Ok(());
+                }
+                println!("[evict:Chunk] Evicting zones {:?}", chunk_locations);
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let _state = state_mtx.lock().unwrap();
@@ -476,6 +481,11 @@ impl Device for BlockInterface {
                 todo!();
             }
             EvictTarget::Zone(locations) => {
+                if locations.is_empty() {
+                    println!("[evict:Zone] No zones to evict");
+                    return Ok(());
+                }
+                println!("[evict:Zone] Evicting zones {:?}", locations);
                 RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
