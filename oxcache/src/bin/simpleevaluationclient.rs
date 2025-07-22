@@ -28,6 +28,9 @@ struct Cli {
 
     #[arg(long)]
     num_clients: usize,
+    
+    #[arg(long)]
+    query_size: usize,
 }
 
 const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
@@ -57,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             queries.push(GetRequest {
                 key: uuid.to_string(),
-                size: 268435456,
+                size: args.query_size,
                 offset: 0,
             });
         }
