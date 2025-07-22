@@ -9,32 +9,36 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
-use std::sync::Arc;
+use bytes::{Bytes, BytesMut};
 
 #[async_trait]
 pub trait RemoteBackend: Send + Sync {
-    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>>;
+    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes>;
+
+    fn set_blocksize(&mut self, blocksize: usize);
 }
 
 pub struct S3Backend {
     bucket: String,
     chunk_size: usize,
+    block_size: Option<usize>, // For buffer alignment
 }
 
 impl S3Backend {
     pub fn new(bucket: String, chunk_size: usize) -> Self {
-        Self { bucket, chunk_size }
+        Self { bucket, chunk_size, block_size: None }
     }
 }
 
 const EMULATED_BUFFER_SEED: u64 = 1;
 pub struct EmulatedBackend {
     chunk_size: usize,
+    block_size: Option<usize>, // For buffer alignment
 }
 
 impl EmulatedBackend {
     pub fn new(chunk_size: usize) -> Self {
-        Self { chunk_size }
+        Self { chunk_size, block_size: None }
     }
 
     fn gen_buffer_prefix(buf: &mut Vec<u8>, key: &str, offset: usize, size: usize) {
@@ -49,12 +53,7 @@ impl EmulatedBackend {
         buf.extend_from_slice(&size.to_be_bytes());
     }
 
-    fn gen_random_buffer(
-        &self,
-        key: &str,
-        offset: usize,
-        size: usize,
-    ) -> tokio::io::Result<Vec<u8>> {
+    fn gen_random_buffer(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
         if size > self.chunk_size {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -65,48 +64,70 @@ impl EmulatedBackend {
             ));
         }
 
-        let mut buffer_prefix: Vec<u8> = Vec::with_capacity(self.chunk_size);
-        Self::gen_buffer_prefix(&mut buffer_prefix, key, offset, size);
-        let prefix_len = buffer_prefix.len();
+        if self.block_size.is_none() {
+            return Err(std::io::Error::new(ErrorKind::InvalidInput, "Block size not set"));
+        }
+        
+        let capacity = get_aligned_buffer_size(size, self.block_size.unwrap());
+        let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
+        Self::gen_buffer_prefix(&mut buffer, key, offset, size);
+        
+        // Add prefix
+        let prefix_len = buffer.len();
         if size < prefix_len {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "buffer size too small",
-            ));
+            return Err(std::io::Error::new(ErrorKind::InvalidInput, format!("buffer size {} < (prefix_len {}) too small", size, prefix_len)));
         }
 
+        // Fill the rest of the buffer with random bytes
         let mut rng = Pcg64::seed_from_u64(EMULATED_BUFFER_SEED);
-        let mut buf = vec![0u8; size - prefix_len];
-        rng.fill_bytes(&mut buf);
-        buffer_prefix.extend(buf);
-        buffer_prefix.resize(
-            buffer_prefix.len() + (self.chunk_size - buffer_prefix.len()),
-            0,
-        );
-        assert_eq!(
-            buffer_prefix.capacity(),
-            self.chunk_size,
-            "Expected to have capacity of {}, realloc occurred",
-            self.chunk_size
-        );
-        Ok(buffer_prefix)
+        let remaining = size - prefix_len;
+        let mut random_bytes = vec![0u8; remaining];
+        rng.fill_bytes(&mut random_bytes);
+        buffer.extend_from_slice(&random_bytes);
+
+        // Zero pad up to full capacity
+        let current_len = buffer.len();
+        if current_len < capacity {
+            buffer.resize(capacity, 0);
+        }
+
+        // Check size
+        assert_eq!(buffer.len(), capacity, "Buffer should be exactly capacity-sized");
+
+        Ok(Bytes::from(buffer))
+    }
+}
+
+fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
+    if buffer_size.rem_euclid(block_size) != 0 {
+        buffer_size + (block_size - buffer_size.rem_euclid(block_size))
+    } else {
+        buffer_size
     }
 }
 
 #[async_trait]
 impl RemoteBackend for S3Backend {
-    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
+    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
         // TODO: Implement with AWS SDK
-        Ok(vec![])
+        Ok(Bytes::from(vec![]))
+    }
+
+    fn set_blocksize(&mut self, blocksize: usize) {
+        self.block_size = Some(blocksize);
     }
 }
 
 #[async_trait]
 impl RemoteBackend for EmulatedBackend {
-    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Vec<u8>> {
+    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
         // TODO: Implement
         // println!("GET {} {} {}", key, offset, size);
         self.gen_random_buffer(key, offset, size)
+    }
+
+    fn set_blocksize(&mut self, blocksize: usize) {
+        self.block_size = Some(blocksize);
     }
 }
 

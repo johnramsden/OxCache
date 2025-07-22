@@ -53,16 +53,17 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
-    pub fn new(config: ServerConfig, remote: Arc<T>) -> Result<Self, Box<dyn Error>> {
-        let device = device::get_device(config.disk.as_str(), config.chunk_size)?;
-        let cache = Arc::new(Cache::new(
-            device.get_num_zones(),
-            device.get_chunks_per_zone(),
-        ));
+    pub fn new(config: ServerConfig, mut remote: T) -> Result<Self, Box<dyn Error>> {
+        let device = device::get_device(
+            config.disk.as_str(),
+            config.chunk_size,
+        )?;
+        
+        remote.set_blocksize(device.get_block_size());
 
         Ok(Self {
-            cache,
-            remote,
+            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
+            remote: Arc::new(remote),
             config,
             device,
         })
@@ -160,6 +161,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     }
 }
 
+const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
+
 async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     stream: UnixStream,
     writer_pool: Arc<WriterPool>,
@@ -168,12 +171,14 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     cache: Arc<Cache>,
     chunk_size: usize,
 ) -> tokio::io::Result<()> {
-    let (read_half, write_half) = split(stream);
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-    let writer = Arc::new(Mutex::new(FramedWrite::new(
-        write_half,
-        LengthDelimitedCodec::new(),
-    )));
+    let (read_half, write_half) = tokio::io::split(stream);
+
+    let codec = LengthDelimitedCodec::builder()
+        .max_frame_length(MAX_FRAME_LENGTH)
+        .new_codec();
+
+    let mut reader = FramedRead::new(read_half, codec.clone());
+    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, codec)));
 
     while let Some(frame) = reader.next().await {
         let f = frame.map_err(|e| {
@@ -189,7 +194,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
         match msg {
             Ok((request, _)) => {
-                // println!("Received: {:?}", request);
+                // println!("Received req");
                 match request {
                     request::Request::Get(req) => {
                         if let Err(e) = req.validate(chunk_size) {
@@ -247,7 +252,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     };
 
                                     let encoded = bincode::serde::encode_to_vec(
-                                        request::GetResponse::Response(read_response),
+                                        request::GetResponse::Response(read_response.clone()), 
                                         bincode::config::standard()
                                     ).unwrap();
                                     {
@@ -287,7 +292,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(resp.clone()),
                                         bincode::config::standard()
-                                    ).unwrap();
+                                    ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("serialization failed: {}", e)))?;
                                     {
                                         let mut w = writer.lock().await;
                                         w.send(Bytes::from(encoded)).await.map_err(|e| {
@@ -297,7 +302,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     let (tx, rx) = flume::bounded(1);
                                     let write_req = WriteRequest {
-                                        data: resp,
+                                        data: resp.clone(),
                                         responder: tx,
                                     };
                                     writer_pool.send(write_req).await.map_err(|e| {

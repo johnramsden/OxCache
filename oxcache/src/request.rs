@@ -1,4 +1,6 @@
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use bytes::{Bytes, BytesMut};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetRequest {
@@ -10,7 +12,7 @@ pub struct GetRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum GetResponse {
     Error(String),
-    Response(Vec<u8>),
+    Response(Bytes),
 }
 
 #[derive(Debug, Serialize, Deserialize)]

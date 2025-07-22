@@ -115,27 +115,31 @@ impl Cache {
                 let write_result = writer().await;
                 match write_result {
                     Err(e) => {
+                        // extract notify and drop chunk_loc_guard BEFORE acquiring buckets.write()
+                        let notify = match &*chunk_loc_guard {
+                            ChunkState::Waiting(n) => Some(n.clone()),
+                            _ => panic!("Chunk was not in waiting state"),
+                        };
+                        drop(chunk_loc_guard); // Prevent deadlock
+
                         let mut bucket_guard = self.buckets.write().await;
                         bucket_guard.remove(&key);
-                        match &*chunk_loc_guard {
-                            ChunkState::Waiting(notify) => {
-                                notify.notify_waiters();
-                            }
-                            _ => {
-                                // This should never happen here
-                                panic!("Chunk was not in waiting state");
-                            }
+
+                        if let Some(n) = notify {
+                            n.notify_waiters();
                         }
-                        // This is the condition where you could be left with something in the waiting state
+
                         return Err(e);
                     }
                     Ok(location) => {
-                        // Do we ever notify here?
                         *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
+                        drop(chunk_loc_guard);
+
                         let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
                         reverse_mapping_guard[location.as_index()] = Some(key);
                     }
                 }
+
                 return Ok(());
             }
         }

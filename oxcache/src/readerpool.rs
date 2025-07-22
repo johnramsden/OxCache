@@ -4,10 +4,11 @@ use crate::{cache, device};
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use bytes::{Bytes, BytesMut};
 
 #[derive(Debug)]
 pub struct ReadResponse {
-    pub data: std::io::Result<Vec<u8>>,
+    pub data: std::io::Result<Bytes>,
 }
 
 #[derive(Debug)]
@@ -42,7 +43,7 @@ impl Reader {
     fn run(self) {
         println!("Reader {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
-            println!("Reader {} processing: {:?}", self.id, msg);
+            // println!("Reader {} processing: {:?}", self.id, msg);
             let result = self.device.read(msg.location.clone());
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);

@@ -1,9 +1,9 @@
 [server]
 socket = "/tmp/oxcache.sock"
 disk = "/dev/nvme3n1"
-writer_threads = 14
-reader_threads = 14
-chunk_size = 8192
+writer_threads = 1
+reader_threads = 1
+chunk_size = 268435456
 
 [remote]
 remote_type = "emulated" # emulated | S3
