@@ -13,8 +13,7 @@ use crate::cache::bucket::ChunkLocation;
 use crate::cache::Cache;
 use crate::device;
 use crate::eviction::{EvictTarget, EvictionPolicy, EvictionPolicyWrapper};
-use crate::server::ServerEvictionConfig;
-use crate::util::execute_async;
+use crate::server::{ServerEvictionConfig, RUNTIME};
 
 #[derive(Copy, Clone)]
 struct Zone {
@@ -329,7 +328,7 @@ impl Device for Zoned {
                     cur.index + 1
                 });
 
-                execute_async(cache.remove_zones_and_update_entries(
+                RUNTIME.block_on(cache.remove_zones_and_update_entries(
                     &zones_to_reset,
                     &to_keep,
                     || Ok(self.compact_zone(zone_to_evict, &to_keep, &mut read_buf)?),
@@ -344,7 +343,7 @@ impl Device for Zoned {
                 Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
-                execute_async(cache.remove_zones(&zones_to_evict))?;
+                RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
 
                 let zone_mtx = Arc::clone(&self.zones);
                 let mut zones = zone_mtx.lock().unwrap();
@@ -467,10 +466,9 @@ impl Device for BlockInterface {
     }
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
-        return Ok(());
         match locations {
             EvictTarget::Chunk(chunk_locations) => {
-                execute_async(cache.remove_entries(&chunk_locations))?;
+                RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let _state = state_mtx.lock().unwrap();
                 // Need to change the block interface bookkeeping so
@@ -478,7 +476,7 @@ impl Device for BlockInterface {
                 todo!();
             }
             EvictTarget::Zone(locations) => {
-                execute_async(cache.remove_zones(&locations))?;
+                RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations);

@@ -4,8 +4,6 @@ use crate::eviction::{EvictionPolicyWrapper, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
-// use tokio::spawn;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, split};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -19,7 +17,14 @@ use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use once_cell::sync::Lazy;
+use tokio::runtime::Runtime;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+// Global tokio runtime
+pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    Runtime::new().expect("Failed to create Tokio runtime")
+});
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {

@@ -2004,6 +2004,7 @@ dependencies = [
  "lru 0.16.0",
  "ndarray",
  "nvme",
+ "once_cell",
  "rand",
  "rand_pcg",
  "serde",

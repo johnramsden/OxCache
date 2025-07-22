@@ -13,7 +13,6 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::util::execute_async;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use tokio::{runtime::Handle, task::spawn_blocking};

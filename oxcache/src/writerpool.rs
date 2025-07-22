@@ -46,7 +46,7 @@ impl Writer {
     fn run(self) {
         println!("Writer {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
-            println!("Writer {} processing: {:?}", self.id, msg);
+            // println!("Writer {} processing: {:?}", self.id, msg);
             let result = self.device.append(msg.data).inspect(|loc| {
                 let mtx = Arc::clone(&self.eviction);
                 let mut policy = mtx.lock().unwrap();

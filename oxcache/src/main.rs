@@ -1,11 +1,10 @@
 use clap::Parser;
 use oxcache;
 use oxcache::remote;
-use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
+use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig, RUNTIME};
 use serde::Deserialize;
 use std::fs;
 use std::process::exit;
-use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -179,8 +178,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     })
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CliArgs::parse();
     let config = load_config(&cli)?;
 
@@ -205,3 +203,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    RUNTIME.block_on(async_main())
+}
+
