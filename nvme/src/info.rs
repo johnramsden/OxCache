@@ -179,7 +179,11 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
 
     // Zone append size limit
     let zns_ctrl_data = oxcache_id_zns_ctrl(nvme_config.fd)?;
-    let zasl = (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as u32;
+    let zasl = if zns_ctrl_data.zasl == 0 {
+        0
+    } else {
+        (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as u32
+    };
 
     // Number of zones
     let nzones = match get_num_zones(nvme_config.fd, nvme_config.nsid) {
