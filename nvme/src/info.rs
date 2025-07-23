@@ -270,13 +270,8 @@ pub fn report_zones(
 
 pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
     let device_name_ = device_name(device);
-
     let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device_name_))?;
-    match zoned.as_str() {
-        "host-managed" => Ok(true),
-        "host-aware" => Ok(true),
-        _ => Ok(false),
-    }
+    Ok(zoned.starts_with("host-managed") || zoned.starts_with("host-aware"))
 }
 
 /// Zone size is in logical blocks
