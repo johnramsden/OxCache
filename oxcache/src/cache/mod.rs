@@ -17,7 +17,7 @@ fn new_entry() -> EntryType {
 
 // Entry not found
 fn entry_not_found() -> std::io::Error {
-    return std::io::Error::new(ErrorKind::NotFound, "Couldn't find entry");
+    std::io::Error::new(ErrorKind::NotFound, "Couldn't find entry")
 }
 
 #[derive(Debug)]
@@ -152,19 +152,40 @@ impl Cache {
     pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
         let mut map_guard = self.buckets.write().await;
         let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+        
+        // Loop over zones
         for zone_index in zone_indices {
+            // Get slice representing a zone
             let zone_slice = s![*zone_index, ..];
-            while let Some(chunk_itr) = reverse_mapping_guard.slice(zone_slice).into_iter().next() {
-                // Skip if there is "None" in the reverse mapping
-                let Some(chunk) = chunk_itr else { continue; };
-                let entry = map_guard.remove(chunk).ok_or(entry_not_found())?;
+            // loop over zone chunks
+            let zone_view = reverse_mapping_guard.slice(zone_slice);
+
+            // Collect all valid chunks first
+            let chunks_to_remove: Vec<_> = zone_view
+                .iter()
+                .filter_map(|opt_chunk| opt_chunk.as_ref())
+                .cloned()
+                .collect();
+
+            // Now safely mutate map_guard and reverse_mapping
+            for chunk in chunks_to_remove {
+                let entry = match map_guard.remove(&chunk) {
+                    Some(v) => v,
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("Couldn't find entry while removing zones: {:?}", chunk),
+                        ))
+                    }
+                };
                 // Get the write lock so that we can be sure that no one is reading this chunk anymore
                 let _ = entry.write().await;
             }
 
-            reverse_mapping_guard.slice_mut(zone_slice).map_inplace(|v| {
-                *v = None;
-            });
+            // Now safe to mutate reverse_mapping
+            reverse_mapping_guard
+                .slice_mut(zone_slice)
+                .map_inplace(|v| *v = None);
         }
 
         Ok(())
@@ -299,7 +320,7 @@ impl Cache {
         let mut bucket_guard = self.buckets.write().await;
         let state = bucket_guard.get(&key).ok_or(std::io::Error::new(
             ErrorKind::NotFound,
-            "Couldn't find entry",
+            format!("Couldn't find entry {:?}", key),
         ))?;
 
         // We now have the entry
