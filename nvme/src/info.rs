@@ -67,6 +67,17 @@ fn oxcache_id_zns_ns(fd: RawFd, nsid: u32) -> Result<nvme_zns_id_ns, NVMeError> 
     }
 }
 
+fn oxcache_id_ctrl(fd: RawFd) -> Result<nvme_id_ctrl, NVMeError> {
+    unsafe {
+        let mut data: nvme_id_ctrl = mem::zeroed();
+        let status = nvme_identify_ctrl_wrapper(fd, &mut data);
+        match check_error(status) {
+            Some(err) => return Err(err),
+            None => Ok(data),
+        }
+    }
+}
+
 fn oxcache_id_zns_ctrl(fd: RawFd) -> Result<nvme_zns_id_ctrl, NVMeError> {
     unsafe {
         let mut data: nvme_zns_id_ctrl = mem::zeroed();
@@ -95,6 +106,9 @@ pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
         Ok(opened_fd) => opened_fd,
         Err(err) => return Err(err),
     };
+
+    let ctrl_data = oxcache_id_ctrl(fd)?;
+    let maximum_data_transfer_size = ctrl_data.mdts as usize;
 
     let mut nsid = 0;
     unsafe {
@@ -140,7 +154,8 @@ pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
         total_size_in_bytes,
         current_lba_index,
         lba_perf: 0,
-        timeout: 0, // Unimplemented
+        timeout: 0,
+        maximum_data_transfer_size,
     })
 }
 

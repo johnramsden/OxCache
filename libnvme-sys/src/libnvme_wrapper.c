@@ -9,6 +9,9 @@ int nvme_zns_report_zones_wrapper(int fd, __u32 nsid, __u64 slba,
   return nvme_zns_report_zones(fd, nsid, slba, opts, extended, partial, data_len, data, timeout, result);
 }
 
+int nvme_identify_ctrl_wrapper(int fd, struct nvme_id_ctrl *id) {
+	return nvme_identify_ctrl(fd, id);
+}
 
 int nvme_identify_ns_wrapper(int fd, __u32 nsid, struct nvme_id_ns *ns) {
 	return nvme_identify_ns(fd, nsid, ns);
