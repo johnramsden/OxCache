@@ -25,5 +25,6 @@ flume = "0.11.1"
 lru = "0.16.0"
 uuid = { version = "1.17.0", features = ["v4"] }
 byteorder = "1.5.0"
+aligned-vec = "0.6.4"
 
 

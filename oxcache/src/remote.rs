@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use crate::cache::Cache;
+use aligned_vec::{AVec, RuntimeAlign};
 use aws_sdk_s3::{Client, Config};
 use aws_config::meta::region::RegionProviderChain;
 use crate::server::ServerRemoteConfig;
@@ -42,7 +43,7 @@ impl EmulatedBackend {
         Self { chunk_size, block_size: None }
     }
 
-    fn gen_buffer_prefix(buf: &mut Vec<u8>, key: &str, offset: usize, size: usize) {
+    fn gen_buffer_prefix(buf: &mut AVec<u8, RuntimeAlign>, key: &str, offset: usize, size: usize) {
         // Hash using DefaultHasher (64-bit hash)
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
@@ -67,7 +68,7 @@ impl EmulatedBackend {
         }
         
         let capacity = get_aligned_buffer_size(size, self.block_size.unwrap());
-        let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
+        let mut buffer: AVec<u8, RuntimeAlign> = AVec::with_capacity(self.block_size.unwrap(), capacity);
         Self::gen_buffer_prefix(&mut buffer, key, offset, size);
         
         // Add prefix
@@ -92,7 +93,7 @@ impl EmulatedBackend {
         // Check size
         assert_eq!(buffer.len(), capacity, "Buffer should be exactly capacity-sized");
 
-        Ok(Bytes::from(buffer))
+        Ok(Bytes::from_owner(buffer))
     }
 }
 
