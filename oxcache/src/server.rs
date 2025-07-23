@@ -81,15 +81,9 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
         
-        let device = device::get_device(
-            self.config.disk.as_str(),
-            self.config.chunk_size,
-            self.config.eviction.clone()
-        )?;
-
-        let evictor = Evictor::start(Arc::clone(&device));
-        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&device)));
-        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&device)));
+        let evictor = Evictor::start(Arc::clone(&self.device));
+        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&self.device)));
+        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&self.device)));
 
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());
