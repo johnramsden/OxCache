@@ -42,6 +42,12 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub low_water_evict: Option<usize>,
+    
+    #[arg(long)]
+    pub block_zone_capacity: Option<usize>,    
+    
+    #[arg(long)]
+    pub eviction_interval: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +57,7 @@ pub struct ParsedServerConfig {
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
     pub chunk_size: Option<usize>,
+    pub block_zone_capacity: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +71,7 @@ pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
     pub high_water_evict: Option<usize>,
     pub low_water_evict: Option<usize>,
+    pub eviction_interval: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +156,11 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .clone()
         .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
         .ok_or("Missing low_water_evict")?;
+    let eviction_interval = cli
+        .eviction_interval
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.eviction_interval.clone())
+        .ok_or("Missing eviction_interval")?;
 
     if low_water_evict < high_water_evict {
         return Err("low_water_evict must be greater than high_water_evict".into());
@@ -157,6 +170,11 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .chunk_size
         .or_else(|| config.as_ref()?.server.chunk_size);
     let chunk_size = chunk_size.ok_or("Missing chunk size")?;
+    
+    let block_zone_capacity = cli
+        .block_zone_capacity
+        .or_else(|| config.as_ref()?.server.block_zone_capacity);
+    let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
 
     // TODO: Add secrets from env vars
 
@@ -173,8 +191,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
             eviction_type: eviction_policy,
             high_water_evict,
             low_water_evict,
+            eviction_interval: eviction_interval as u64
         },
         chunk_size,
+        block_zone_capacity
     })
 }
 

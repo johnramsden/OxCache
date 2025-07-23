@@ -264,14 +264,17 @@ pub struct Evictor {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     device: Arc<dyn Device>,
+    eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
+    cache: Arc<Cache>
 }
 
 impl Evictor {
     /// Start the evictor background thread
     pub fn start(
         device: Arc<dyn Device>,
-        eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>,
+        eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
         cache: Arc<Cache>,
+        evict_interval: Duration,
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
@@ -279,19 +282,20 @@ impl Evictor {
 
         let handle = thread::spawn({
             let device = Arc::clone(&device);
+            let cache = Arc::clone(&cache);
+            let eviction_policy = Arc::clone(&eviction_policy);
             move || {
                 while !shutdown_clone.load(Ordering::Relaxed) {
                     println!("Evictor running...");
+
                     let mut policy = eviction_policy.lock().unwrap();
                     let targets = policy.get_evict_targets();
                     drop(policy);
 
-                    device
-                        .evict(targets, cache.clone())
-                        .expect("Eviction failed");
+                    device.evict(targets, cache.clone()).expect("Failed to evict");
 
                     // Sleep to simulate periodic work
-                    thread::sleep(Duration::from_secs(5));
+                    thread::sleep(evict_interval);
                 }
 
                 println!("Evictor shutting down.");
@@ -302,8 +306,11 @@ impl Evictor {
             shutdown,
             handle: Some(handle),
             device,
+            eviction_policy,
+            cache
         })
     }
+
 
     /// Request the evictor to stop and wait for thread to finish
     pub fn stop(mut self) {

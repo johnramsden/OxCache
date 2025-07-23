@@ -11,11 +11,12 @@ use crate::remote::{EmulatedBackend, RemoteBackend};
 use crate::{device, remote, request};
 use std::path::Path;
 use std::sync::Arc;
-
+use std::time::Duration;
 use crate::cache::bucket::Chunk;
 use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
+use flume::{Receiver, Sender};
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
@@ -37,6 +38,7 @@ pub struct ServerEvictionConfig {
     pub eviction_type: String,
     pub high_water_evict: usize,
     pub low_water_evict: usize,
+    pub eviction_interval: u64,
 }
 
 #[derive(Debug)]
@@ -48,6 +50,7 @@ pub struct ServerConfig {
     pub remote: ServerRemoteConfig,
     pub eviction: ServerEvictionConfig,
     pub chunk_size: usize,
+    pub block_zone_capacity: usize,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -62,6 +65,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(
             config.disk.as_str(),
             config.chunk_size,
+            config.block_zone_capacity,
         )?;
         
         remote.set_blocksize(device.get_block_size());
@@ -95,8 +99,9 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         let evictor = Evictor::start(
             Arc::clone(&self.device),
-            &eviction_policy,
+            Arc::clone(&eviction_policy),
             Arc::clone(&self.cache),
+            Duration::from_secs(self.config.eviction.eviction_interval)
         )?;
         let writerpool = Arc::new(WriterPool::start(
             self.config.writer_threads,

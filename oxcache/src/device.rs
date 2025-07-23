@@ -155,10 +155,6 @@ pub struct BlockInterface {
 pub trait Device: Send + Sync {
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation>;
 
-    fn new(device: &str, chunk_size: usize) -> io::Result<Self>
-    where
-        Self: Sized; // Args
-
     fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>;
 
     /// This is expected to remove elements from the cache as well
@@ -180,12 +176,12 @@ fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
     };
 }
 
-pub fn get_device(device: &str, chunk_size: usize) -> io::Result<Arc<dyn Device>> {
+pub fn get_device(device: &str, chunk_size: usize, block_zone_capacity: usize) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
-        Ok(Arc::new(device::Zoned::new(device, chunk_size)?))
+        Ok(Arc::new(Zoned::new(device, chunk_size)?))
     } else {
-        Ok(Arc::new(device::BlockInterface::new(device, chunk_size)?))
+        Ok(Arc::new(BlockInterface::new(device, chunk_size, block_zone_capacity)?))
     }
 }
 
@@ -222,8 +218,7 @@ impl Zoned {
     }
 }
 
-impl Device for Zoned {
-    /// Hold internal state to keep track of zone state
+impl Zoned {
     fn new(device: &str, chunk_size: usize) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
@@ -246,7 +241,10 @@ impl Device for Zoned {
             Err(err) => Err(err.try_into().unwrap()),
         }
     }
+}
 
+impl Device for Zoned {
+    /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
         let zone_index = self.get_free_zone()?;
         // Note: this performs a copy every time because we need to
@@ -376,18 +374,19 @@ impl Device for Zoned {
     }
 }
 
-impl Device for BlockInterface {
-    /// Hold internal state to keep track of "ssd" zone state
-    fn new(device: &str, chunk_size: usize) -> io::Result<Self> {
-        let nvme_config = match nvme::info::nvme_get_info(device) {
+impl BlockInterface {
+    fn new(device: &str, chunk_size: usize, block_zone_capacity: usize) -> io::Result<Self> {
+        let nvme_config = match nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
         };
+        
+        assert!(block_zone_capacity >= chunk_size, "Block zone capacity {} must be at least chunk size {}", block_zone_capacity, chunk_size);
 
         // Num_zones: how to get?
-        let num_zones = 100;
+        let num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
         // Chunks per zone: how to get?
-        let chunks_per_zone = 2;
+        let chunks_per_zone = block_zone_capacity / chunk_size;
 
         Ok(Self {
             nvme_config,
@@ -401,7 +400,10 @@ impl Device for BlockInterface {
             num_zones,
         })
     }
+}
 
+impl Device for BlockInterface {
+    /// Hold internal state to keep track of "ssd" zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
         let mtx = self.state.clone();
         let mut state = mtx.lock().unwrap();
