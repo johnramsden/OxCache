@@ -61,9 +61,11 @@ impl ZoneList {
 
             // ... due to all zones being unavailable...
             // ... then we should wait until there is an open zone available.
-            return Err(EvictNow); // We need to evict anyway. Bottom is left for understanding.
+            return Err(EvictNow);
             // return Err(Wait);
-            // It's worth noting that this case only occurs when all zones are full, but are still being written to. It could be worth it to simply evict in this case instead of waiting.
+            // It's worth noting that this case only occurs when all open zones are full, but are
+            // still being written to. There can still be free zones, we just can't open them yet.
+            // We should wait for the zone to be free somehow
         }
 
         let zone = if can_open_more_zones {
