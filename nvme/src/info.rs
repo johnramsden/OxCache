@@ -67,6 +67,17 @@ fn oxcache_id_zns_ns(fd: RawFd, nsid: u32) -> Result<nvme_zns_id_ns, NVMeError> 
     }
 }
 
+fn oxcache_id_ctrl(fd: RawFd) -> Result<nvme_id_ctrl, NVMeError> {
+    unsafe {
+        let mut data: nvme_id_ctrl = mem::zeroed();
+        let status = nvme_identify_ctrl_wrapper(fd, &mut data);
+        match check_error(status) {
+            Some(err) => return Err(err),
+            None => Ok(data),
+        }
+    }
+}
+
 fn oxcache_id_zns_ctrl(fd: RawFd) -> Result<nvme_zns_id_ctrl, NVMeError> {
     unsafe {
         let mut data: nvme_zns_id_ctrl = mem::zeroed();
@@ -95,6 +106,9 @@ pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
         Ok(opened_fd) => opened_fd,
         Err(err) => return Err(err),
     };
+
+    let ctrl_data = oxcache_id_ctrl(fd)?;
+    let maximum_data_transfer_size = ctrl_data.mdts as usize;
 
     let mut nsid = 0;
     unsafe {
@@ -140,7 +154,8 @@ pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
         total_size_in_bytes,
         current_lba_index,
         lba_perf: 0,
-        timeout: 0, // Unimplemented
+        timeout: 0,
+        maximum_data_transfer_size,
     })
 }
 
@@ -164,7 +179,11 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
 
     // Zone append size limit
     let zns_ctrl_data = oxcache_id_zns_ctrl(nvme_config.fd)?;
-    let zasl = (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as u32;
+    let zasl = if zns_ctrl_data.zasl == 0 {
+        0
+    } else {
+        (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as u32
+    };
 
     // Number of zones
     let nzones = match get_num_zones(nvme_config.fd, nvme_config.nsid) {
@@ -270,13 +289,8 @@ pub fn report_zones(
 
 pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
     let device_name_ = device_name(device);
-
     let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device_name_))?;
-    match zoned.as_str() {
-        "host-managed" => Ok(true),
-        "host-aware" => Ok(true),
-        _ => Ok(false),
-    }
+    Ok(zoned.starts_with("host-managed") || zoned.starts_with("host-aware"))
 }
 
 /// Zone size is in logical blocks

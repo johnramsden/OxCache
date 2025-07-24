@@ -27,5 +27,6 @@ ndarray = "0.16.1"
 uuid = { version = "1.17.0", features = ["v4"] }
 byteorder = "1.5.0"
 once_cell = "1.21.3"
+aligned-vec = "0.6.4"
 
 

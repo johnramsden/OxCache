@@ -97,7 +97,7 @@ pub fn zns_append(
         });
     }
 
-    if config.zasl < data.len() as u32 {
+    if config.zasl != 0 && config.zasl < data.len() as u32 {
         return Err(NVMeError::AppendSizeTooLarge {
             max_append: config.zasl,
             trying_to_append: data.len() as u32,
