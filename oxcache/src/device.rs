@@ -1,18 +1,13 @@
 use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
-use crate::device;
-use crate::eviction::{EvictTarget, EvictionPolicy, EvictionPolicyWrapper};
-use crate::server::{RUNTIME, ServerEvictionConfig};
+use crate::eviction::EvictTarget;
+use crate::server::RUNTIME;
 use bytes::Bytes;
-use bytes::BytesMut;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
 use nvme::ops::{reset_zone, zns_append, zns_read};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
-use std::io::{self, Error, ErrorKind};
-use std::ops::Deref;
-use std::os::fd::{AsRawFd, RawFd};
+use std::io::{self, ErrorKind};
 use std::sync::{Arc, Mutex};
 
 #[derive(Copy, Clone)]

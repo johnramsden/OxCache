@@ -4,16 +4,13 @@ use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use oxcache::request;
 use oxcache::request::{GetRequest, Request};
-use rand::distr::weighted::Error;
 use rand::prelude::IndexedRandom;
 use rand::rng;
-use std::fmt::format;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio;
-use tokio::io::split;
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -39,7 +36,7 @@ const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nr_queries = 10000;
     let nr_uuids = 100;
-    let mut queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let args = Cli::parse();
     let counter = Arc::new(AtomicUsize::new(0));
     let step = nr_queries / 10; // 10%
@@ -125,13 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let msg: Result<(request::GetResponse, usize), DecodeError> =
                         bincode::serde::decode_from_slice(bytes, bincode::config::standard());
                     match msg.unwrap().0 {
-                        (request::GetResponse::Error(s)) => {
+                        request::GetResponse::Error(s) => {
                             return Err(std::io::Error::new(
                                 ErrorKind::Other,
                                 format!("[t.{}] Received error {} from client", c, s),
                             ));
                         }
-                        (request::GetResponse::Response(_)) => {}
+                        request::GetResponse::Response(_) => {}
                     }
                 }
             }

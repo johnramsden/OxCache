@@ -8,12 +8,11 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
 use crate::cache::bucket::Chunk;
-use crate::remote::{EmulatedBackend, RemoteBackend};
-use crate::{device, remote, request};
+use crate::remote::RemoteBackend;
+use crate::{device, request};
 use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
-use flume::{Receiver, Sender};
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use std::path::Path;

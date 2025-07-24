@@ -1,10 +1,9 @@
 use std::{
     ffi::c_void,
-    fs::{self, File},
-    io::{self, Read},
+    fs::{self},
+    io::{self},
     mem,
     os::fd::RawFd,
-    ptr::null,
 };
 
 use libnvme_sys::bindings::*;
@@ -12,7 +11,7 @@ use libnvme_sys::bindings::*;
 use crate::{
     ops::open_device,
     types::{NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor},
-    util::{check_error, nullptr, shift_and_mask},
+    util::{check_error, shift_and_mask},
 };
 
 macro_rules! const_assert {

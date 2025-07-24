@@ -4,10 +4,7 @@ use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use oxcache::request;
 use oxcache::request::{GetRequest, Request};
-use rand::distr::weighted::Error;
 use rand::prelude::IndexedRandom;
-use rand::rng;
-use std::fmt::format;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +14,6 @@ use tokio::io::split;
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -35,7 +31,7 @@ struct Cli {
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader};
 
 fn read_queries(path: &str) -> io::Result<Vec<i32>> {
     let file = File::open(path)?;
@@ -54,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let mut query_inputs = read_queries(&args.data_file)?;
     let nr_queries = query_inputs.len();
-    let mut queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
 
     let counter = Arc::new(AtomicUsize::new(0));
     let step = nr_queries / 10; // 10%
@@ -124,13 +120,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let msg: Result<(request::GetResponse, usize), DecodeError> =
                         bincode::serde::decode_from_slice(bytes, bincode::config::standard());
                     match msg.unwrap().0 {
-                        (request::GetResponse::Error(s)) => {
+                        request::GetResponse::Error(s) => {
                             return Err(std::io::Error::new(
                                 ErrorKind::Other,
                                 format!("[t.{}] Received error {} from client", c, s),
                             ));
                         }
-                        (request::GetResponse::Response(_)) => {}
+                        request::GetResponse::Response(_) => {}
                     }
                 }
             }

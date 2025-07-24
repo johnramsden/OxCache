@@ -1,6 +1,6 @@
 use clap::Parser;
 use futures::sink::SinkExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, split};
+use tokio::io::split;
 use tokio::net::UnixStream;
 use tokio::time::{Duration, sleep};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -60,10 +60,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let msg: Result<(request::GetResponse, usize), DecodeError> =
                 bincode::serde::decode_from_slice(bytes, bincode::config::standard());
             match msg?.0 {
-                (request::GetResponse::Error(s)) => {
+                request::GetResponse::Error(s) => {
                     assert!(!req.3, "Expected success, recieved error {}", s);
                 }
-                (request::GetResponse::Response(_)) => {
+                request::GetResponse::Response(_) => {
                     assert!(req.3, "Expected error, recieved success");
                 }
             }

@@ -1,10 +1,9 @@
 use crate::{
-    cache::{self, bucket::ChunkLocation},
+    cache::{self},
     device,
     eviction::EvictionPolicyWrapper,
 };
 use bytes::Bytes;
-use bytes::BytesMut;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};

@@ -1,11 +1,5 @@
-use crate::device;
 use crate::device::Device;
-use crate::{
-    cache::{Cache, bucket::ChunkLocation},
-    server::ServerEvictionConfig,
-};
-use core::fmt::Debug;
-use std::collections::{HashMap, VecDeque};
+use crate::cache::{Cache, bucket::ChunkLocation};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -14,8 +8,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use lru::LruCache;
-use std::num::NonZeroUsize;
-use tokio::{runtime::Handle, task::spawn_blocking};
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -162,7 +154,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
 
         // We only want to put it in the LRU once the zone is full
-        if (chunk.index as usize == self.nr_chunks_per_zone - 1) {
+        if chunk.index as usize == self.nr_chunks_per_zone - 1 {
             self.lru.put(chunk.zone, ());
         }
     }
@@ -335,6 +327,8 @@ impl Evictor {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::fmt::Debug;
     use super::*;
     use std::hash::Hash;
 

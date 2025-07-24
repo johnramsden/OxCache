@@ -1,6 +1,6 @@
 use std::{
     convert::Infallible,
-    fmt::{self, Debug, Display},
+    fmt::{self, Debug},
     io,
     os::fd::RawFd,
 };

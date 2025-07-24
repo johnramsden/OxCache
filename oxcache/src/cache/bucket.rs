@@ -1,8 +1,6 @@
-use crate::cache::Cache;
 use crate::request::GetRequest;
-use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Chunk {

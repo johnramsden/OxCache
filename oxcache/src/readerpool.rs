@@ -1,7 +1,6 @@
 use crate::eviction::EvictionPolicyWrapper;
-use crate::writerpool::WriteResponse;
 use crate::{cache, device};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};

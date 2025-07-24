@@ -1,5 +1,5 @@
 use nvme::info::{nvme_get_info, zns_get_info};
-use nvme::ops::{open_device, reset_zone, zns_append, zns_read};
+use nvme::ops::{reset_zone, zns_append, zns_read};
 use nvme::types::{NVMeConfig, ZNSConfig};
 use std::path::PathBuf;
 use std::{fs::File, io::Read};
