@@ -108,7 +108,7 @@ impl Zoned {
         let mut zone_list = mtx.lock().unwrap();
         match zone_list.remove() {
             Ok(zone_idx) => Ok(zone_idx),
-            Err(()) => Err(io::Error::new(io::ErrorKind::StorageFull, "Cache is full")),
+            Err(_) => Err(io::Error::new(io::ErrorKind::StorageFull, "Cache is full")),
         }
     }
 }
@@ -316,7 +316,7 @@ impl Device for BlockInterface {
 
         let chunk_location = match state.active_zones.remove_chunk_location() {
             Ok(location) => location,
-            Err(()) => {
+            Err(_) => {
                 eprintln!("[append] Failed to allocate chunk: no available space in active zones");
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::StorageFull,
