@@ -29,12 +29,7 @@ impl EvictionPolicyWrapper {
         nr_chunks_per_zone: usize,
     ) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
-            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new(
-                high_water,
-                low_water,
-                nr_zones,
-                nr_chunks_per_zone,
-            ))),
+            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
             "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(
                 high_water,
                 low_water,
@@ -85,37 +80,22 @@ pub trait EvictionPolicy: Send + Sync {
     fn get_evict_targets(&mut self) -> Self::Target;
 }
 
-pub struct DummyEvictionPolicy {
-    high_water: usize,
-    low_water: usize,
-    nr_zones: usize,
-    nr_chunks_per_zone: usize,
-}
+pub struct DummyEvictionPolicy {}
 
 impl DummyEvictionPolicy {
-    pub fn new(
-        high_water: usize,
-        low_water: usize,
-        nr_zones: usize,
-        nr_chunks_per_zone: usize,
-    ) -> Self {
-        Self {
-            high_water,
-            low_water,
-            nr_zones,
-            nr_chunks_per_zone,
-        }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
 impl EvictionPolicy for DummyEvictionPolicy {
     type Target = Vec<usize>;
-    fn write_update(&mut self, chunk: ChunkLocation) {}
+    fn write_update(&mut self, _chunk: ChunkLocation) {}
 
-    fn read_update(&mut self, chunk: ChunkLocation) {}
+    fn read_update(&mut self, _chunk: ChunkLocation) {}
 
     fn get_evict_targets(&mut self) -> Self::Target {
-        unimplemented!();
+        vec![]
     }
 }
 
@@ -255,9 +235,6 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
-    device: Arc<dyn Device>,
-    eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
-    cache: Arc<Cache>,
 }
 
 impl Evictor {
@@ -299,9 +276,6 @@ impl Evictor {
         Ok(Self {
             shutdown,
             handle: Some(handle),
-            device,
-            eviction_policy,
-            cache,
         })
     }
 

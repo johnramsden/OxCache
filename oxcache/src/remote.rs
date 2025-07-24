@@ -17,16 +17,16 @@ pub trait RemoteBackend: Send + Sync {
 }
 
 pub struct S3Backend {
-    bucket: String,
-    chunk_size: usize,
+    _bucket: String,
+    _chunk_size: usize,
     block_size: Option<usize>, // For buffer alignment
 }
 
 impl S3Backend {
     pub fn new(bucket: String, chunk_size: usize) -> Self {
         Self {
-            bucket,
-            chunk_size,
+            _bucket: bucket,
+            _chunk_size: chunk_size,
             block_size: None,
         }
     }
@@ -129,7 +129,7 @@ fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
 
 #[async_trait]
 impl RemoteBackend for S3Backend {
-    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
+    async fn get(&self, _key: &str, _offset: usize, _size: usize) -> tokio::io::Result<Bytes> {
         // TODO: Implement with AWS SDK
         Ok(Bytes::from(vec![]))
     }

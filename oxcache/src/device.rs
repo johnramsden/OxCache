@@ -86,6 +86,7 @@ impl ZoneList {
     }
 
     // Reset the selected zone
+    #[allow(dead_code)]
     fn reset_zone(&mut self, idx: usize) {
         self.available_zones.push_back(Zone {
             index: idx,
@@ -119,22 +120,22 @@ pub struct Zoned {
 // Information about each zone
 #[derive(Clone)]
 pub struct BlockZoneInfo {
-    write_pointer: u64,
+    _write_pointer: u64,
 }
 
 pub struct BlockDeviceState {
-    zones: Vec<BlockZoneInfo>,
+    _zones: Vec<BlockZoneInfo>,
     active_zones: ZoneList,
-    chunk_size: usize,
+    _chunk_size: usize,
 }
 
 impl BlockDeviceState {
     fn new(num_zones: usize, chunks_per_zone: usize, chunk_size: usize) -> Self {
-        let zones = vec![BlockZoneInfo { write_pointer: 0 }; num_zones];
+        let zones = vec![BlockZoneInfo { _write_pointer: 0 }; num_zones];
         Self {
-            zones,
+            _zones: zones,
             active_zones: ZoneList::new(num_zones, chunks_per_zone),
-            chunk_size,
+            _chunk_size: chunk_size,
         }
     }
 }
@@ -161,14 +162,6 @@ pub trait Device: Send + Sync {
 
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
-}
-
-fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
-    return if buffer_size.rem_euclid(block_size) != 0 {
-        buffer_size + (block_size - buffer_size.rem_euclid(block_size))
-    } else {
-        buffer_size
-    };
 }
 
 pub fn get_device(

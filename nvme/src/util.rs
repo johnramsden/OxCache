@@ -37,6 +37,7 @@ pub const nullptr: *mut c_void = null::<c_void>() as *mut c_void;
 /// let errno = get_errno(1);
 /// println!("Errno: {}", errno);
 /// ```
+#[allow(dead_code)]
 pub fn get_errno(status: nvme_status_field) -> u8 {
     unsafe { nvme_status_to_errno(status as i32, false) }
 }

@@ -121,7 +121,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let shutdown_signal = shutdown.clone();
 
         // Spawn a task to listen for Ctrl+C
-        let shutdown_task = tokio::spawn({
+        let _shutdown_task = tokio::spawn({
             async move {
                 tokio::signal::ctrl_c()
                     .await
@@ -145,7 +145,6 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                             println!("Accepted connection: {:?}", addr);
 
                             tokio::spawn({
-                                let writer_pool = Arc::clone(&self.cache);
                                 let remote = Arc::clone(&self.remote);
                                 let writerpool = Arc::clone(&writerpool);
                                 let readerpool = Arc::clone(&readerpool);
@@ -341,9 +340,6 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                     request::Request::Close => {
                         println!("Received close request");
                         break;
-                    }
-                    _ => {
-                        println!("Unknown request: {:?}", request);
                     }
                 }
             }
