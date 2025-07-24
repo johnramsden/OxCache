@@ -31,6 +31,7 @@ pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 pub struct ServerRemoteConfig {
     pub remote_type: String,
     pub bucket: Option<String>,
+    pub remote_artificial_delay_microsec: Option<usize>,
 }
 
 #[derive(Debug, Clone)]

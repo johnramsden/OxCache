@@ -48,6 +48,9 @@ pub struct CliArgs {
     
     #[arg(long)]
     pub eviction_interval: Option<usize>,
+    
+    #[arg(long)]
+    pub remote_artificial_delay_microsec: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +67,7 @@ pub struct ParsedServerConfig {
 pub struct ParsedRemoteConfig {
     pub remote_type: Option<String>,
     pub bucket: Option<String>,
+    pub remote_artificial_delay_microsec: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +116,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .remote_bucket
         .clone()
         .or_else(|| config.as_ref()?.remote.bucket.clone());
+    let remote_artificial_delay_microsec = cli
+        .remote_artificial_delay_microsec
+        .clone()
+        .or_else(|| config.as_ref()?.remote.remote_artificial_delay_microsec.clone());
 
     let socket = socket.ok_or("Missing required `socket` (in CLI or file)")?;
     let disk = disk.ok_or("Missing required `disk` (in CLI or file)")?;
@@ -138,6 +146,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
 
     if remote_type != "emulated" && remote_bucket.is_none() {
         return Err("remote_bucket must be set if remote_type is not `emulated`".into());
+    }
+    
+    if remote_type != "emulated" && remote_artificial_delay_microsec.is_some() {
+        eprintln!("WARNING: remote_artificial_delay_microsec has no effect if remote_type is not `emulated`");
     }
 
     let eviction_policy = cli
@@ -186,6 +198,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         remote: ServerRemoteConfig {
             remote_type,
             bucket: remote_bucket,
+            remote_artificial_delay_microsec
         },
         eviction: ServerEvictionConfig {
             eviction_type: eviction_policy,
@@ -210,10 +223,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let chunk_size = config.chunk_size;
+    let remote_artificial_delay_microsec = config.remote.remote_artificial_delay_microsec;
 
     match remote {
         remote::RemoteBackendType::Emulated => {
-            Server::new(config, remote::EmulatedBackend::new(chunk_size))?.run().await?;
+            Server::new(config, remote::EmulatedBackend::new(chunk_size, remote_artificial_delay_microsec))?.run().await?;
         },
         remote::RemoteBackendType::S3 => {
             let bucket = config.remote.bucket.clone().unwrap();
