@@ -9,14 +9,18 @@ type Zone = VecDeque<ChunkIndex>;
 pub struct ChunkQueue {
     free_zones: VecDeque<ZoneIndex>,
     zones: Vec<Zone>,
-    chunks_per_zone: usize
+    chunks_per_zone: usize,
 }
 
 impl ChunkQueue {
     pub fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
         let free_zones = (0..num_zones).collect();
         let zones = vec![(0..chunks_per_zone as ChunkIndex).collect(); num_zones];
-        Self { free_zones, zones, chunks_per_zone }
+        Self {
+            free_zones,
+            zones,
+            chunks_per_zone,
+        }
     }
 
     // Get a chunk to write to
