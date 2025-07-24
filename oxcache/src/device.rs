@@ -111,6 +111,12 @@ impl Zoned {
             Err(_) => Err(io::Error::new(io::ErrorKind::StorageFull, "Cache is full")),
         }
     }
+
+    fn complete_write(&self, zone_idx: usize) {
+        let mtx = Arc::clone(&self.zones);
+        let mut zone_list = mtx.lock().unwrap();
+        zone_list.write_finish(zone_idx)
+    }
 }
 
 impl Zoned {
@@ -159,10 +165,14 @@ impl Device for Zoned {
             data.as_ref(),
         ) {
             Ok(lba) => {
+                self.complete_write(zone_index);
                 let chunk = lba / self.config.chunk_size as u64;
                 Ok(ChunkLocation::new(zone_index, chunk))
             }
-            Err(err) => Err(err.try_into().unwrap()),
+            Err(err) => {
+                self.complete_write(zone_index);
+                Err(err.try_into().unwrap())
+            }
         }
     }
 
