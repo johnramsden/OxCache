@@ -1,3 +1,10 @@
+use crate::cache::Cache;
+use crate::cache::bucket::ChunkLocation;
+use crate::device;
+use crate::eviction::{EvictTarget, EvictionPolicy, EvictionPolicyWrapper};
+use crate::server::{RUNTIME, ServerEvictionConfig};
+use bytes::Bytes;
+use bytes::BytesMut;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
 use nvme::ops::{reset_zone, zns_append, zns_read};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
@@ -7,13 +14,6 @@ use std::io::{self, Error, ErrorKind};
 use std::ops::Deref;
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
-use bytes::BytesMut;
-use bytes::Bytes;
-use crate::cache::bucket::ChunkLocation;
-use crate::cache::Cache;
-use crate::device;
-use crate::eviction::{EvictTarget, EvictionPolicy, EvictionPolicyWrapper};
-use crate::server::{ServerEvictionConfig, RUNTIME};
 
 #[derive(Copy, Clone)]
 struct Zone {
@@ -176,12 +176,20 @@ fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
     };
 }
 
-pub fn get_device(device: &str, chunk_size: usize, block_zone_capacity: usize) -> io::Result<Arc<dyn Device>> {
+pub fn get_device(
+    device: &str,
+    chunk_size: usize,
+    block_zone_capacity: usize,
+) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
         Ok(Arc::new(Zoned::new(device, chunk_size)?))
     } else {
-        Ok(Arc::new(BlockInterface::new(device, chunk_size, block_zone_capacity)?))
+        Ok(Arc::new(BlockInterface::new(
+            device,
+            chunk_size,
+            block_zone_capacity,
+        )?))
     }
 }
 
@@ -249,8 +257,11 @@ impl Device for Zoned {
         let zone_index = self.get_free_zone()?;
         // Note: this performs a copy every time because we need to
         // pass in a mutable vector to libnvme
-        assert_eq!(data.as_ptr() as usize % self.nvme_config.logical_block_size as usize, 0);
-        
+        assert_eq!(
+            data.as_ptr() as usize % self.nvme_config.logical_block_size as usize,
+            0
+        );
+
         match zns_append(
             &self.nvme_config,
             &self.config,
@@ -284,7 +295,7 @@ impl Device for Zoned {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
         let mut data = vec![0u8; self.config.chunk_size];
         self.read_into_buffer(location, &mut data)?;
-        
+
         Ok(Bytes::from(data))
     }
 
@@ -380,8 +391,13 @@ impl BlockInterface {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
         };
-        
-        assert!(block_zone_capacity >= chunk_size, "Block zone capacity {} must be at least chunk size {}", block_zone_capacity, chunk_size);
+
+        assert!(
+            block_zone_capacity >= chunk_size,
+            "Block zone capacity {} must be at least chunk size {}",
+            block_zone_capacity,
+            chunk_size
+        );
 
         // Num_zones: how to get?
         let num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
@@ -504,7 +520,7 @@ impl Device for BlockInterface {
     fn get_chunks_per_zone(&self) -> usize {
         self.chunks_per_zone
     }
-    
+
     fn get_block_size(&self) -> usize {
         self.nvme_config.logical_block_size as usize
     }

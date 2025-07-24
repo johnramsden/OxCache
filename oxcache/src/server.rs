@@ -7,25 +7,24 @@ use std::error::Error;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
+use crate::cache::bucket::Chunk;
 use crate::remote::{EmulatedBackend, RemoteBackend};
 use crate::{device, remote, request};
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
-use crate::cache::bucket::Chunk;
 use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
 use flume::{Receiver, Sender};
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 // Global tokio runtime
-pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    Runtime::new().expect("Failed to create Tokio runtime")
-});
+pub static RUNTIME: Lazy<Runtime> =
+    Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {
@@ -68,11 +67,14 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             config.chunk_size,
             config.block_zone_capacity,
         )?;
-        
+
         remote.set_blocksize(device.get_block_size());
 
         Ok(Self {
-            cache: Arc::new(Cache::new(device.get_num_zones(), device.get_chunks_per_zone())),
+            cache: Arc::new(Cache::new(
+                device.get_num_zones(),
+                device.get_chunks_per_zone(),
+            )),
             remote: Arc::new(remote),
             config,
             device,
@@ -102,7 +104,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&self.device),
             Arc::clone(&eviction_policy),
             Arc::clone(&self.cache),
-            Duration::from_secs(self.config.eviction.eviction_interval)
+            Duration::from_secs(self.config.eviction.eviction_interval),
         )?;
         let writerpool = Arc::new(WriterPool::start(
             self.config.writer_threads,
@@ -263,7 +265,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     };
 
                                     let encoded = bincode::serde::encode_to_vec(
-                                        request::GetResponse::Response(read_response.clone()), 
+                                        request::GetResponse::Response(read_response.clone()),
                                         bincode::config::standard()
                                     ).unwrap();
                                     {

@@ -1,7 +1,7 @@
 use clap::Parser;
 use oxcache;
 use oxcache::remote;
-use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig, RUNTIME};
+use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
 use serde::Deserialize;
 use std::fs;
 use std::process::exit;
@@ -42,13 +42,13 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub low_water_evict: Option<usize>,
-    
+
     #[arg(long)]
-    pub block_zone_capacity: Option<usize>,    
-    
+    pub block_zone_capacity: Option<usize>,
+
     #[arg(long)]
     pub eviction_interval: Option<usize>,
-    
+
     #[arg(long)]
     pub remote_artificial_delay_microsec: Option<usize>,
 }
@@ -116,10 +116,14 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .remote_bucket
         .clone()
         .or_else(|| config.as_ref()?.remote.bucket.clone());
-    let remote_artificial_delay_microsec = cli
-        .remote_artificial_delay_microsec
-        .clone()
-        .or_else(|| config.as_ref()?.remote.remote_artificial_delay_microsec.clone());
+    let remote_artificial_delay_microsec =
+        cli.remote_artificial_delay_microsec.clone().or_else(|| {
+            config
+                .as_ref()?
+                .remote
+                .remote_artificial_delay_microsec
+                .clone()
+        });
 
     let socket = socket.ok_or("Missing required `socket` (in CLI or file)")?;
     let disk = disk.ok_or("Missing required `disk` (in CLI or file)")?;
@@ -147,9 +151,11 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     if remote_type != "emulated" && remote_bucket.is_none() {
         return Err("remote_bucket must be set if remote_type is not `emulated`".into());
     }
-    
+
     if remote_type != "emulated" && remote_artificial_delay_microsec.is_some() {
-        eprintln!("WARNING: remote_artificial_delay_microsec has no effect if remote_type is not `emulated`");
+        eprintln!(
+            "WARNING: remote_artificial_delay_microsec has no effect if remote_type is not `emulated`"
+        );
     }
 
     let eviction_policy = cli
@@ -182,7 +188,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .chunk_size
         .or_else(|| config.as_ref()?.server.chunk_size);
     let chunk_size = chunk_size.ok_or("Missing chunk size")?;
-    
+
     let block_zone_capacity = cli
         .block_zone_capacity
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
@@ -198,16 +204,16 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         remote: ServerRemoteConfig {
             remote_type,
             bucket: remote_bucket,
-            remote_artificial_delay_microsec
+            remote_artificial_delay_microsec,
         },
         eviction: ServerEvictionConfig {
             eviction_type: eviction_policy,
             high_water_evict,
             low_water_evict,
-            eviction_interval: eviction_interval as u64
+            eviction_interval: eviction_interval as u64,
         },
         chunk_size,
-        block_zone_capacity
+        block_zone_capacity,
     })
 }
 
@@ -227,11 +233,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     match remote {
         remote::RemoteBackendType::Emulated => {
-            Server::new(config, remote::EmulatedBackend::new(chunk_size, remote_artificial_delay_microsec))?.run().await?;
-        },
+            Server::new(
+                config,
+                remote::EmulatedBackend::new(chunk_size, remote_artificial_delay_microsec),
+            )?
+            .run()
+            .await?;
+        }
         remote::RemoteBackendType::S3 => {
             let bucket = config.remote.bucket.clone().unwrap();
-            Server::new(config, remote::S3Backend::new(bucket, chunk_size))?.run().await?;
+            Server::new(config, remote::S3Backend::new(bucket, chunk_size))?
+                .run()
+                .await?;
         }
     }
 
@@ -241,4 +254,3 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     RUNTIME.block_on(async_main())
 }
-

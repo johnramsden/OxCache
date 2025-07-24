@@ -160,7 +160,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
 
     fn write_update(&mut self, chunk: ChunkLocation) {
         assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
-        
+
         // We only want to put it in the LRU once the zone is full
         if (chunk.index as usize == self.nr_chunks_per_zone - 1) {
             self.lru.put(chunk.zone, ());
@@ -182,15 +182,15 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         if lru_len < high_water_mark {
             return vec![];
         }
-        
+
         let low_water_mark = self.nr_zones - self.low_water;
         if lru_len < low_water_mark {
             return vec![];
         }
-        
+
         let cap = lru_len - low_water_mark;
 
-        let mut targets = Vec::with_capacity(cap);;
+        let mut targets = Vec::with_capacity(cap);
 
         while self.lru.len() >= low_water_mark {
             targets.push(self.lru.pop_lru().unwrap().0)
@@ -265,7 +265,7 @@ pub struct Evictor {
     handle: Option<JoinHandle<()>>,
     device: Arc<dyn Device>,
     eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
-    cache: Arc<Cache>
+    cache: Arc<Cache>,
 }
 
 impl Evictor {
@@ -292,7 +292,9 @@ impl Evictor {
                     let targets = policy.get_evict_targets();
                     drop(policy);
 
-                    device.evict(targets, cache.clone()).expect("Failed to evict");
+                    device
+                        .evict(targets, cache.clone())
+                        .expect("Failed to evict");
 
                     // Sleep to simulate periodic work
                     thread::sleep(evict_interval);
@@ -307,10 +309,9 @@ impl Evictor {
             handle: Some(handle),
             device,
             eviction_policy,
-            cache
+            cache,
         })
     }
-
 
     /// Request the evictor to stop and wait for thread to finish
     pub fn stop(mut self) {

@@ -3,11 +3,11 @@ use crate::{
     device,
     eviction::EvictionPolicyWrapper,
 };
+use bytes::Bytes;
+use bytes::BytesMut;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use bytes::BytesMut;
-use bytes::Bytes;
 
 #[derive(Debug)]
 pub struct WriteResponse {

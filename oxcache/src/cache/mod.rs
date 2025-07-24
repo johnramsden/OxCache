@@ -31,10 +31,7 @@ impl Cache {
     pub fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
         Self {
             buckets: RwLock::new(HashMap::new()),
-            zone_to_entry: Mutex::new(ArrayBase::from_elem(
-                (num_zones, chunks_per_zone),
-                None,
-            )),
+            zone_to_entry: Mutex::new(ArrayBase::from_elem((num_zones, chunks_per_zone), None)),
         }
     }
 
@@ -152,7 +149,7 @@ impl Cache {
     pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
         let mut map_guard = self.buckets.write().await;
         let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
-        
+
         // Loop over zones
         for zone_index in zone_indices {
             // Get slice representing a zone
@@ -175,7 +172,7 @@ impl Cache {
                         return Err(io::Error::new(
                             io::ErrorKind::NotFound,
                             format!("Couldn't find entry while removing zones: {:?}", chunk),
-                        ))
+                        ));
                     }
                 };
                 // Get the write lock so that we can be sure that no one is reading this chunk anymore

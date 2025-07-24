@@ -48,8 +48,8 @@ pub struct NVMeConfig {
     pub total_size_in_bytes: u64,
     pub current_lba_index: usize,
     pub maximum_data_transfer_size: usize, // Zero means that there is no limit
-    pub lba_perf: u64, // Unimplemented
-    pub timeout: u32,  // Default 0
+    pub lba_perf: u64,                     // Unimplemented
+    pub timeout: u32,                      // Default 0
 }
 
 // Assumes that the zone capacity is the same for every zone

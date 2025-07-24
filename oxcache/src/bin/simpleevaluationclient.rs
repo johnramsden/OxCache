@@ -28,7 +28,7 @@ struct Cli {
 
     #[arg(long)]
     num_clients: usize,
-    
+
     #[arg(long)]
     query_size: usize,
 }
@@ -137,7 +137,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }));
     }
-
 
     for handle in handles {
         let res = handle.await;

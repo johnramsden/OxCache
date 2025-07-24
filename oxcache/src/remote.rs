@@ -1,9 +1,10 @@
 use crate::cache::Cache;
-use aligned_vec::{AVec, RuntimeAlign};
-use aws_sdk_s3::{Client, Config};
-use aws_config::meta::region::RegionProviderChain;
 use crate::server::ServerRemoteConfig;
+use aligned_vec::{AVec, RuntimeAlign};
 use async_trait::async_trait;
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_s3::{Client, Config};
+use bytes::{Bytes, BytesMut};
 use rand::{RngCore, SeedableRng};
 use rand_pcg::Pcg64;
 use std::collections::hash_map::DefaultHasher;
@@ -11,7 +12,6 @@ use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::time::Duration;
-use bytes::{Bytes, BytesMut};
 use tokio::time::sleep;
 
 #[async_trait]
@@ -29,7 +29,11 @@ pub struct S3Backend {
 
 impl S3Backend {
     pub fn new(bucket: String, chunk_size: usize) -> Self {
-        Self { bucket, chunk_size, block_size: None }
+        Self {
+            bucket,
+            chunk_size,
+            block_size: None,
+        }
     }
 }
 
@@ -41,8 +45,12 @@ pub struct EmulatedBackend {
 }
 
 impl EmulatedBackend {
-    pub fn new(chunk_size: usize,remote_artificial_delay_microsec: Option<usize>) -> Self {
-        Self { chunk_size, block_size: None, remote_artificial_delay_microsec }
+    pub fn new(chunk_size: usize, remote_artificial_delay_microsec: Option<usize>) -> Self {
+        Self {
+            chunk_size,
+            block_size: None,
+            remote_artificial_delay_microsec,
+        }
     }
 
     fn gen_buffer_prefix(buf: &mut AVec<u8, RuntimeAlign>, key: &str, offset: usize, size: usize) {
@@ -69,17 +77,27 @@ impl EmulatedBackend {
         }
 
         if self.block_size.is_none() {
-            return Err(std::io::Error::new(ErrorKind::InvalidInput, "Block size not set"));
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "Block size not set",
+            ));
         }
-        
+
         let capacity = get_aligned_buffer_size(size, self.block_size.unwrap());
-        let mut buffer: AVec<u8, RuntimeAlign> = AVec::with_capacity(self.block_size.unwrap(), capacity);
+        let mut buffer: AVec<u8, RuntimeAlign> =
+            AVec::with_capacity(self.block_size.unwrap(), capacity);
         Self::gen_buffer_prefix(&mut buffer, key, offset, size);
-        
+
         // Add prefix
         let prefix_len = buffer.len();
         if size < prefix_len {
-            return Err(std::io::Error::new(ErrorKind::InvalidInput, format!("buffer size {} < (prefix_len {}) too small", size, prefix_len)));
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "buffer size {} < (prefix_len {}) too small",
+                    size, prefix_len
+                ),
+            ));
         }
 
         // Fill the rest of the buffer with random bytes
@@ -96,7 +114,11 @@ impl EmulatedBackend {
         }
 
         // Check size
-        assert_eq!(buffer.len(), capacity, "Buffer should be exactly capacity-sized");
+        assert_eq!(
+            buffer.len(),
+            capacity,
+            "Buffer should be exactly capacity-sized"
+        );
 
         Ok(Bytes::from_owner(buffer))
     }
@@ -126,9 +148,12 @@ impl RemoteBackend for S3Backend {
 impl RemoteBackend for EmulatedBackend {
     async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
         if let Some(remote_artificial_delay_microsec) = self.remote_artificial_delay_microsec {
-            sleep(Duration::from_micros(remote_artificial_delay_microsec as u64)).await;
+            sleep(Duration::from_micros(
+                remote_artificial_delay_microsec as u64,
+            ))
+            .await;
         }
-        
+
         self.gen_random_buffer(key, offset, size)
     }
 

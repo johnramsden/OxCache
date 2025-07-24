@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use bytes::{Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetRequest {
