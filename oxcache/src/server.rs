@@ -4,8 +4,6 @@ use crate::eviction::{EvictionPolicyWrapper, Evictor};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
-// use tokio::spawn;
-use tokio::io::{split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -13,18 +11,27 @@ use crate::remote::{EmulatedBackend, RemoteBackend};
 use crate::{device, remote, request};
 use std::path::Path;
 use std::sync::Arc;
-
+use std::time::Duration;
+use crate::cache::bucket::Chunk;
 use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
+use flume::{Receiver, Sender};
 use futures::{SinkExt, StreamExt};
+use once_cell::sync::Lazy;
+use tokio::runtime::Runtime;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::cache::bucket::Chunk;
+
+// Global tokio runtime
+pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    Runtime::new().expect("Failed to create Tokio runtime")
+});
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {
     pub remote_type: String,
     pub bucket: Option<String>,
+    pub remote_artificial_delay_microsec: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +39,7 @@ pub struct ServerEvictionConfig {
     pub eviction_type: String,
     pub high_water_evict: usize,
     pub low_water_evict: usize,
+    pub eviction_interval: u64,
 }
 
 #[derive(Debug)]
@@ -43,6 +51,7 @@ pub struct ServerConfig {
     pub remote: ServerRemoteConfig,
     pub eviction: ServerEvictionConfig,
     pub chunk_size: usize,
+    pub block_zone_capacity: usize,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -57,7 +66,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         let device = device::get_device(
             config.disk.as_str(),
             config.chunk_size,
-            config.eviction.clone()
+            config.block_zone_capacity,
         )?;
         
         remote.set_blocksize(device.get_block_size());
@@ -80,10 +89,31 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         let listener = UnixListener::bind(socket_path)?;
         println!("Listening on socket: {}", self.config.socket);
-        
-        let evictor = Evictor::start(Arc::clone(&self.device));
-        let writerpool = Arc::new(WriterPool::start(self.config.writer_threads, Arc::clone(&self.device)));
-        let readerpool = Arc::new(ReaderPool::start(self.config.reader_threads, Arc::clone(&self.device)));
+
+        let eviction_policy = Arc::new(std::sync::Mutex::new(EvictionPolicyWrapper::new(
+            self.config.eviction.eviction_type.as_str(),
+            self.config.eviction.high_water_evict,
+            self.config.eviction.low_water_evict,
+            self.device.get_num_zones(),
+            self.device.get_chunks_per_zone(),
+        )?));
+
+        let evictor = Evictor::start(
+            Arc::clone(&self.device),
+            Arc::clone(&eviction_policy),
+            Arc::clone(&self.cache),
+            Duration::from_secs(self.config.eviction.eviction_interval)
+        )?;
+        let writerpool = Arc::new(WriterPool::start(
+            self.config.writer_threads,
+            Arc::clone(&self.device),
+            &eviction_policy,
+        ));
+        let readerpool = Arc::new(ReaderPool::start(
+            self.config.reader_threads,
+            Arc::clone(&self.device),
+            &eviction_policy,
+        ));
 
         // Shutdown signal
         let shutdown = Arc::new(Notify::new());
@@ -162,7 +192,12 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, codec)));
 
     while let Some(frame) = reader.next().await {
-        let f = frame.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("frame read failed: {}", e)))?;
+        let f = frame.map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("frame read failed: {}", e),
+            )
+        })?;
         let bytes = f.as_ref();
         let msg: Result<(request::Request, usize), DecodeError> =
             bincode::serde::decode_from_slice(bytes, bincode::config::standard());
@@ -170,18 +205,22 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
         match msg {
             Ok((request, _)) => {
-                println!("Received req");
+                // println!("Received req");
                 match request {
                     request::Request::Get(req) => {
                         if let Err(e) = req.validate(chunk_size) {
                             let encoded = bincode::serde::encode_to_vec(
                                 request::GetResponse::Error(e.to_string()),
-                                bincode::config::standard()
-                            ).unwrap();
+                                bincode::config::standard(),
+                            )
+                            .unwrap();
                             {
                                 let mut w = writer.lock().await;
                                 w.send(Bytes::from(encoded)).await.map_err(|e| {
-                                    std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send validation error: {}", e))
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        format!("failed to send validation error: {}", e),
+                                    )
                                 })?;
                             }
 
@@ -237,7 +276,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     Ok(())
                                 }
                             },
-                            {                                
+                            {
                                 let chunk = chunk.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);

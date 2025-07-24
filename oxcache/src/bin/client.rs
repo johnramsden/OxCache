@@ -1,16 +1,16 @@
 use clap::Parser;
-use tokio::io::{split, AsyncReadExt, AsyncWriteExt};
+use futures::sink::SinkExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, split};
 use tokio::net::UnixStream;
 use tokio::time::{Duration, sleep};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use futures::sink::SinkExt;
 
-use oxcache::request::{GetRequest, Request};
 use bincode;
 use bincode::error::DecodeError;
 use bytes::Bytes;
 use futures::StreamExt;
 use oxcache::request;
+use oxcache::request::{GetRequest, Request};
 
 /// Simple Unix socket client
 #[derive(Parser, Debug)]
@@ -31,10 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (read_half, write_half) = split(stream);
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
     let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
-    
+
     let work = vec![
-        ("0", 0, 4096, true), ("0", 0, 4096, true),
-        ("Aligned chunk size", 8192, 8192, true), ("Aligned chunk size", 8192, 8192, true),
+        ("0", 0, 4096, true),
+        ("0", 0, 4096, true),
+        ("Aligned chunk size", 8192, 8192, true),
+        ("Aligned chunk size", 8192, 8192, true),
         ("Unaligned", 7, 4096, false),
         ("Too large", 8192, 9000, false),
     ];
@@ -44,13 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             offset: req.1,
             size: req.2,
         });
-        
+
         println!("Sending: {:?}", msg);
-        
-        let encoded = bincode::serde::encode_to_vec(
-            msg,
-            bincode::config::standard()
-        ).unwrap();
+
+        let encoded = bincode::serde::encode_to_vec(msg, bincode::config::standard()).unwrap();
         writer.send(Bytes::from(encoded)).await?;
 
         // wait for a response after each send
@@ -63,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match msg?.0 {
                 (request::GetResponse::Error(s)) => {
                     assert!(!req.3, "Expected success, recieved error {}", s);
-                },
+                }
                 (request::GetResponse::Response(_)) => {
                     assert!(req.3, "Expected error, recieved success");
                 }
@@ -76,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let msg = "exit\n";
     // // writer.write_all(msg.as_bytes()).await?;
     // println!("Sent: {}", msg);
-    // 
+    //
     // // Optional: wait for a response after each send
     // let mut buf = vec![0u8; 1024];
     // let n = stream.read(&mut buf).await?;

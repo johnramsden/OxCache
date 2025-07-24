@@ -1,8 +1,8 @@
-use dashmap::DashMap;
 use crate::cache::Cache;
-use tokio::sync::{RwLock, Notify};
-use std::sync::Arc;
 use crate::request::GetRequest;
+use dashmap::DashMap;
+use std::sync::Arc;
+use tokio::sync::{Notify, RwLock};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Chunk {
@@ -21,15 +21,15 @@ impl ChunkLocation {
     pub fn new(zone: usize, index: u64) -> Self {
         Self { zone, index }
     }
+
+    pub fn as_index(&self) -> [usize; 2] {
+        [self.zone, self.index as usize]
+    }
 }
 
 impl Chunk {
     pub fn new(uuid: String, offset: usize, size: usize) -> Self {
-        Self {
-            uuid,
-            offset,
-            size
-        }
+        Self { uuid, offset, size }
     }
 }
 

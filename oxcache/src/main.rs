@@ -1,11 +1,10 @@
+use clap::Parser;
 use oxcache;
+use oxcache::remote;
+use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig, RUNTIME};
+use serde::Deserialize;
 use std::fs;
 use std::process::exit;
-use std::sync::Arc;
-use clap::Parser;
-use oxcache::server::{Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
-use serde::Deserialize;
-use oxcache::remote;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -25,24 +24,33 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub reader_threads: Option<usize>,
-    
+
     #[arg(long)]
     pub chunk_size: Option<usize>,
 
     #[arg(long)]
     pub remote_type: Option<String>,
-    
+
     #[arg(long)]
     pub remote_bucket: Option<String>,
 
     #[arg(long)]
     pub eviction_policy: Option<String>,
-    
+
     #[arg(long)]
     pub high_water_evict: Option<usize>,
-    
+
     #[arg(long)]
     pub low_water_evict: Option<usize>,
+    
+    #[arg(long)]
+    pub block_zone_capacity: Option<usize>,    
+    
+    #[arg(long)]
+    pub eviction_interval: Option<usize>,
+    
+    #[arg(long)]
+    pub remote_artificial_delay_microsec: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,13 +59,15 @@ pub struct ParsedServerConfig {
     pub disk: Option<String>,
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
-    pub chunk_size: Option<usize>
+    pub chunk_size: Option<usize>,
+    pub block_zone_capacity: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ParsedRemoteConfig {
     pub remote_type: Option<String>,
     pub bucket: Option<String>,
+    pub remote_artificial_delay_microsec: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +75,7 @@ pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
     pub high_water_evict: Option<usize>,
     pub low_water_evict: Option<usize>,
+    pub eviction_interval: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,7 +84,6 @@ pub struct AppConfig {
     pub remote: ParsedRemoteConfig,
     pub eviction: ParsedEvictionConfig,
 }
-
 
 fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let config = if let Some(path) = &cli.config {
@@ -106,6 +116,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .remote_bucket
         .clone()
         .or_else(|| config.as_ref()?.remote.bucket.clone());
+    let remote_artificial_delay_microsec = cli
+        .remote_artificial_delay_microsec
+        .clone()
+        .or_else(|| config.as_ref()?.remote.remote_artificial_delay_microsec.clone());
 
     let socket = socket.ok_or("Missing required `socket` (in CLI or file)")?;
     let disk = disk.ok_or("Missing required `disk` (in CLI or file)")?;
@@ -125,15 +139,19 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     let remote_type = remote_type
         .ok_or("Missing required `remote_type` (in CLI or file)")?
         .to_lowercase();
-    
+
     if remote_type != "emulated" && remote_type != "s3" {
         return Err("remote_type must be either `emulated` or `S3`".into());
     }
-    
+
     if remote_type != "emulated" && remote_bucket.is_none() {
         return Err("remote_bucket must be set if remote_type is not `emulated`".into());
     }
     
+    if remote_type != "emulated" && remote_artificial_delay_microsec.is_some() {
+        eprintln!("WARNING: remote_artificial_delay_microsec has no effect if remote_type is not `emulated`");
+    }
+
     let eviction_policy = cli
         .eviction_policy
         .clone()
@@ -150,17 +168,25 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .clone()
         .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
         .ok_or("Missing low_water_evict")?;
-    
+    let eviction_interval = cli
+        .eviction_interval
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.eviction_interval.clone())
+        .ok_or("Missing eviction_interval")?;
+
     if low_water_evict < high_water_evict {
         return Err("low_water_evict must be greater than high_water_evict".into());
     }
-    
-        
+
     let chunk_size = cli
         .chunk_size
         .or_else(|| config.as_ref()?.server.chunk_size);
-    let chunk_size = chunk_size
-        .ok_or("Missing chunk size")?;
+    let chunk_size = chunk_size.ok_or("Missing chunk size")?;
+    
+    let block_zone_capacity = cli
+        .block_zone_capacity
+        .or_else(|| config.as_ref()?.server.block_zone_capacity);
+    let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
 
     // TODO: Add secrets from env vars
 
@@ -172,18 +198,20 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         remote: ServerRemoteConfig {
             remote_type,
             bucket: remote_bucket,
+            remote_artificial_delay_microsec
         },
         eviction: ServerEvictionConfig {
             eviction_type: eviction_policy,
             high_water_evict,
             low_water_evict,
-        },        
+            eviction_interval: eviction_interval as u64
+        },
         chunk_size,
+        block_zone_capacity
     })
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CliArgs::parse();
     let config = load_config(&cli)?;
 
@@ -193,12 +221,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Error: {}", err);
         exit(1);
     });
-    
+
     let chunk_size = config.chunk_size;
-    
+    let remote_artificial_delay_microsec = config.remote.remote_artificial_delay_microsec;
+
     match remote {
         remote::RemoteBackendType::Emulated => {
-            Server::new(config, remote::EmulatedBackend::new(chunk_size))?.run().await?;
+            Server::new(config, remote::EmulatedBackend::new(chunk_size, remote_artificial_delay_microsec))?.run().await?;
         },
         remote::RemoteBackendType::S3 => {
             let bucket = config.remote.bucket.clone().unwrap();
@@ -206,6 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    
     Ok(())
 }
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    RUNTIME.block_on(async_main())
+}
+

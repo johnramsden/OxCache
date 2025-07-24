@@ -1,23 +1,23 @@
-use std::fmt::format;
-use std::io::ErrorKind;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use bincode::error::DecodeError;
 use bytes::Bytes;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
-use rand::{rng};
+use oxcache::request;
+use oxcache::request::{GetRequest, Request};
 use rand::distr::weighted::Error;
 use rand::prelude::IndexedRandom;
+use rand::rng;
+use std::fmt::format;
+use std::io::ErrorKind;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio;
 use tokio::io::split;
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use uuid::Uuid;
-use oxcache::request;
-use oxcache::request::{GetRequest, Request};
-use std::time::Instant;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -106,14 +106,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if query_num % step == 0 {
                     let percent = (query_num as f64 / nr_queries as f64) * 100.0;
-                    println!("[t.{}] Query num: {}/{} ({:.0}%)", c, query_num, nr_queries, percent);
+                    println!(
+                        "[t.{}] Query num: {}/{} ({:.0}%)",
+                        c, query_num, nr_queries, percent
+                    );
                 }
 
-
-                let encoded = bincode::serde::encode_to_vec(
-                    Request::Get(q),
-                    bincode::config::standard()
-                ).unwrap();
+                let encoded =
+                    bincode::serde::encode_to_vec(Request::Get(q), bincode::config::standard())
+                        .unwrap();
                 writer.send(Bytes::from(encoded)).await?;
 
                 // wait for a response after each send
@@ -125,11 +126,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         bincode::serde::decode_from_slice(bytes, bincode::config::standard());
                     match msg.unwrap().0 {
                         (request::GetResponse::Error(s)) => {
-                            return Err(std::io::Error::new(ErrorKind::Other, format!(
-                                "[t.{}] Received error {} from client",
-                                c, s
-                            )));
-                        },
+                            return Err(std::io::Error::new(
+                                ErrorKind::Other,
+                                format!("[t.{}] Received error {} from client", c, s),
+                            ));
+                        }
                         (request::GetResponse::Response(_)) => {}
                     }
                 }
@@ -155,7 +156,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let duration = start.elapsed(); // Stop the timer
 
-    println!("Executed {} queries across {} clients", nr_queries, args.num_clients);
+    println!(
+        "Executed {} queries across {} clients",
+        nr_queries, args.num_clients
+    );
     println!("Total run time: {:.2?}", duration);
 
     Ok(())

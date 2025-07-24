@@ -3,13 +3,16 @@ socket = "/tmp/oxcache.sock"
 disk = "/dev/nvme0n2"
 writer_threads = 14
 reader_threads = 14
-chunk_size = 8192
+chunk_size = 65536
+block_zone_capacity = 1129316352
 
 [remote]
 remote_type = "emulated" # emulated | S3
 bucket = "S3_BUCKET"
+remote_artificial_delay_microsec = 40632
 
 [eviction]
 eviction_policy = "promotional"
 high_water_evict = 1 # Number remaining from end, evicts if reaches here
 low_water_evict = 3  # Evict until below mark
+eviction_interval = 1  # Evict every 1s

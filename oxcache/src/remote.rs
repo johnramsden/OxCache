@@ -1,17 +1,18 @@
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use crate::cache::Cache;
 use aligned_vec::{AVec, RuntimeAlign};
 use aws_sdk_s3::{Client, Config};
 use aws_config::meta::region::RegionProviderChain;
 use crate::server::ServerRemoteConfig;
 use async_trait::async_trait;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::io::ErrorKind;
 use rand::{RngCore, SeedableRng};
 use rand_pcg::Pcg64;
+use std::collections::hash_map::DefaultHasher;
+use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
+use std::io::ErrorKind;
+use std::time::Duration;
 use bytes::{Bytes, BytesMut};
+use tokio::time::sleep;
 
 #[async_trait]
 pub trait RemoteBackend: Send + Sync {
@@ -36,11 +37,12 @@ const EMULATED_BUFFER_SEED: u64 = 1;
 pub struct EmulatedBackend {
     chunk_size: usize,
     block_size: Option<usize>, // For buffer alignment
+    remote_artificial_delay_microsec: Option<usize>,
 }
 
 impl EmulatedBackend {
-    pub fn new(chunk_size: usize) -> Self {
-        Self { chunk_size, block_size: None }
+    pub fn new(chunk_size: usize,remote_artificial_delay_microsec: Option<usize>) -> Self {
+        Self { chunk_size, block_size: None, remote_artificial_delay_microsec }
     }
 
     fn gen_buffer_prefix(buf: &mut AVec<u8, RuntimeAlign>, key: &str, offset: usize, size: usize) {
@@ -59,7 +61,10 @@ impl EmulatedBackend {
         if size > self.chunk_size {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
-                format!("Requested size {} cannot be larger than chunk size {}", size, self.chunk_size)
+                format!(
+                    "Requested size {} cannot be larger than chunk size {}",
+                    size, self.chunk_size
+                ),
             ));
         }
 
@@ -120,8 +125,10 @@ impl RemoteBackend for S3Backend {
 #[async_trait]
 impl RemoteBackend for EmulatedBackend {
     async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
-        // TODO: Implement
-        // println!("GET {} {} {}", key, offset, size);
+        if let Some(remote_artificial_delay_microsec) = self.remote_artificial_delay_microsec {
+            sleep(Duration::from_micros(remote_artificial_delay_microsec as u64)).await;
+        }
+        
         self.gen_random_buffer(key, offset, size)
     }
 
@@ -150,7 +157,7 @@ mod test {
     #[test]
     fn test_gen_random_buffer_correctness() {
         let chunk_size = 128;
-        let backend = EmulatedBackend::new(chunk_size);
+        let backend = EmulatedBackend::new(chunk_size, None);
 
         let key = "mykey";
         let offset = 42;
@@ -159,7 +166,11 @@ mod test {
         let buffer = backend.gen_random_buffer(key, offset, size).unwrap();
 
         // === Validate buffer length ===
-        assert_eq!(buffer.len(), chunk_size, "Expected buffer to be chunk_size padded");
+        assert_eq!(
+            buffer.len(),
+            chunk_size,
+            "Expected buffer to be chunk_size padded"
+        );
 
         // === Validate prefix ===
         let mut hasher = DefaultHasher::new();
@@ -172,9 +183,14 @@ mod test {
             &key_hash.to_be_bytes()[..],
             &offset.to_be_bytes()[..],
             &size.to_be_bytes()[..],
-        ].concat();
+        ]
+        .concat();
 
-        assert_eq!(&buffer[..prefix_len], &expected_prefix[..], "Prefix bytes do not match");
+        assert_eq!(
+            &buffer[..prefix_len],
+            &expected_prefix[..],
+            "Prefix bytes do not match"
+        );
 
         // === Validate random data ===
         let mut rng = rand_pcg::Pcg64::seed_from_u64(EMULATED_BUFFER_SEED);
@@ -194,5 +210,4 @@ mod test {
             "Padding bytes after size are not zero"
         );
     }
-
 }
