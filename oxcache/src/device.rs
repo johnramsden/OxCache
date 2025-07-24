@@ -2,19 +2,13 @@ use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::EvictTarget;
 use crate::server::RUNTIME;
+use crate::zone_state::zone_list::ZoneList;
 use bytes::Bytes;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
 use nvme::ops::{reset_zone, zns_append, zns_read};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Mutex};
-use crate::zone_list::ZoneList;
-
-#[derive(Copy, Clone)]
-pub struct Zone {
-    pub index: usize,
-    pub chunks_available: usize,
-}
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -39,7 +33,7 @@ impl BlockDeviceState {
         let zones = vec![BlockZoneInfo { _write_pointer: 0 }; num_zones];
         Self {
             _zones: zones,
-            active_zones: ZoneList::new(num_zones, chunks_per_zone),
+            active_zones: ZoneList::new(num_zones, chunks_per_zone, num_zones),
             _chunk_size: chunk_size,
         }
     }
@@ -130,8 +124,11 @@ impl Zoned {
             Ok(mut config) => {
                 config.chunks_per_zone = config.zone_size / chunk_size as u64;
                 config.chunk_size = chunk_size;
-                let zone_list =
-                    ZoneList::new(config.num_zones as usize, config.chunks_per_zone as usize);
+                let zone_list = ZoneList::new(
+                    config.num_zones as usize,
+                    config.chunks_per_zone as usize,
+                    config.max_active_resources as usize,
+                );
 
                 Ok(Self {
                     nvme_config,
