@@ -59,6 +59,7 @@ fn main() {
     cc::Build::new()
         .file("src/libnvme_wrapper.c")
         .include(format!("{}/src", libnvme_dir))
+        .flag("-Wno-unused-parameter")
         .compile("libnvme_wrapper");
 
     // The bindgen::Builder is the main entry point
