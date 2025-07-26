@@ -147,7 +147,7 @@ impl Cache {
     /// Internal use: won't remove them from the map if they don't
     /// exist in the reverse mapping
     pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
-        let mut map_guard = self.buckets.write().await;
+        let mut map_guard = self.buckets.write().await; // DEADLOCK
         let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
 
         // Loop over zones

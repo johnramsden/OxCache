@@ -1,6 +1,6 @@
 use crate::cache::Cache;
 use crate::device::Device;
-use crate::eviction::{EvictionPolicyWrapper, Evictor};
+use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
@@ -18,6 +18,7 @@ use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use flume::{Receiver, Sender};
 use tokio::runtime::Runtime;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
@@ -57,14 +58,17 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
     config: ServerConfig,
     remote: Arc<T>,
     device: Arc<dyn Device>,
+    evict_rx: Receiver<EvictorMessage>,
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     pub fn new(config: ServerConfig, mut remote: T) -> Result<Self, Box<dyn Error>> {
+        let (evict_tx, evict_rx): (Sender<EvictorMessage>, Receiver<EvictorMessage>) = flume::unbounded();
         let device = device::get_device(
             config.disk.as_str(),
             config.chunk_size,
             config.block_zone_capacity,
+            evict_tx,
         )?;
 
         remote.set_blocksize(device.get_block_size());
@@ -77,6 +81,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             remote: Arc::new(remote),
             config,
             device,
+            evict_rx
         })
     }
 
@@ -104,6 +109,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&eviction_policy),
             Arc::clone(&self.cache),
             Duration::from_secs(self.config.eviction.eviction_interval),
+            self.evict_rx.clone(),
         )?;
         let writerpool = Arc::new(WriterPool::start(
             self.config.writer_threads,
