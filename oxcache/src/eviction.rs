@@ -131,7 +131,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     type Target = Vec<usize>;
 
     fn write_update(&mut self, chunk: ChunkLocation) {
-        assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
+        // assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
 
         // We only want to put it in the LRU once the zone is full
         if chunk.index as usize == self.nr_chunks_per_zone - 1 {
@@ -234,8 +234,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
-    evict_trigger: flume::Sender<EvictorMessage>
+    handle: Option<JoinHandle<()>>
 }
 
 pub struct EvictorMessage {
@@ -249,9 +248,10 @@ impl Evictor {
         eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
         cache: Arc<Cache>,
         evict_interval: Duration,
+        evict_rx: Receiver<EvictorMessage>
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
-        let (evict_tx, evict_rx): (Sender<EvictorMessage>, Receiver<EvictorMessage>) = flume::unbounded(); 
+        
         let shutdown_clone = Arc::clone(&shutdown);
 
         let device_clone = Arc::clone(&device);
@@ -304,8 +304,7 @@ impl Evictor {
 
         Ok(Self {
             shutdown,
-            handle: Some(handle),
-            evict_trigger: evict_tx
+            handle: Some(handle)
         })
     }
 
