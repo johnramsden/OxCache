@@ -2,18 +2,18 @@ use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::EvictTarget;
 use crate::server::RUNTIME;
-use crate::zone_state::zone_list::ZoneList;
+use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
 use nvme::ops::{reset_zone, zns_append, zns_read};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::io::{self, ErrorKind};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
-    zones: Arc<Mutex<ZoneList>>,
+    zones: Arc<(Mutex<ZoneList>, Condvar)>,
 }
 
 // Information about each zone
@@ -104,16 +104,32 @@ impl Zoned {
     }
 
     fn get_free_zone(&self) -> io::Result<usize> {
-        let mtx = Arc::clone(&self.zones);
+        let (mtx, wait_notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
         match zone_list.remove() {
             Ok(zone_idx) => Ok(zone_idx),
-            Err(_) => Err(io::Error::new(io::ErrorKind::StorageFull, "Cache is full")),
+            Err(error) => match error {
+                ZoneObtainFailure::EvictNow => {
+                    Err(io::Error::new(ErrorKind::StorageFull, "Cache is full"))
+                }
+                ZoneObtainFailure::Wait => loop {
+                    zone_list = wait_notify.wait(zone_list).unwrap();
+                    match zone_list.remove() {
+                        Ok(idx) => return Ok(idx),
+                        Err(err) => match err {
+                            ZoneObtainFailure::EvictNow => {
+                                return Err(io::Error::new(ErrorKind::Other, "Cache is full"));
+                            }
+                            ZoneObtainFailure::Wait => continue,
+                        },
+                    }
+                },
+            },
         }
     }
 
     fn complete_write(&self, zone_idx: usize) {
-        let mtx = Arc::clone(&self.zones);
+        let (mtx, _) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
         zone_list.write_finish(zone_idx)
     }
@@ -139,7 +155,7 @@ impl Zoned {
                 Ok(Self {
                     nvme_config,
                     config,
-                    zones: Arc::new(Mutex::new(zone_list)),
+                    zones: Arc::new((Mutex::new(zone_list), Condvar::new())),
                 })
             }
             Err(err) => Err(err.try_into().unwrap()),
@@ -243,7 +259,7 @@ impl Device for Zoned {
                     || Ok(self.compact_zone(zone_to_evict, &to_keep, &mut read_buf)?),
                 ))?;
 
-                let zone_mtx = Arc::clone(&self.zones);
+                let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zone_with_capacity(
                     zone_to_evict,
@@ -254,7 +270,7 @@ impl Device for Zoned {
             EvictTarget::Zone(zones_to_evict) => {
                 RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
 
-                let zone_mtx = Arc::clone(&self.zones);
+                let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict);
 

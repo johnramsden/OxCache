@@ -1,5 +1,5 @@
 use crate::cache::bucket::ChunkLocation;
-use crate::zone_state::zone_list::ZoneObtainFailure::EvictNow;
+use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 type ZoneIndex = usize;
@@ -61,8 +61,7 @@ impl ZoneList {
 
             // ... due to all zones being unavailable...
             // ... then we should wait until there is an open zone available.
-            return Err(EvictNow);
-            // return Err(Wait);
+            return Err(Wait);
             // It's worth noting that this case only occurs when all open zones are full, but are
             // still being written to. There can still be free zones, we just can't open them yet.
             // We should wait for the zone to be free somehow
