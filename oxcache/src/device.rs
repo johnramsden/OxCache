@@ -129,9 +129,12 @@ impl Zoned {
     }
 
     fn complete_write(&self, zone_idx: usize) {
-        let (mtx, _) = &*self.zones;
+        let (mtx, notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
-        zone_list.write_finish(zone_idx)
+        zone_list.write_finish(zone_idx);
+        // Tell other threads that we finished writing, so they can
+        // come and try to open a new zone if needed.
+        notify.notify_all();
     }
 }
 

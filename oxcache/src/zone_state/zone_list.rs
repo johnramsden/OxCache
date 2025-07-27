@@ -10,6 +10,7 @@ pub struct Zone {
     pub chunks_available: usize,
 }
 
+#[derive(Debug)]
 pub enum ZoneObtainFailure {
     EvictNow,
     Wait,
@@ -144,13 +145,19 @@ impl ZoneList {
             .keys()
             .into_iter()
             .collect::<HashSet<&ZoneIndex>>()
-            .intersection(&open_zone_list)
+            .union(&open_zone_list)
             .count()
     }
 
     // Reset the selected zone
-    #[allow(dead_code)]
     pub fn reset_zone(&mut self, idx: ZoneIndex) {
+        debug_assert!(!self.writing_zones.contains_key(&idx));
+
+        debug_assert!({
+            let mut zone_indices = self.open_zones.iter().map(|zone| zone.index);
+            !zone_indices.any(|zidx| zidx == idx)
+        });
+
         self.free_zones.push_back(Zone {
             index: idx,
             chunks_available: self.chunks_per_zone,
@@ -159,10 +166,7 @@ impl ZoneList {
 
     pub fn reset_zones(&mut self, indices: &[ZoneIndex]) {
         for idx in indices {
-            self.free_zones.push_back(Zone {
-                index: *idx,
-                chunks_available: self.chunks_per_zone,
-            });
+            self.reset_zone(*idx);
         }
     }
 
@@ -171,5 +175,120 @@ impl ZoneList {
             index: idx,
             chunks_available: remaining,
         });
+    }
+}
+
+#[cfg(test)]
+mod zone_list_tests {
+    use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
+
+    use super::ZoneList;
+
+    #[macro_export]
+    macro_rules! assert_state {
+        ( $x:expr, Ok ) => {{
+            match $x.remove() {
+                Ok(_) => (),
+                Err(err) => match err {
+                    EvictNow => assert!(false, "Should have gotten a zone, got evict now instead"),
+                    Wait => assert!(false, "Should have gotten a zone, got wait instead"),
+                },
+            }
+        }};
+        ( $x:expr, EvictNow ) => {{
+            match $x.remove() {
+                Ok(zone) => assert!(false, "Should evict, gotten zone instead: {}", zone),
+                Err(err) => match err {
+                    EvictNow => (),
+                    Wait => assert!(false, "Should evict, got wait instead"),
+                },
+            }
+        }};
+        ( $x:expr, Wait ) => {{
+            match $x.remove() {
+                Ok(zone) => assert!(false, "Should evict, gotten zone instead: {}", zone),
+                Err(err) => match err {
+                    EvictNow => assert!(false, "Should wait, got evict now instead"),
+                    Wait => (),
+                },
+            }
+        }};
+    }
+
+    #[test]
+    fn test_basic() {
+        let num_zones = 2;
+        let chunks_per_zone = 2;
+        let max_active_resources = 2;
+
+        let mut zonelist = ZoneList::new(num_zones, chunks_per_zone, max_active_resources);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 1);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        assert!(zonelist.get_open_zones() == 2);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 2);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        assert!(zonelist.get_open_zones() == 2);
+
+        assert_state!(zonelist, EvictNow);
+
+        assert!(zonelist.is_full());
+
+        zonelist.write_finish(0);
+        zonelist.write_finish(0);
+        assert!(zonelist.get_open_zones() == 1);
+
+        zonelist.reset_zone(0);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 2);
+
+        zonelist.write_finish(1);
+        zonelist.write_finish(1);
+        assert!(zonelist.get_open_zones() == 1);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 1);
+    }
+
+    #[test]
+    fn test_mar() {
+        let num_zones = 2;
+        let chunks_per_zone = 2;
+        let max_active_resources = 1;
+
+        let mut zonelist = ZoneList::new(num_zones, chunks_per_zone, max_active_resources);
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+
+        assert!(
+            zonelist.get_open_zones() == 1,
+            "Open zones is is {}",
+            zonelist.get_open_zones()
+        );
+
+        assert_state!(zonelist, Wait);
+        zonelist.write_finish(0);
+        assert_state!(zonelist, Wait);
+        zonelist.write_finish(0);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        assert_state!(zonelist, EvictNow);
     }
 }
