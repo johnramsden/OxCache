@@ -16,5 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    
+    - name: Install Meson
+      run: |
+        sudo apt update
+        sudo apt install -y meson
+
     - name: Build
       run: cargo build --verbose
