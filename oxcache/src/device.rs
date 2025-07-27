@@ -186,6 +186,25 @@ pub fn get_device(
     }
 }
 
+fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()>{
+    let (resp_tx, resp_rx) = flume::bounded(1);
+    if let Err(e) = eviction_channel.send(EvictorMessage {
+        sender: resp_tx,
+    }) {
+        eprintln!("[append] Failed to send eviction message: {}", e);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to send eviction message",
+        ));
+    };
+
+    if let Err(e) =  resp_rx.recv() {
+        eprintln!("[append] Failed to receive eviction message: {}", e);
+    }
+    
+    Ok(())
+}
+
 impl Zoned {
     fn compact_zone(
         &self,
@@ -255,20 +274,7 @@ impl Device for Zoned {
                     eprintln!("[append] Failed to get free zone: {}", err);
                 }
             };
-            let (resp_tx, resp_rx) = flume::bounded(1);
-            if let Err(e) = self.eviction_channel.send(EvictorMessage {
-                sender: resp_tx,
-            }) {
-                eprintln!("[append] Failed to send eviction message: {}", e);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to send eviction message",
-                ));
-            };
-            
-            if let Err(e) =  resp_rx.recv() {
-                eprintln!("[append] Failed to receive eviction message: {}", e);
-            }
+            trigger_eviction(self.eviction_channel.clone())?;
         };
         // Note: this performs a copy every time because we need to
         // pass in a mutable vector to libnvme
@@ -456,20 +462,7 @@ impl Device for BlockInterface {
                 };
             }
 
-            let (resp_tx, resp_rx) = flume::bounded(1);
-            if let Err(e) = self.eviction_channel.send(EvictorMessage {
-                sender: resp_tx,
-            }) {
-                eprintln!("[append] Failed to send eviction message: {}", e);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to send eviction message",
-                ));
-            };
-
-            if let Err(e) =  resp_rx.recv() {
-                eprintln!("[append] Failed to receive eviction message: {}", e);
-            }
+            trigger_eviction(self.eviction_channel.clone())?;
         };
 
         assert_eq!(data.len() % self.nvme_config.logical_block_size as usize, 0);
