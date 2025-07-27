@@ -147,7 +147,9 @@ impl Zoned {
 
         match nvme::info::zns_get_info(&nvme_config) {
             Ok(mut config) => {
-                config.chunks_per_zone = config.zone_size / chunk_size as u64;
+                let chunk_size_in_logical_blocks =
+                    chunk_size as u64 / nvme_config.logical_block_size;
+                config.chunks_per_zone = config.zone_size / chunk_size_in_logical_blocks;
                 config.chunk_size = chunk_size;
                 let zone_list = ZoneList::new(
                     config.num_zones as usize,
