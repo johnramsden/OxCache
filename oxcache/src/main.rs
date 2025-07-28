@@ -221,7 +221,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CliArgs::parse();
     let config = load_config(&cli)?;
 
-    // console_subscriber::init(); -- To use tokio-console
+    console_subscriber::init(); // -- To use tokio-console
 
     println!("Config: {:?}", config);
     let remote = remote::validated_type(config.remote.remote_type.as_str());

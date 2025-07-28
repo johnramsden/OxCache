@@ -5,5 +5,5 @@ pub mod readerpool;
 pub mod remote;
 pub mod request;
 pub mod server;
-mod util;
+pub mod util;
 pub mod writerpool;
