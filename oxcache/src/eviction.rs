@@ -15,6 +15,7 @@ pub enum EvictionPolicyWrapper {
     Chunk(ChunkEvictionPolicy),
 }
 
+#[derive(Debug)]
 pub enum EvictTarget {
     Chunk(Vec<ChunkLocation>),
     Zone(Vec<usize>),

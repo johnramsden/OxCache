@@ -61,6 +61,7 @@ pub trait Device: Send + Sync {
 
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
+    fn get_use_percentage(&self) -> f32;
 }
 
 pub fn get_device(
@@ -221,6 +222,8 @@ impl Device for Zoned {
     }
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
+        println!("Current device usage is at: {}", self.get_use_percentage());
+
         match locations {
             EvictTarget::Chunk(mut chunk_locations) => {
                 // Check all zones are the same, this isn't a
@@ -303,6 +306,14 @@ impl Device for Zoned {
 
     fn get_block_size(&self) -> usize {
         self.nvme_config.logical_block_size as usize
+    }
+
+    fn get_use_percentage(&self) -> f32 {
+        let (zones, _) = &*self.zones;
+        let zones = zones.lock().unwrap();
+        let total_chunks = (self.config.chunks_per_zone * self.config.num_zones) as f32;
+        let available_chunks = zones.get_num_available_chunks() as f32;
+        (total_chunks - available_chunks) / total_chunks
     }
 }
 
@@ -444,5 +455,12 @@ impl Device for BlockInterface {
 
     fn get_block_size(&self) -> usize {
         self.nvme_config.logical_block_size as usize
+    }
+
+    fn get_use_percentage(&self) -> f32 {
+        let state = &*self.state.lock().unwrap();
+        let total_chunks = (self.chunks_per_zone * self.num_zones) as f32;
+        let available_chunks = state.active_zones.get_num_available_chunks() as f32;
+        (total_chunks - available_chunks) / total_chunks
     }
 }

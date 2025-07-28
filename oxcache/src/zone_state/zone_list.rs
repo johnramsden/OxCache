@@ -176,6 +176,12 @@ impl ZoneList {
             chunks_available: remaining,
         });
     }
+
+    pub fn get_num_available_chunks(&self) -> usize {
+        self.open_zones.iter().fold(0, |avail, zone| {
+            avail + zone.chunks_available
+        }) + self.free_zones.len() * self.chunks_per_zone
+    }
 }
 
 #[cfg(test)]
