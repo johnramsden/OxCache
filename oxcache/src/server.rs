@@ -19,12 +19,15 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use flume::{Receiver, Sender};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Runtime, Builder};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 // Global tokio runtime
+// pub static RUNTIME: Lazy<Runtime> =
+    // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
+
 pub static RUNTIME: Lazy<Runtime> =
-    Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
+    Lazy::new(|| Builder::new_multi_thread().worker_threads(1).enable_all().build().expect("Failed to create Tokio runtime"));
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {
@@ -70,6 +73,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             config.block_zone_capacity,
             evict_tx,
         )?;
+
+        device.reset_all()?;
 
         remote.set_blocksize(device.get_block_size());
 

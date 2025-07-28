@@ -5,7 +5,7 @@ use crate::server::RUNTIME;
 use bytes::Bytes;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
 use nvme::ops::{reset_zone, zns_append, zns_read};
-use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
+use nvme::types::{NVMeConfig, NVMeError, PerformOn, ZNSConfig};
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Mutex};
@@ -165,6 +165,8 @@ pub trait Device: Send + Sync {
 
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
+
+    fn reset_all(&self) -> Result<(), NVMeError>;
 }
 
 pub fn get_device(
@@ -404,6 +406,10 @@ impl Device for Zoned {
     fn get_block_size(&self) -> usize {
         self.nvme_config.logical_block_size as usize
     }
+
+    fn reset_all(&self) -> Result<(), NVMeError> {
+        reset_zone(&self.nvme_config, &self.config, PerformOn::AllZones)
+    }
 }
 
 impl BlockInterface {
@@ -552,5 +558,9 @@ impl Device for BlockInterface {
 
     fn get_block_size(&self) -> usize {
         self.nvme_config.logical_block_size as usize
+    }
+
+    fn reset_all(&self) -> Result<(), NVMeError> {
+        Ok(())
     }
 }

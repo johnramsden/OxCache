@@ -67,7 +67,7 @@ if [ -z "$img" ]; then
     wget -O "$img" https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
 fi
 
-sudo qemu-img resize "$img" 12G
+sudo qemu-img resize "$img" 32G
 
 # Make the raw disk images
 znsimg=/var/lib/qemu/images/zns.raw

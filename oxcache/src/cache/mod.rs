@@ -52,8 +52,12 @@ impl Cache {
         //       on both the entire map and the individual chunk location
 
         loop {
+            dbg!("START!!!");
+
             // Bucket read locked -- no one can write to map
             let bucket_guard = self.buckets.read().await;
+
+            dbg!("FINISH!!!");
 
             if let Some(state) = bucket_guard.get(&key) {
                 // We now have the entry
@@ -64,13 +68,17 @@ impl Cache {
                     ChunkState::Waiting(notify) => {
                         let notified = notify.notified(); // queue notifies
                         // Now we can drop full map lock, we have lock on chunkstate
+                        
                         drop(bucket_guard); // Writes can proceed on outer map
 
                         notified.await; // retry loop required
                         continue; // loop to recheck state
                     }
                     ChunkState::Ready(loc) => {
-                        return reader(Arc::clone(loc)).await;
+                        dbg!("Reading started");
+                        let r = reader(Arc::clone(loc)).await;
+                        dbg!("Reading finished");
+                        return r;
                     }
                 };
             } else {
@@ -79,6 +87,8 @@ impl Cache {
         }
 
         loop {
+            dbg!();
+
             // Bucket write locked -- no one can read or write to map
             let mut bucket_guard = self.buckets.write().await;
 
