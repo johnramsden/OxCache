@@ -61,6 +61,7 @@ pub trait Device: Send + Sync {
 
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
+    fn get_use_percentage(&self) -> f32;
 }
 
 pub fn get_device(
