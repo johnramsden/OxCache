@@ -1,4 +1,5 @@
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
+use crate::{log_async_mutex_lock, log_async_read_lock, log_async_write_lock, util};
 use ndarray::{Array2, ArrayBase, s};
 use std::io::ErrorKind;
 use std::iter::zip;
@@ -18,6 +19,10 @@ fn new_entry() -> EntryType {
 fn entry_not_found() -> std::io::Error {
     std::io::Error::new(ErrorKind::NotFound, "Couldn't find entry")
 }
+
+// struct BucketMap {
+//
+// }
 
 #[derive(Debug)]
 pub struct Cache {
@@ -52,7 +57,7 @@ impl Cache {
 
         loop {
             // Bucket read locked -- no one can write to map
-            let bucket_guard = self.buckets.read().await;
+            let bucket_guard = log_async_read_lock!(self.buckets);
 
             if let Some(state) = bucket_guard.get(&key) {
                 // We now have the entry
@@ -79,7 +84,7 @@ impl Cache {
 
         loop {
             // Bucket write locked -- no one can read or write to map
-            let mut bucket_guard = self.buckets.write().await;
+            let mut bucket_guard = log_async_write_lock!(self.buckets);
 
             // Incase it was inserted inbetween
             if let Some(state) = bucket_guard.get(&key) {
@@ -118,7 +123,7 @@ impl Cache {
                         };
                         drop(chunk_loc_guard); // Prevent deadlock
 
-                        let mut bucket_guard = self.buckets.write().await;
+                        let mut bucket_guard = log_async_write_lock!(self.buckets);
                         bucket_guard.remove(&key);
 
                         if let Some(n) = notify {
@@ -131,7 +136,7 @@ impl Cache {
                         *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
                         drop(chunk_loc_guard);
 
-                        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+                        let mut reverse_mapping_guard = log_async_mutex_lock!(self.zone_to_entry);
                         reverse_mapping_guard[location.as_index()] = Some(key);
                     }
                 }
@@ -146,8 +151,8 @@ impl Cache {
     /// Internal use: won't remove them from the map if they don't
     /// exist in the reverse mapping
     pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
-        let mut map_guard = self.buckets.write().await; // DEADLOCK
-        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+        let mut map_guard = log_async_write_lock!(self.buckets); // DEADLOCK
+        let mut reverse_mapping_guard = log_async_mutex_lock!(self.zone_to_entry);
 
         // Loop over zones
         for zone_index in zone_indices {
@@ -200,8 +205,8 @@ impl Cache {
     {
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
-        let mut bucket_guard = self.buckets.write().await;
-        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+        let mut bucket_guard = log_async_write_lock!(self.buckets);
+        let mut reverse_mapping_guard = log_async_mutex_lock!(self.zone_to_entry);
         let mut entry_lock_list = Vec::new();
 
         // Remove to_relocate elements from the reverse_mapping, and
@@ -266,8 +271,8 @@ impl Cache {
     pub async fn remove_entry(&self, chunk: &ChunkLocation) -> tokio::io::Result<()> {
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
-        let mut bucket_guard = self.buckets.write().await;
-        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+        let mut bucket_guard = log_async_write_lock!(self.buckets);
+        let mut reverse_mapping_guard = log_async_mutex_lock!(self.zone_to_entry);
 
         let chunk_id = match reverse_mapping_guard[chunk.as_index()].clone() {
             Some(id) => {
@@ -284,8 +289,8 @@ impl Cache {
     pub async fn remove_entries(&self, chunks: &[ChunkLocation]) -> tokio::io::Result<()> {
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
-        let mut bucket_guard = self.buckets.write().await;
-        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+        let mut bucket_guard = log_async_write_lock!(self.buckets);
+        let mut reverse_mapping_guard = log_async_mutex_lock!(self.zone_to_entry);
 
         for chunk in chunks {
             let chunk_id = match reverse_mapping_guard[chunk.as_index()].clone() {
@@ -313,7 +318,7 @@ impl Cache {
         W: FnOnce() -> WFut + Send + 'static,
         WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static,
     {
-        let mut bucket_guard = self.buckets.write().await;
+        let mut bucket_guard = log_async_write_lock!(self.buckets);
         let state = bucket_guard.get(&key).ok_or(std::io::Error::new(
             ErrorKind::NotFound,
             format!("Couldn't find entry {:?}", key),
@@ -340,7 +345,7 @@ impl Cache {
                 let write_result = writer().await;
                 match write_result {
                     Err(e) => {
-                        let mut bucket_guard = self.buckets.write().await;
+                        let mut bucket_guard = log_async_write_lock!(self.buckets);
                         bucket_guard.remove(&key);
                         match &*chunk_loc_guard {
                             ChunkState::Waiting(notify) => {
@@ -356,7 +361,7 @@ impl Cache {
                     }
                     Ok(location) => {
                         *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
-                        let mut reverse_mapping_guard = self.zone_to_entry.lock().await;
+                        let mut reverse_mapping_guard = log_async_mutex_lock!(self.zone_to_entry);
                         reverse_mapping_guard[location.as_index()] = Some(key);
                         Ok(())
                     }
