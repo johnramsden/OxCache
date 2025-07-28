@@ -125,7 +125,7 @@ pub struct ZNSZoneDescriptor {
 }
 
 /// Represents errors that can occur during NVMe operations.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum NVMeError {
     Errno(Errno),
     StatusResult(nvme_status_result),
@@ -137,6 +137,16 @@ pub enum NVMeError {
         max_append: u32,
         trying_to_append: u32,
     },
+    ExtraContext{
+        context: String,
+        original_error: Box<NVMeError>
+    }
+}
+
+impl NVMeError {
+    pub fn add_context(&mut self, context: String) {
+        *self = NVMeError::ExtraContext { context, original_error: Box::new(self.clone()) }
+    }
 }
 
 impl fmt::Display for NVMeError {
@@ -162,6 +172,9 @@ impl fmt::Display for NVMeError {
                     "Append size too large: max append is {} bytes while trying to append {} bytes",
                     max_append, trying_to_append
                 ),
+                NVMeError::ExtraContext { context, original_error } => format!(
+                    "{}\nContext: {}", *original_error, context
+                )
             }
         )
     }

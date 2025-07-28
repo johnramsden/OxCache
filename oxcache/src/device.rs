@@ -191,8 +191,9 @@ impl Device for Zoned {
                 let chunk = lba / self.config.chunk_size as u64;
                 Ok(ChunkLocation::new(zone_index, chunk))
             }
-            Err(err) => {
+            Err(mut err) => {
                 self.complete_write(zone_index);
+                err.add_context(format!("Write failed at zone {}\n", zone_index));
                 Err(err.try_into().unwrap())
             }
         }
@@ -278,18 +279,18 @@ impl Device for Zoned {
             EvictTarget::Zone(zones_to_evict) => {
                 RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
 
-                let (zone_mtx, _) = &*self.zones;
-                let mut zones = zone_mtx.lock().unwrap();
-                zones.reset_zones(&zones_to_evict);
-
-                for zone_idx in zones_to_evict {
+                for zone_idx in &zones_to_evict {
                     reset_zone(
                         &self.nvme_config,
                         &self.config,
-                        PerformOn::Zone(zone_idx as u64),
+                        PerformOn::Zone(*zone_idx as u64),
                     )
                     .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?
                 }
+
+                let (zone_mtx, _) = &*self.zones;
+                let mut zones = zone_mtx.lock().unwrap();
+                zones.reset_zones(&zones_to_evict);
 
                 Ok(())
             }
