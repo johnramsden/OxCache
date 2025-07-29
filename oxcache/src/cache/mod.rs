@@ -1,11 +1,10 @@
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
-use crate::{log_async_mutex_lock, log_async_read_lock, log_async_write_lock, util};
 use ndarray::{Array2, ArrayBase, s};
 use std::io::ErrorKind;
 use std::iter::zip;
 use std::sync::Arc;
 use std::{collections::HashMap, io};
-use tokio::sync::{Notify, RwLock, Mutex};
+use tokio::sync::{Notify, RwLock};
 
 pub mod bucket;
 
