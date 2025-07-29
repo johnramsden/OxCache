@@ -62,6 +62,7 @@ pub trait Device: Send + Sync {
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
     fn get_use_percentage(&self) -> f32;
+    fn reset(&self) -> io::Result<()>;
 }
 
 pub fn get_device(
@@ -315,6 +316,11 @@ impl Device for Zoned {
         let total_chunks = (self.config.chunks_per_zone * self.config.num_zones) as f32;
         let available_chunks = zones.get_num_available_chunks() as f32;
         (total_chunks - available_chunks) / total_chunks
+    }
+
+    fn reset(&self) -> io::Result<()> {
+        reset_zone(&self.nvme_config, &self.config, PerformOn::AllZones)
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 }
 

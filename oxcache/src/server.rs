@@ -131,6 +131,9 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             }
         });
 
+        // Reset device
+        self.device.reset()?;
+
         // Request handling (green threads)
         loop {
             tokio::select! {
