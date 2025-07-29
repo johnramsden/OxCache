@@ -27,7 +27,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
     // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
 
 pub static RUNTIME: Lazy<Runtime> =
-    Lazy::new(|| Builder::new_multi_thread().worker_threads(1).enable_all().build().expect("Failed to create Tokio runtime"));
+    Lazy::new(|| Builder::new_multi_thread().enable_all().build().expect("Failed to create Tokio runtime"));
 
 #[derive(Debug)]
 pub struct ServerRemoteConfig {

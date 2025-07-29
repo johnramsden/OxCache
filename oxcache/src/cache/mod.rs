@@ -59,32 +59,29 @@ impl Cache {
         //       on both the entire map and the individual chunk location
 
         loop {
-            dbg!("START!!!");
-
             // Bucket read locked -- no one can write to map
             let bucket_guard = self.bm.read().await;
 
-            dbg!("FINISH!!!");
-
             if let Some(state) = bucket_guard.buckets.get(&key) {
+                let state = Arc::clone(state);
+                drop(bucket_guard);
                 // We now have the entry
-                let bucket_state_guard = Arc::clone(state);
+                let bucket_state_guard = state;
                 let bucket_state_guard = bucket_state_guard.read().await;
 
                 match &*bucket_state_guard {
                     ChunkState::Waiting(notify) => {
+                        let notify = notify.clone();
                         let notified = notify.notified(); // queue notifies
                         // Now we can drop full map lock, we have lock on chunkstate
                         
-                        drop(bucket_guard); // Writes can proceed on outer map
+                        drop(bucket_state_guard);
 
                         notified.await; // retry loop required
                         continue; // loop to recheck state
                     }
                     ChunkState::Ready(loc) => {
-                        dbg!("Reading started");
                         let r = reader(Arc::clone(loc)).await;
-                        dbg!("Reading finished");
                         return r;
                     }
                 };
@@ -94,22 +91,23 @@ impl Cache {
         }
 
         loop {
-            dbg!();
-
             // Bucket write locked -- no one can read or write to map
             let mut bucket_guard = self.bm.write().await;
 
             // Incase it was inserted inbetween
             if let Some(state) = bucket_guard.buckets.get(&key) {
+                let state = Arc::clone(state);
+                drop(bucket_guard);
                 // We now have the entry
-                let bucket_state_guard = Arc::clone(state);
+                let bucket_state_guard = state;
                 let bucket_state_guard = bucket_state_guard.read().await;
 
                 match &*bucket_state_guard {
                     ChunkState::Waiting(notify) => {
+                        let notify = notify.clone();
                         let notified = notify.notified(); // queue notifies
                         // Now we can drop full map lock, we have lock on chunkstate
-                        drop(bucket_guard); // Writes can proceed on outer map
+                        drop(bucket_state_guard);
 
                         notified.await; // retry loop required
                         continue; // loop to recheck state

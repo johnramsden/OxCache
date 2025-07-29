@@ -375,8 +375,10 @@ impl Device for Zoned {
                 Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
-                RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
-
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                rt.block_on(cache.remove_zones(&zones_to_evict))?;
                 let zone_mtx = Arc::clone(&self.zones);
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict);
@@ -458,15 +460,14 @@ impl Device for BlockInterface {
         let mtx = self.state.clone();
 
         let chunk_location = loop {
-            {
-                let mut state = mtx.lock().unwrap();
-                match state.active_zones.remove_chunk_location() {
-                    Ok(location) => break location,
-                    Err(()) => {
-                        eprintln!("[append] Failed to allocate chunk: no available space in active zones");
-                    }
-                };
-            }
+            let mut state = mtx.lock().unwrap();
+            match state.active_zones.remove_chunk_location() {
+                Ok(location) => break location,
+                Err(()) => {
+                    eprintln!("[append] Failed to allocate chunk: no available space in active zones");
+                }
+            };
+            drop(state);
 
             trigger_eviction(self.eviction_channel.clone())?;
         };
@@ -539,7 +540,10 @@ impl Device for BlockInterface {
                     return Ok(());
                 }
                 println!("[evict:Zone] Evicting zones {:?}", locations);
-                RUNTIME.block_on(cache.remove_zones(&locations))?;
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                rt.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations);
