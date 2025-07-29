@@ -5,7 +5,7 @@ use crate::server::RUNTIME;
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{reset_zone, zns_append, zns_read};
+use nvme::ops::{reset_zone, zns_append, zns_read, close_zone};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Condvar, Mutex};
@@ -62,7 +62,12 @@ pub trait Device: Send + Sync {
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
     fn get_use_percentage(&self) -> f32;
+
     fn reset(&self) -> io::Result<()>;
+
+    fn reset_zone(&self, zone_id: usize) -> io::Result<()>;
+
+    fn close_zone(&self, zone_id: usize) -> io::Result<()>;
 }
 
 pub fn get_device(
@@ -130,13 +135,15 @@ impl Zoned {
         }
     }
 
-    fn complete_write(&self, zone_idx: usize) {
+    fn complete_write(&self, zone_idx: usize) -> io::Result<()> {
         let (mtx, notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
-        zone_list.write_finish(zone_idx);
+        zone_list.write_finish(zone_idx, self)?;
         // Tell other threads that we finished writing, so they can
         // come and try to open a new zone if needed.
         notify.notify_all();
+
+        Ok(())
     }
 }
 
@@ -188,12 +195,12 @@ impl Device for Zoned {
             data.as_ref(),
         ) {
             Ok(lba) => {
-                self.complete_write(zone_index);
+                self.complete_write(zone_index)?;
                 let chunk = lba / self.config.chunk_size as u64;
                 Ok(ChunkLocation::new(zone_index, chunk))
             }
             Err(mut err) => {
-                self.complete_write(zone_index);
+                self.complete_write(zone_index)?;
                 err.add_context(format!("Write failed at zone {}\n", zone_index));
                 Err(err.try_into().unwrap())
             }
@@ -271,6 +278,7 @@ impl Device for Zoned {
 
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
+                // TODO: reset zones for device
                 zones.reset_zone_with_capacity(
                     zone_to_evict,
                     self.get_chunks_per_zone() - to_keep.len(),
@@ -280,18 +288,9 @@ impl Device for Zoned {
             EvictTarget::Zone(zones_to_evict) => {
                 RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
 
-                for zone_idx in &zones_to_evict {
-                    reset_zone(
-                        &self.nvme_config,
-                        &self.config,
-                        PerformOn::Zone(*zone_idx as u64),
-                    )
-                    .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?
-                }
-
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
-                zones.reset_zones(&zones_to_evict);
+                zones.reset_zones(&zones_to_evict, self);
 
                 Ok(())
             }
@@ -320,6 +319,15 @@ impl Device for Zoned {
 
     fn reset(&self) -> io::Result<()> {
         reset_zone(&self.nvme_config, &self.config, PerformOn::AllZones)
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+    }
+    fn reset_zone(&self, zone_id: usize) -> io::Result<()> {
+        reset_zone(&self.nvme_config, &self.config, PerformOn::Zone(zone_id as u64))
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+    }
+
+    fn close_zone(&self, zone_id: usize) -> io::Result<()> {
+        close_zone(&self.nvme_config, &self.config, PerformOn::Zone(zone_id as u64))
             .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 }
@@ -446,7 +454,7 @@ impl Device for BlockInterface {
                 RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
-                state.active_zones.reset_zones(&locations);
+                state.active_zones.reset_zones(&locations, self);
                 Ok(())
             }
         }
@@ -470,4 +478,10 @@ impl Device for BlockInterface {
         let available_chunks = state.active_zones.get_num_available_chunks() as f32;
         (total_chunks - available_chunks) / total_chunks
     }
+
+    fn reset(&self) -> io::Result<()> { Ok(()) }
+
+    fn reset_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
+
+    fn close_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
 }

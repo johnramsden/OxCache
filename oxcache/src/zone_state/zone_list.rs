@@ -1,6 +1,8 @@
 use crate::cache::bucket::ChunkLocation;
 use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
+use crate::device;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{self, ErrorKind};
 
 type ZoneIndex = usize;
 
@@ -26,6 +28,7 @@ pub struct ZoneList {
 
 impl ZoneList {
     pub fn new(num_zones: usize, chunks_per_zone: usize, max_active_resources: usize) -> Self {
+        // List of all zones, initially all are "free"
         let avail_zones = (0..num_zones)
             .map(|index| Zone {
                 index,
@@ -88,13 +91,15 @@ impl ZoneList {
     }
 
     // Zoned implementations should call this once they are finished with appending.
-    pub fn write_finish(&mut self, zone_index: ZoneIndex) {
+    pub fn write_finish(&mut self, zone_index: ZoneIndex, device: &dyn device::Device) -> io::Result<()> {
         let write_num = self.writing_zones.get(&zone_index).unwrap();
         if write_num - 1 == 0 {
-            self.writing_zones.remove(&zone_index)
+            self.writing_zones.remove(&zone_index);
+            device.close_zone(zone_index)
         } else {
-            self.writing_zones.insert(zone_index, write_num - 1)
-        };
+            self.writing_zones.insert(zone_index, write_num - 1);
+            Ok(())
+        }
     }
 
     // Get the location to write to for block devices
@@ -135,6 +140,7 @@ impl ZoneList {
     // Gets the number of open zones by counting the unique
     // zones listed in open_zones and writing_zones
     pub fn get_open_zones(&self) -> usize {
+        // TODO: This is slow, O(n)
         let open_zone_list = self
             .open_zones
             .iter()
@@ -150,7 +156,7 @@ impl ZoneList {
     }
 
     // Reset the selected zone
-    pub fn reset_zone(&mut self, idx: ZoneIndex) {
+    pub fn reset_zone(&mut self, idx: ZoneIndex, device: &dyn device::Device) -> std::io::Result<()> {
         debug_assert!(!self.writing_zones.contains_key(&idx));
 
         debug_assert!({
@@ -162,12 +168,16 @@ impl ZoneList {
             index: idx,
             chunks_available: self.chunks_per_zone,
         });
+
+        device.reset_zone(idx)
     }
 
-    pub fn reset_zones(&mut self, indices: &[ZoneIndex]) {
+    pub fn reset_zones(&mut self, indices: &[ZoneIndex], device: &dyn device::Device) -> std::io::Result<()> {
         for idx in indices {
-            self.reset_zone(*idx);
+            self.reset_zone(*idx, device)?;
         }
+
+        Ok(())
     }
 
     pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: usize) {
@@ -186,9 +196,40 @@ impl ZoneList {
 
 #[cfg(test)]
 mod zone_list_tests {
-    use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+
+    use crate::{cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}};
 
     use super::ZoneList;
+
+    struct MockDevice {}
+
+    impl Device for MockDevice {
+        fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
+            Ok(ChunkLocation {zone: 0, index: 0})
+        }
+
+        fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()> { Ok(()) }
+
+        /// This is expected to remove elements from the cache as well
+        fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> std::io::Result<()> { Ok(()) }
+
+        fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> { Ok(Bytes::new()) }
+
+        fn get_num_zones(&self) -> usize { 0 }
+
+        fn get_chunks_per_zone(&self) -> usize { 0 }
+        fn get_block_size(&self) -> usize { 0 }
+        fn get_use_percentage(&self) -> f32 { 0.0 }
+
+        fn reset(&self) -> std::io::Result<()> { Ok(()) }
+
+        fn reset_zone(&self, zone_id: usize) -> std::io::Result<()> { Ok(()) }
+
+        fn close_zone(&self, zone_id: usize) -> std::io::Result<()> { Ok(()) }
+    }
 
     #[macro_export]
     macro_rules! assert_state {
@@ -223,6 +264,7 @@ mod zone_list_tests {
 
     #[test]
     fn test_basic() {
+        let md = MockDevice {};
         let num_zones = 2;
         let chunks_per_zone = 2;
         let max_active_resources = 2;
@@ -249,18 +291,18 @@ mod zone_list_tests {
 
         assert!(zonelist.is_full());
 
-        zonelist.write_finish(0);
-        zonelist.write_finish(0);
+        zonelist.write_finish(0, &md);
+        zonelist.write_finish(0, &md);
         assert!(zonelist.get_open_zones() == 1);
 
-        zonelist.reset_zone(0);
+        zonelist.reset_zone(0, &md);
 
         let zone = zonelist.remove().unwrap();
         assert!(zone == 0);
         assert!(zonelist.get_open_zones() == 2);
 
-        zonelist.write_finish(1);
-        zonelist.write_finish(1);
+        zonelist.write_finish(1, &md);
+        zonelist.write_finish(1, &md);
         assert!(zonelist.get_open_zones() == 1);
 
         let zone = zonelist.remove().unwrap();
@@ -270,6 +312,7 @@ mod zone_list_tests {
 
     #[test]
     fn test_mar() {
+        let md = MockDevice {};
         let num_zones = 2;
         let chunks_per_zone = 2;
         let max_active_resources = 1;
@@ -287,9 +330,9 @@ mod zone_list_tests {
         );
 
         assert_state!(zonelist, Wait);
-        zonelist.write_finish(0);
+        zonelist.write_finish(0, &md);
         assert_state!(zonelist, Wait);
-        zonelist.write_finish(0);
+        zonelist.write_finish(0, &md);
 
         let zone = zonelist.remove().unwrap();
         assert!(zone == 1);
