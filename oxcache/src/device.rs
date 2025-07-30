@@ -7,7 +7,6 @@ use bytes::Bytes;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
 use nvme::ops::{reset_zone, zns_append, zns_read, close_zone};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
-use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Condvar, Mutex};
 use flume::Sender;
@@ -381,9 +380,9 @@ impl BlockInterface {
         );
 
         // Num_zones: how to get?
-        let num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
+        let _num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
         // Chunks per zone: how to get?
-        let chunks_per_zone = block_zone_capacity / chunk_size;
+        let _chunks_per_zone = block_zone_capacity / chunk_size;
         
         // Num_zones: how to get?
         let num_zones = 10;
@@ -525,7 +524,7 @@ impl Device for BlockInterface {
 
     fn reset(&self) -> io::Result<()> { Ok(()) }
 
-    fn reset_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
+    fn reset_zone(&self, _zone_id: usize) -> io::Result<()> { Ok(()) }
 
-    fn close_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
+    fn close_zone(&self, _zone_id: usize) -> io::Result<()> { Ok(()) }
 }

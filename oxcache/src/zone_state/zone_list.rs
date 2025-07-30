@@ -2,7 +2,7 @@ use crate::cache::bucket::ChunkLocation;
 use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use crate::device;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{self, ErrorKind};
+use std::io::{self};
 
 type ZoneIndex = usize;
 
