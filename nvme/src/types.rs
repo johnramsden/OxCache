@@ -32,9 +32,9 @@ impl TryFrom<u8> for ZoneState {
             0x02 => Ok(ZoneState::ImplicitlyOpened),
             0x03 => Ok(ZoneState::ExplicitlyOpened),
             0x04 => Ok(ZoneState::Closed),
-            0x13 => Ok(ZoneState::ReadOnly),
-            0x14 => Ok(ZoneState::Full),
-            0x15 => Ok(ZoneState::Offline),
+            0xD => Ok(ZoneState::ReadOnly),
+            0xE => Ok(ZoneState::Full),
+            0xF => Ok(ZoneState::Offline),
             _ => Err(()),
         }
     }
