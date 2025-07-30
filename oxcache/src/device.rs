@@ -290,7 +290,7 @@ impl Device for Zoned {
 
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
-                zones.reset_zones(&zones_to_evict, self);
+                zones.reset_zones(&zones_to_evict, self)?;
 
                 Ok(())
             }
@@ -454,7 +454,7 @@ impl Device for BlockInterface {
                 RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
-                state.active_zones.reset_zones(&locations, self);
+                state.active_zones.reset_zones(&locations, self)?;
                 Ok(())
             }
         }
