@@ -4,12 +4,12 @@ use crate::eviction::{EvictTarget, EvictorMessage};
 use crate::server::RUNTIME;
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
+use flume::Sender;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{reset_zone, zns_append, zns_read, close_zone};
+use nvme::ops::{close_zone, reset_zone, zns_append, zns_read};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Condvar, Mutex};
-use flume::Sender;
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -77,7 +77,7 @@ pub fn get_device(
     device: &str,
     chunk_size: usize,
     block_zone_capacity: usize,
-    eviction_channel: Sender<EvictorMessage>
+    eviction_channel: Sender<EvictorMessage>,
 ) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
@@ -92,11 +92,9 @@ pub fn get_device(
     }
 }
 
-fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()>{
+fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> {
     let (resp_tx, resp_rx) = flume::bounded(1);
-    if let Err(e) = eviction_channel.send(EvictorMessage {
-        sender: resp_tx,
-    }) {
+    if let Err(e) = eviction_channel.send(EvictorMessage { sender: resp_tx }) {
         eprintln!("[append] Failed to send eviction message: {}", e);
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -104,10 +102,10 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()>{
         ));
     };
 
-    if let Err(e) =  resp_rx.recv() {
+    if let Err(e) = resp_rx.recv() {
         eprintln!("[append] Failed to receive eviction message: {}", e);
     }
-    
+
     Ok(())
 }
 
@@ -172,7 +170,11 @@ impl Zoned {
 }
 
 impl Zoned {
-    fn new(device: &str, chunk_size: usize, eviction_channel: Sender<EvictorMessage>,) -> io::Result<Self> {
+    fn new(
+        device: &str,
+        chunk_size: usize,
+        eviction_channel: Sender<EvictorMessage>,
+    ) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
@@ -355,18 +357,31 @@ impl Device for Zoned {
             .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
     fn reset_zone(&self, zone_id: usize) -> io::Result<()> {
-        reset_zone(&self.nvme_config, &self.config, PerformOn::Zone(zone_id as u64))
-            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+        reset_zone(
+            &self.nvme_config,
+            &self.config,
+            PerformOn::Zone(zone_id as u64),
+        )
+        .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 
     fn close_zone(&self, zone_id: usize) -> io::Result<()> {
-        close_zone(&self.nvme_config, &self.config, PerformOn::Zone(zone_id as u64))
-            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+        close_zone(
+            &self.nvme_config,
+            &self.config,
+            PerformOn::Zone(zone_id as u64),
+        )
+        .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 }
 
 impl BlockInterface {
-    fn new(device: &str, chunk_size: usize, block_zone_capacity: usize, eviction_channel: Sender<EvictorMessage>) -> io::Result<Self> {
+    fn new(
+        device: &str,
+        chunk_size: usize,
+        block_zone_capacity: usize,
+        eviction_channel: Sender<EvictorMessage>,
+    ) -> io::Result<Self> {
         let nvme_config = match nvme_get_info(device) {
             Ok(config) => config,
             Err(err) => return Err(err.try_into().unwrap()),
@@ -383,7 +398,7 @@ impl BlockInterface {
         let _num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
         // Chunks per zone: how to get?
         let _chunks_per_zone = block_zone_capacity / chunk_size;
-        
+
         // Num_zones: how to get?
         let num_zones = 10;
         // Chunks per zone: how to get?
@@ -399,7 +414,7 @@ impl BlockInterface {
             chunk_size,
             chunks_per_zone,
             num_zones,
-            eviction_channel
+            eviction_channel,
         })
     }
 }
@@ -407,7 +422,6 @@ impl BlockInterface {
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-       
         let mtx = self.state.clone();
 
         let chunk_location = loop {
@@ -415,7 +429,9 @@ impl Device for BlockInterface {
             match state.active_zones.remove_chunk_location() {
                 Ok(location) => break location,
                 Err(_) => {
-                    eprintln!("[append] Failed to allocate chunk: no available space in active zones");
+                    eprintln!(
+                        "[append] Failed to allocate chunk: no available space in active zones"
+                    );
                 }
             };
             drop(state);
@@ -522,9 +538,15 @@ impl Device for BlockInterface {
         (total_chunks - available_chunks) / total_chunks
     }
 
-    fn reset(&self) -> io::Result<()> { Ok(()) }
+    fn reset(&self) -> io::Result<()> {
+        Ok(())
+    }
 
-    fn reset_zone(&self, _zone_id: usize) -> io::Result<()> { Ok(()) }
+    fn reset_zone(&self, _zone_id: usize) -> io::Result<()> {
+        Ok(())
+    }
 
-    fn close_zone(&self, _zone_id: usize) -> io::Result<()> { Ok(()) }
+    fn close_zone(&self, _zone_id: usize) -> io::Result<()> {
+        Ok(())
+    }
 }

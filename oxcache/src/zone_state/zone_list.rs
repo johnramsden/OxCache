@@ -1,6 +1,6 @@
 use crate::cache::bucket::ChunkLocation;
-use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use crate::device;
+use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self};
 
@@ -91,7 +91,11 @@ impl ZoneList {
     }
 
     // Zoned implementations should call this once they are finished with appending.
-    pub fn write_finish(&mut self, zone_index: ZoneIndex, device: &dyn device::Device) -> io::Result<()> {
+    pub fn write_finish(
+        &mut self,
+        zone_index: ZoneIndex,
+        device: &dyn device::Device,
+    ) -> io::Result<()> {
         let write_num = self.writing_zones.get(&zone_index).unwrap();
         if write_num - 1 == 0 {
             self.writing_zones.remove(&zone_index);
@@ -156,7 +160,11 @@ impl ZoneList {
     }
 
     // Reset the selected zone
-    pub fn reset_zone(&mut self, idx: ZoneIndex, device: &dyn device::Device) -> std::io::Result<()> {
+    pub fn reset_zone(
+        &mut self,
+        idx: ZoneIndex,
+        device: &dyn device::Device,
+    ) -> std::io::Result<()> {
         debug_assert!(!self.writing_zones.contains_key(&idx));
 
         debug_assert!({
@@ -172,7 +180,11 @@ impl ZoneList {
         device.reset_zone(idx)
     }
 
-    pub fn reset_zones(&mut self, indices: &[ZoneIndex], device: &dyn device::Device) -> std::io::Result<()> {
+    pub fn reset_zones(
+        &mut self,
+        indices: &[ZoneIndex],
+        device: &dyn device::Device,
+    ) -> std::io::Result<()> {
         for idx in indices {
             self.reset_zone(*idx, device)?;
         }
@@ -188,9 +200,10 @@ impl ZoneList {
     }
 
     pub fn get_num_available_chunks(&self) -> usize {
-        self.open_zones.iter().fold(0, |avail, zone| {
-            avail + zone.chunks_available
-        }) + self.free_zones.len() * self.chunks_per_zone
+        self.open_zones
+            .iter()
+            .fold(0, |avail, zone| avail + zone.chunks_available)
+            + self.free_zones.len() * self.chunks_per_zone
     }
 }
 
@@ -200,7 +213,12 @@ mod zone_list_tests {
 
     use bytes::Bytes;
 
-    use crate::{cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}};
+    use crate::{
+        cache::{Cache, bucket::ChunkLocation},
+        device::Device,
+        eviction::EvictTarget,
+        zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait},
+    };
 
     use super::ZoneList;
 
@@ -208,27 +226,51 @@ mod zone_list_tests {
 
     impl Device for MockDevice {
         fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-            Ok(ChunkLocation {zone: 0, index: 0})
+            Ok(ChunkLocation { zone: 0, index: 0 })
         }
 
-        fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()> { Ok(()) }
+        fn read_into_buffer(
+            &self,
+            location: ChunkLocation,
+            read_buffer: &mut [u8],
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> std::io::Result<()> { Ok(()) }
+        fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> std::io::Result<()> {
+            Ok(())
+        }
 
-        fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> { Ok(Bytes::new()) }
+        fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
+            Ok(Bytes::new())
+        }
 
-        fn get_num_zones(&self) -> usize { 0 }
+        fn get_num_zones(&self) -> usize {
+            0
+        }
 
-        fn get_chunks_per_zone(&self) -> usize { 0 }
-        fn get_block_size(&self) -> usize { 0 }
-        fn get_use_percentage(&self) -> f32 { 0.0 }
+        fn get_chunks_per_zone(&self) -> usize {
+            0
+        }
+        fn get_block_size(&self) -> usize {
+            0
+        }
+        fn get_use_percentage(&self) -> f32 {
+            0.0
+        }
 
-        fn reset(&self) -> std::io::Result<()> { Ok(()) }
+        fn reset(&self) -> std::io::Result<()> {
+            Ok(())
+        }
 
-        fn reset_zone(&self, zone_id: usize) -> std::io::Result<()> { Ok(()) }
+        fn reset_zone(&self, zone_id: usize) -> std::io::Result<()> {
+            Ok(())
+        }
 
-        fn close_zone(&self, zone_id: usize) -> std::io::Result<()> { Ok(()) }
+        fn close_zone(&self, zone_id: usize) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[macro_export]

@@ -1,13 +1,13 @@
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
+use flume::{Receiver, Sender};
+use lru::LruCache;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use flume::{Receiver, Sender};
-use lru::LruCache;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -235,7 +235,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>
+    handle: Option<JoinHandle<()>>,
 }
 
 pub struct EvictorMessage {
@@ -249,10 +249,10 @@ impl Evictor {
         eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
         cache: Arc<Cache>,
         evict_interval: Duration,
-        evict_rx: Receiver<EvictorMessage>
+        evict_rx: Receiver<EvictorMessage>,
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
-        
+
         let shutdown_clone = Arc::clone(&shutdown);
 
         let device_clone = Arc::clone(&device);
@@ -265,28 +265,28 @@ impl Evictor {
                     Ok(s) => {
                         println!("Received immediate eviction request");
                         Some(s.sender)
-                    },
+                    }
                     Err(flume::RecvTimeoutError::Timeout) => {
                         println!("Timer eviction");
                         None
-                    },
+                    }
                     Err(flume::RecvTimeoutError::Disconnected) => {
                         println!("Disconnected");
                         break;
-                    },
+                    }
                 };
 
                 let mut policy = eviction_policy_clone.lock().unwrap();
                 let targets = policy.get_evict_targets();
-                
+
                 drop(policy);
-                
+
                 let result = match device_clone.evict(targets, cache_clone.clone()) {
-                    Err(e) => { 
+                    Err(e) => {
                         println!("Error evicting: {}", e);
                         Err(e.to_string())
-                    },
-                    Ok(_) => Ok(()),                    
+                    }
+                    Ok(_) => Ok(()),
                 };
 
                 if let Some(sender) = sender {
@@ -305,7 +305,7 @@ impl Evictor {
 
         Ok(Self {
             shutdown,
-            handle: Some(handle)
+            handle: Some(handle),
         })
     }
 

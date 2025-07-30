@@ -138,15 +138,18 @@ pub enum NVMeError {
         max_append: u32,
         trying_to_append: u32,
     },
-    ExtraContext{
+    ExtraContext {
         context: String,
-        original_error: Box<NVMeError>
-    }
+        original_error: Box<NVMeError>,
+    },
 }
 
 impl NVMeError {
     pub fn add_context(&mut self, context: String) {
-        *self = NVMeError::ExtraContext { context, original_error: Box::new(self.clone()) }
+        *self = NVMeError::ExtraContext {
+            context,
+            original_error: Box::new(self.clone()),
+        }
     }
 }
 
@@ -173,9 +176,10 @@ impl fmt::Display for NVMeError {
                     "Append size too large: max append is {} bytes while trying to append {} bytes",
                     max_append, trying_to_append
                 ),
-                NVMeError::ExtraContext { context, original_error } => format!(
-                    "{}\nContext: {}", *original_error, context
-                )
+                NVMeError::ExtraContext {
+                    context,
+                    original_error,
+                } => format!("{}\nContext: {}", *original_error, context),
             }
         )
     }

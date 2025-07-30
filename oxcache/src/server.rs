@@ -70,7 +70,8 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
     pub fn new(config: ServerConfig, mut remote: T) -> Result<Self, Box<dyn Error>> {
-        let (evict_tx, evict_rx): (Sender<EvictorMessage>, Receiver<EvictorMessage>) = flume::unbounded();
+        let (evict_tx, evict_rx): (Sender<EvictorMessage>, Receiver<EvictorMessage>) =
+            flume::unbounded();
         let device = device::get_device(
             config.disk.as_str(),
             config.chunk_size,
@@ -90,7 +91,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             remote: Arc::new(remote),
             config,
             device,
-            evict_rx
+            evict_rx,
         })
     }
 

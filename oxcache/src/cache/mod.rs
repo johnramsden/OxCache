@@ -28,7 +28,7 @@ struct BucketMap {
 #[derive(Debug)]
 pub struct Cache {
     // Make sure to lock buckets before locking zone_to_entry, to avoid deadlock errors
-    bm: RwLock<BucketMap>
+    bm: RwLock<BucketMap>,
 }
 
 impl Cache {
@@ -36,7 +36,7 @@ impl Cache {
         Self {
             bm: RwLock::new(BucketMap {
                 buckets: HashMap::new(),
-                zone_to_entry: ArrayBase::from_elem((num_zones, chunks_per_zone), None)
+                zone_to_entry: ArrayBase::from_elem((num_zones, chunks_per_zone), None),
             }),
         }
     }
@@ -73,7 +73,7 @@ impl Cache {
                         let notify = notify.clone();
                         let notified = notify.notified(); // queue notifies
                         // Now we can drop full map lock, we have lock on chunkstate
-                        
+
                         drop(bucket_state_guard);
 
                         notified.await; // retry loop required
@@ -121,7 +121,9 @@ impl Cache {
                 let mut chunk_loc_guard = locked_chunk_location.write().await;
                 // We now have something in the waiting state
                 // It is locked and should not be unlocked until it's out of the waiting state
-                bucket_guard.buckets.insert(key.clone(), Arc::clone(&locked_chunk_location)); // Place locked waiting state
+                bucket_guard
+                    .buckets
+                    .insert(key.clone(), Arc::clone(&locked_chunk_location)); // Place locked waiting state
                 drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
                 let write_result = writer().await;
                 match write_result {
@@ -193,7 +195,8 @@ impl Cache {
             }
 
             // Now safe to mutate reverse_mapping
-            map_guard.zone_to_entry
+            map_guard
+                .zone_to_entry
                 .slice_mut(zone_slice)
                 .map_inplace(|v| *v = None);
         }
@@ -228,7 +231,8 @@ impl Cache {
                 None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
             };
 
-            let state_guard = bucket_guard.buckets
+            let state_guard = bucket_guard
+                .buckets
                 .get(&chunk_id)
                 .ok_or(entry_not_found())?
                 .clone();
@@ -289,7 +293,10 @@ impl Cache {
             None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
         };
 
-        bucket_guard.buckets.remove(&chunk_id).ok_or(entry_not_found())?;
+        bucket_guard
+            .buckets
+            .remove(&chunk_id)
+            .ok_or(entry_not_found())?;
         Ok(())
     }
 
@@ -307,7 +314,10 @@ impl Cache {
                 None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
             };
 
-            bucket_guard.buckets.remove(&chunk_id).ok_or(entry_not_found())?;
+            bucket_guard
+                .buckets
+                .remove(&chunk_id)
+                .ok_or(entry_not_found())?;
         }
 
         Ok(())
@@ -345,7 +355,9 @@ impl Cache {
             ChunkState::Ready(_) => {
                 let locked_chunk_location = new_entry();
                 let mut chunk_loc_guard = locked_chunk_location.write().await;
-                bucket_guard.buckets.insert(key.clone(), Arc::clone(&locked_chunk_location));
+                bucket_guard
+                    .buckets
+                    .insert(key.clone(), Arc::clone(&locked_chunk_location));
                 drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
 
                 let write_result = writer().await;

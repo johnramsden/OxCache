@@ -196,7 +196,6 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
         Err(err) => return Err(err),
     };
 
-
     Ok(ZNSConfig {
         max_active_resources: mar,
         max_open_resources: mor,
@@ -220,7 +219,7 @@ pub fn get_num_zones(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
 
 /// Returns the zone capacity for the given NVMe device and namespace.
 pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
-     match report_zones(fd, nsid, 0, 1, 0) {
+    match report_zones(fd, nsid, 0, 1, 0) {
         Ok((_, inf)) => Ok(inf[0].zone_capacity),
         Err(err) => Err(err),
     }
