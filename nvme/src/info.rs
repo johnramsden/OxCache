@@ -168,7 +168,6 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
     let mor = zns_ns_data.mor + 1;
 
     let zone_fmt = zns_ns_data.lbafe[nvme_config.current_lba_index];
-    let zone_size = zone_fmt.zsze;
     let zdesc_ext_size = (zone_fmt.zdes * 64) as u64;
     let variable_zone_cap = zns_ns_data.zoc & 1 == 1;
     // Variable zone cap means that we'll have to check the return value every time for operations that modify zones. This shouldn't be common at all
@@ -190,6 +189,13 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
         Err(err) => return Err(err),
     };
 
+    // Zone cap
+    let zone_size = match get_zone_capacity(nvme_config.fd, nvme_config.nsid) {
+        Ok(nz) => nz,
+        Err(err) => return Err(err),
+    };
+
+
     Ok(ZNSConfig {
         max_active_resources: mar,
         max_open_resources: mor,
@@ -206,6 +212,14 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
 pub fn get_num_zones(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
     match report_zones(fd, nsid, 0, 0, 0) {
         Ok((nz, _)) => Ok(nz),
+        Err(err) => Err(err),
+    }
+}
+
+/// Returns the zone capacity for the given NVMe device and namespace.
+pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
+     match report_zones(fd, nsid, 0, 1, 0) {
+        Ok((_, inf)) => Ok(inf[0].zone_capacity),
         Err(err) => Err(err),
     }
 }
@@ -271,9 +285,12 @@ pub fn report_zones(
                 .map(|data: &[u64]| {
                     let data_ptr = data.as_ptr() as *const nvme_zns_desc;
                     let zns_desc = unsafe { std::ptr::read(data_ptr) };
+                    let zs: u8 = zns_desc.zs >> 4;
                     ZNSZoneDescriptor {
                         seq_write_required: (zns_desc.zt & 0b111) == 2,
-                        zone_state: (zns_desc.zs >> 4).try_into().unwrap(),
+                        zone_state: zs.try_into().unwrap_or_else(|e| {
+                            panic!("Invalid zone state: {:?} from raw value {}", e, zs)
+                        }),
                         zone_capacity: zns_desc.zcap,
                         zone_start_address: zns_desc.zslba,
                         write_pointer: zns_desc.wp,
