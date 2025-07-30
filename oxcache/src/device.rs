@@ -2,120 +2,20 @@ use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::{EvictTarget, EvictorMessage};
 use crate::server::RUNTIME;
+use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{reset_zone, zns_append, zns_read};
-use nvme::types::{NVMeConfig, NVMeError, PerformOn, ZNSConfig};
+use nvme::ops::{reset_zone, zns_append, zns_read, close_zone};
+use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use flume::Sender;
-
-#[derive(Copy, Clone)]
-struct Zone {
-    index: usize,
-    chunks_available: usize,
-}
-
-struct ZoneList {
-    available_zones: VecDeque<Zone>,
-    chunks_per_zone: usize,
-}
-
-impl ZoneList {
-    fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
-        let mut avail_zones = VecDeque::with_capacity(num_zones as usize);
-
-        for i in 0..num_zones {
-            avail_zones.push_back(Zone {
-                index: i,
-                chunks_available: chunks_per_zone,
-            });
-        }
-
-        ZoneList {
-            available_zones: avail_zones,
-            chunks_per_zone,
-        }
-    }
-
-    // Get a zone to write to
-    fn remove(&mut self) -> Result<usize, ()> {
-        if self.is_full() {
-            // Need to evict
-            return Err(());
-        }
-
-        let mut zone = match self.available_zones.pop_front() {
-            Some(z) => z,
-            None => return Err(()),
-        };
-        if zone.chunks_available > 1 {
-            zone.chunks_available -= 1;
-            self.available_zones.push_front(zone);
-        }
-
-        Ok(zone.index)
-    }
-
-    // Get the location to write to, for block devices
-    fn remove_chunk_location(&mut self) -> Result<ChunkLocation, ()> {
-        if self.is_full() {
-            // Need to evict
-            return Err(());
-        }
-
-        let mut zone = match self.available_zones.pop_front() {
-            Some(z) => z,
-            None => return Err(()),
-        };
-        let chunk_idx = self.chunks_per_zone - zone.chunks_available;
-        if zone.chunks_available > 1 {
-            zone.chunks_available -= 1;
-            self.available_zones.push_front(zone);
-        }
-
-        Ok(ChunkLocation {
-            zone: zone.index,
-            index: chunk_idx as u64,
-        })
-    }
-
-    // Check if all zones are full
-    fn is_full(&self) -> bool {
-        self.available_zones.is_empty()
-    }
-
-    // Reset the selected zone
-    #[allow(dead_code)]
-    fn reset_zone(&mut self, idx: usize) {
-        self.available_zones.push_back(Zone {
-            index: idx,
-            chunks_available: self.chunks_per_zone,
-        });
-    }
-
-    fn reset_zones(&mut self, indices: &[usize]) {
-        for idx in indices {
-            self.available_zones.push_back(Zone {
-                index: *idx,
-                chunks_available: self.chunks_per_zone,
-            });
-        }
-    }
-
-    fn reset_zone_with_capacity(&mut self, idx: usize, remaining: usize) {
-        self.available_zones.push_back(Zone {
-            index: idx,
-            chunks_available: remaining,
-        });
-    }
-}
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
-    zones: Arc<Mutex<ZoneList>>,
+    zones: Arc<(Mutex<ZoneList>, Condvar)>,
     eviction_channel: Sender<EvictorMessage>,
 }
 
@@ -136,7 +36,7 @@ impl BlockDeviceState {
         let zones = vec![BlockZoneInfo { _write_pointer: 0 }; num_zones];
         Self {
             _zones: zones,
-            active_zones: ZoneList::new(num_zones, chunks_per_zone),
+            active_zones: ZoneList::new(num_zones, chunks_per_zone, num_zones),
             _chunk_size: chunk_size,
         }
     }
@@ -165,8 +65,13 @@ pub trait Device: Send + Sync {
 
     fn get_chunks_per_zone(&self) -> usize;
     fn get_block_size(&self) -> usize;
+    fn get_use_percentage(&self) -> f32;
 
-    fn reset_all(&self) -> Result<(), NVMeError>;
+    fn reset(&self) -> io::Result<()>;
+
+    fn reset_zone(&self, zone_id: usize) -> io::Result<()>;
+
+    fn close_zone(&self, zone_id: usize) -> io::Result<()>;
 }
 
 pub fn get_device(
@@ -231,12 +136,39 @@ impl Zoned {
     }
 
     fn get_free_zone(&self) -> io::Result<usize> {
-        let mtx = Arc::clone(&self.zones);
+        let (mtx, wait_notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
         match zone_list.remove() {
             Ok(zone_idx) => Ok(zone_idx),
-            Err(()) => Err(io::Error::new(io::ErrorKind::StorageFull, "Cache is full")),
+            Err(error) => match error {
+                ZoneObtainFailure::EvictNow => {
+                    Err(io::Error::new(ErrorKind::StorageFull, "Cache is full"))
+                }
+                ZoneObtainFailure::Wait => loop {
+                    zone_list = wait_notify.wait(zone_list).unwrap();
+                    match zone_list.remove() {
+                        Ok(idx) => return Ok(idx),
+                        Err(err) => match err {
+                            ZoneObtainFailure::EvictNow => {
+                                return Err(io::Error::new(ErrorKind::Other, "Cache is full"));
+                            }
+                            ZoneObtainFailure::Wait => continue,
+                        },
+                    }
+                },
+            },
         }
+    }
+
+    fn complete_write(&self, zone_idx: usize) -> io::Result<()> {
+        let (mtx, notify) = &*self.zones;
+        let mut zone_list = mtx.lock().unwrap();
+        zone_list.write_finish(zone_idx, self)?;
+        // Tell other threads that we finished writing, so they can
+        // come and try to open a new zone if needed.
+        notify.notify_all();
+
+        Ok(())
     }
 }
 
@@ -249,16 +181,21 @@ impl Zoned {
 
         match nvme::info::zns_get_info(&nvme_config) {
             Ok(mut config) => {
-                config.chunks_per_zone = config.zone_size / chunk_size as u64;
+                let chunk_size_in_logical_blocks =
+                    chunk_size as u64 / nvme_config.logical_block_size;
+                config.chunks_per_zone = config.zone_cap / chunk_size_in_logical_blocks;
                 config.chunk_size = chunk_size;
-                let zone_list =
-                    ZoneList::new(config.num_zones as usize, config.chunks_per_zone as usize);
+                let zone_list = ZoneList::new(
+                    config.num_zones as usize,
+                    config.chunks_per_zone as usize,
+                    config.max_active_resources as usize,
+                );
 
                 Ok(Self {
                     nvme_config,
                     config,
-                    zones: Arc::new(Mutex::new(zone_list)),
-                    eviction_channel
+                    eviction_channel,
+                    zones: Arc::new((Mutex::new(zone_list), Condvar::new())),
                 })
             }
             Err(err) => Err(err.try_into().unwrap()),
@@ -292,10 +229,15 @@ impl Device for Zoned {
             data.as_ref(),
         ) {
             Ok(lba) => {
+                self.complete_write(zone_index)?;
                 let chunk = lba / self.config.chunk_size as u64;
                 Ok(ChunkLocation::new(zone_index, chunk))
             }
-            Err(err) => Err(err.try_into().unwrap()),
+            Err(mut err) => {
+                self.complete_write(zone_index)?;
+                err.add_context(format!("Write failed at zone {}\n", zone_index));
+                Err(err.try_into().unwrap())
+            }
         }
     }
 
@@ -323,6 +265,8 @@ impl Device for Zoned {
     }
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
+        println!("Current device usage is at: {}", self.get_use_percentage());
+
         match locations {
             EvictTarget::Chunk(mut chunk_locations) => {
                 // Check all zones are the same, this isn't a
@@ -338,7 +282,7 @@ impl Device for Zoned {
                 // TODO: Does this need to be aligned?
                 let mut read_buf = vec![
                     0_u8;
-                    (self.config.zone_size * self.nvme_config.logical_block_size)
+                    (self.config.zone_cap * self.nvme_config.logical_block_size)
                         as usize
                 ];
                 self.read_into_buffer(
@@ -366,8 +310,9 @@ impl Device for Zoned {
                     || Ok(self.compact_zone(zone_to_evict, &to_keep, &mut read_buf)?),
                 ))?;
 
-                let zone_mtx = Arc::clone(&self.zones);
+                let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
+                // TODO: reset zones for device
                 zones.reset_zone_with_capacity(
                     zone_to_evict,
                     self.get_chunks_per_zone() - to_keep.len(),
@@ -375,22 +320,11 @@ impl Device for Zoned {
                 Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                rt.block_on(cache.remove_zones(&zones_to_evict))?;
-                let zone_mtx = Arc::clone(&self.zones);
-                let mut zones = zone_mtx.lock().unwrap();
-                zones.reset_zones(&zones_to_evict);
+                RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
 
-                for zone_idx in zones_to_evict {
-                    reset_zone(
-                        &self.nvme_config,
-                        &self.config,
-                        PerformOn::Zone(zone_idx as u64),
-                    )
-                    .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?
-                }
+                let (zone_mtx, _) = &*self.zones;
+                let mut zones = zone_mtx.lock().unwrap();
+                zones.reset_zones(&zones_to_evict, self)?;
 
                 Ok(())
             }
@@ -409,8 +343,26 @@ impl Device for Zoned {
         self.nvme_config.logical_block_size as usize
     }
 
-    fn reset_all(&self) -> Result<(), NVMeError> {
+    fn get_use_percentage(&self) -> f32 {
+        let (zones, _) = &*self.zones;
+        let zones = zones.lock().unwrap();
+        let total_chunks = (self.config.chunks_per_zone * self.config.num_zones) as f32;
+        let available_chunks = zones.get_num_available_chunks() as f32;
+        (total_chunks - available_chunks) / total_chunks
+    }
+
+    fn reset(&self) -> io::Result<()> {
         reset_zone(&self.nvme_config, &self.config, PerformOn::AllZones)
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+    }
+    fn reset_zone(&self, zone_id: usize) -> io::Result<()> {
+        reset_zone(&self.nvme_config, &self.config, PerformOn::Zone(zone_id as u64))
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+    }
+
+    fn close_zone(&self, zone_id: usize) -> io::Result<()> {
+        close_zone(&self.nvme_config, &self.config, PerformOn::Zone(zone_id as u64))
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 }
 
@@ -463,7 +415,7 @@ impl Device for BlockInterface {
             let mut state = mtx.lock().unwrap();
             match state.active_zones.remove_chunk_location() {
                 Ok(location) => break location,
-                Err(()) => {
+                Err(_) => {
                     eprintln!("[append] Failed to allocate chunk: no available space in active zones");
                 }
             };
@@ -546,7 +498,7 @@ impl Device for BlockInterface {
                 rt.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
-                state.active_zones.reset_zones(&locations);
+                state.active_zones.reset_zones(&locations, self)?;
                 Ok(())
             }
         }
@@ -564,7 +516,16 @@ impl Device for BlockInterface {
         self.nvme_config.logical_block_size as usize
     }
 
-    fn reset_all(&self) -> Result<(), NVMeError> {
-        Ok(())
+    fn get_use_percentage(&self) -> f32 {
+        let state = &*self.state.lock().unwrap();
+        let total_chunks = (self.chunks_per_zone * self.num_zones) as f32;
+        let available_chunks = state.active_zones.get_num_available_chunks() as f32;
+        (total_chunks - available_chunks) / total_chunks
     }
+
+    fn reset(&self) -> io::Result<()> { Ok(()) }
+
+    fn reset_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
+
+    fn close_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
 }

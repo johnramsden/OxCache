@@ -1,5 +1,5 @@
-use crate::device::Device;
 use crate::cache::{Cache, bucket::ChunkLocation};
+use crate::device::Device;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -15,6 +15,7 @@ pub enum EvictionPolicyWrapper {
     Chunk(ChunkEvictionPolicy),
 }
 
+#[derive(Debug)]
 pub enum EvictTarget {
     Chunk(Vec<ChunkLocation>),
     Zone(Vec<usize>),
@@ -330,9 +331,9 @@ impl Evictor {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::collections::VecDeque;
     use std::fmt::Debug;
-    use super::*;
     use std::hash::Hash;
 
     fn compare_order<T>(lru: &mut LruCache<T, ()>, order: &VecDeque<T>)

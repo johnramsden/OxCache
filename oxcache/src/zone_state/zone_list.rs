@@ -1,0 +1,343 @@
+use crate::cache::bucket::ChunkLocation;
+use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
+use crate::device;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{self, ErrorKind};
+
+type ZoneIndex = usize;
+
+#[derive(Copy, Clone)]
+pub struct Zone {
+    pub index: ZoneIndex,
+    pub chunks_available: usize,
+}
+
+#[derive(Debug)]
+pub enum ZoneObtainFailure {
+    EvictNow,
+    Wait,
+}
+
+pub struct ZoneList {
+    free_zones: VecDeque<Zone>, // Unopened zones with full capacity
+    open_zones: VecDeque<Zone>, // Opened zones
+    writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
+    chunks_per_zone: usize,
+    max_active_resources: usize,
+}
+
+impl ZoneList {
+    pub fn new(num_zones: usize, chunks_per_zone: usize, max_active_resources: usize) -> Self {
+        // List of all zones, initially all are "free"
+        let avail_zones = (0..num_zones)
+            .map(|index| Zone {
+                index,
+                chunks_available: chunks_per_zone,
+            })
+            .collect();
+
+        ZoneList {
+            free_zones: avail_zones,
+            open_zones: VecDeque::with_capacity(max_active_resources),
+            writing_zones: HashMap::with_capacity(max_active_resources),
+            chunks_per_zone,
+            max_active_resources,
+        }
+    }
+
+    // Get a zone to write to
+    pub fn remove(&mut self) -> Result<ZoneIndex, ZoneObtainFailure> {
+        if self.is_full() {
+            // Need to evict
+            return Err(EvictNow);
+        }
+
+        let can_open_more_zones =
+            self.get_open_zones() < self.max_active_resources && self.free_zones.len() > 0;
+
+        // If we can't open any more zones, and we can't get existing open zones...
+        if !can_open_more_zones && self.open_zones.is_empty() {
+            // ... due to a lack of free zones...
+            if self.free_zones.is_empty() {
+                // ... then we should evict.
+                return Err(EvictNow);
+            }
+
+            // ... due to all zones being unavailable...
+            // ... then we should wait until there is an open zone available.
+            return Err(Wait);
+            // It's worth noting that this case only occurs when all open zones are full, but are
+            // still being written to. There can still be free zones, we just can't open them yet.
+            // We should wait for the zone to be free somehow
+        }
+
+        let zone = if can_open_more_zones {
+            self.free_zones.pop_front()
+        } else {
+            self.open_zones.pop_front()
+        };
+        let mut zone = zone.unwrap();
+        zone.chunks_available -= 1;
+        if zone.chunks_available >= 1 {
+            self.open_zones.push_back(zone);
+        }
+
+        self.writing_zones
+            .entry(zone.index)
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+
+        Ok(zone.index)
+    }
+
+    // Zoned implementations should call this once they are finished with appending.
+    pub fn write_finish(&mut self, zone_index: ZoneIndex, device: &dyn device::Device) -> io::Result<()> {
+        let write_num = self.writing_zones.get(&zone_index).unwrap();
+        if write_num - 1 == 0 {
+            self.writing_zones.remove(&zone_index);
+            device.close_zone(zone_index)
+        } else {
+            self.writing_zones.insert(zone_index, write_num - 1);
+            Ok(())
+        }
+    }
+
+    // Get the location to write to for block devices
+    // Do not need the active zone bookkeeping, so it's simpler here
+    // Writing_zones should be considered unused
+    pub fn remove_chunk_location(&mut self) -> Result<ChunkLocation, ZoneObtainFailure> {
+        if self.is_full() {
+            // Need to evict
+            return Err(EvictNow);
+        }
+
+        let can_open_more_zones =
+            self.open_zones.len() < self.max_active_resources && self.free_zones.len() > 0;
+
+        let zone = if can_open_more_zones {
+            self.free_zones.pop_front()
+        } else {
+            self.open_zones.pop_front()
+        };
+        let mut zone = zone.unwrap();
+        zone.chunks_available -= 1;
+        if zone.chunks_available >= 1 {
+            self.open_zones.push_back(zone);
+        }
+
+        Ok(ChunkLocation {
+            zone: zone.index,
+            // + 1 since we subtracted by 1 earlier
+            index: (self.chunks_per_zone - (zone.chunks_available + 1)) as u64,
+        })
+    }
+
+    // Check if all zones are full
+    pub fn is_full(&self) -> bool {
+        self.free_zones.is_empty() && self.open_zones.is_empty()
+    }
+
+    // Gets the number of open zones by counting the unique
+    // zones listed in open_zones and writing_zones
+    pub fn get_open_zones(&self) -> usize {
+        // TODO: This is slow, O(n)
+        let open_zone_list = self
+            .open_zones
+            .iter()
+            .map(|zone| &zone.index)
+            .collect::<HashSet<&ZoneIndex>>();
+
+        self.writing_zones
+            .keys()
+            .into_iter()
+            .collect::<HashSet<&ZoneIndex>>()
+            .union(&open_zone_list)
+            .count()
+    }
+
+    // Reset the selected zone
+    pub fn reset_zone(&mut self, idx: ZoneIndex, device: &dyn device::Device) -> std::io::Result<()> {
+        debug_assert!(!self.writing_zones.contains_key(&idx));
+
+        debug_assert!({
+            let mut zone_indices = self.open_zones.iter().map(|zone| zone.index);
+            !zone_indices.any(|zidx| zidx == idx)
+        });
+
+        self.free_zones.push_back(Zone {
+            index: idx,
+            chunks_available: self.chunks_per_zone,
+        });
+
+        device.reset_zone(idx)
+    }
+
+    pub fn reset_zones(&mut self, indices: &[ZoneIndex], device: &dyn device::Device) -> std::io::Result<()> {
+        for idx in indices {
+            self.reset_zone(*idx, device)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: usize) {
+        self.free_zones.push_back(Zone {
+            index: idx,
+            chunks_available: remaining,
+        });
+    }
+
+    pub fn get_num_available_chunks(&self) -> usize {
+        self.open_zones.iter().fold(0, |avail, zone| {
+            avail + zone.chunks_available
+        }) + self.free_zones.len() * self.chunks_per_zone
+    }
+}
+
+#[cfg(test)]
+mod zone_list_tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+
+    use crate::{cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}};
+
+    use super::ZoneList;
+
+    struct MockDevice {}
+
+    impl Device for MockDevice {
+        fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
+            Ok(ChunkLocation {zone: 0, index: 0})
+        }
+
+        fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> std::io::Result<()> { Ok(()) }
+
+        /// This is expected to remove elements from the cache as well
+        fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> std::io::Result<()> { Ok(()) }
+
+        fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> { Ok(Bytes::new()) }
+
+        fn get_num_zones(&self) -> usize { 0 }
+
+        fn get_chunks_per_zone(&self) -> usize { 0 }
+        fn get_block_size(&self) -> usize { 0 }
+        fn get_use_percentage(&self) -> f32 { 0.0 }
+
+        fn reset(&self) -> std::io::Result<()> { Ok(()) }
+
+        fn reset_zone(&self, zone_id: usize) -> std::io::Result<()> { Ok(()) }
+
+        fn close_zone(&self, zone_id: usize) -> std::io::Result<()> { Ok(()) }
+    }
+
+    #[macro_export]
+    macro_rules! assert_state {
+        ( $x:expr, Ok ) => {{
+            match $x.remove() {
+                Ok(_) => (),
+                Err(err) => match err {
+                    EvictNow => assert!(false, "Should have gotten a zone, got evict now instead"),
+                    Wait => assert!(false, "Should have gotten a zone, got wait instead"),
+                },
+            }
+        }};
+        ( $x:expr, EvictNow ) => {{
+            match $x.remove() {
+                Ok(zone) => assert!(false, "Should evict, gotten zone instead: {}", zone),
+                Err(err) => match err {
+                    EvictNow => (),
+                    Wait => assert!(false, "Should evict, got wait instead"),
+                },
+            }
+        }};
+        ( $x:expr, Wait ) => {{
+            match $x.remove() {
+                Ok(zone) => assert!(false, "Should evict, gotten zone instead: {}", zone),
+                Err(err) => match err {
+                    EvictNow => assert!(false, "Should wait, got evict now instead"),
+                    Wait => (),
+                },
+            }
+        }};
+    }
+
+    #[test]
+    fn test_basic() {
+        let md = MockDevice {};
+        let num_zones = 2;
+        let chunks_per_zone = 2;
+        let max_active_resources = 2;
+
+        let mut zonelist = ZoneList::new(num_zones, chunks_per_zone, max_active_resources);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 1);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        assert!(zonelist.get_open_zones() == 2);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 2);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        assert!(zonelist.get_open_zones() == 2);
+
+        assert_state!(zonelist, EvictNow);
+
+        assert!(zonelist.is_full());
+
+        zonelist.write_finish(0, &md);
+        zonelist.write_finish(0, &md);
+        assert!(zonelist.get_open_zones() == 1);
+
+        zonelist.reset_zone(0, &md);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 2);
+
+        zonelist.write_finish(1, &md);
+        zonelist.write_finish(1, &md);
+        assert!(zonelist.get_open_zones() == 1);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        assert!(zonelist.get_open_zones() == 1);
+    }
+
+    #[test]
+    fn test_mar() {
+        let md = MockDevice {};
+        let num_zones = 2;
+        let chunks_per_zone = 2;
+        let max_active_resources = 1;
+
+        let mut zonelist = ZoneList::new(num_zones, chunks_per_zone, max_active_resources);
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 0);
+
+        assert!(
+            zonelist.get_open_zones() == 1,
+            "Open zones is is {}",
+            zonelist.get_open_zones()
+        );
+
+        assert_state!(zonelist, Wait);
+        zonelist.write_finish(0, &md);
+        assert_state!(zonelist, Wait);
+        zonelist.write_finish(0, &md);
+
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        let zone = zonelist.remove().unwrap();
+        assert!(zone == 1);
+        assert_state!(zonelist, EvictNow);
+    }
+}

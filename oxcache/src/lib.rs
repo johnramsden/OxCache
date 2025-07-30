@@ -7,3 +7,4 @@ pub mod request;
 pub mod server;
 pub mod util;
 pub mod writerpool;
+pub mod zone_state;

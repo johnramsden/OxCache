@@ -32,9 +32,9 @@ impl TryFrom<u8> for ZoneState {
             0x02 => Ok(ZoneState::ImplicitlyOpened),
             0x03 => Ok(ZoneState::ExplicitlyOpened),
             0x04 => Ok(ZoneState::Closed),
-            0x13 => Ok(ZoneState::ReadOnly),
-            0x14 => Ok(ZoneState::Full),
-            0x15 => Ok(ZoneState::Offline),
+            0xD => Ok(ZoneState::ReadOnly),
+            0xE => Ok(ZoneState::Full),
+            0xF => Ok(ZoneState::Offline),
             _ => Err(()),
         }
     }
@@ -64,6 +64,7 @@ pub struct ZNSConfig {
     pub zasl: u32, // The zone append size limit. Max append size is zasl bytes.
     pub zone_descriptor_extension_size: u64, // The size of the data that can be associated with a zone, in bytes
     pub zone_size: u64,                      // This is in number of logical blocks
+    pub zone_cap: u64,                       // This is in number of logical blocks
 
     pub chunks_per_zone: u64, // Number of chunks that can be allocated in a zone
     pub chunk_size: usize,    // This is in logical blocks
@@ -125,7 +126,7 @@ pub struct ZNSZoneDescriptor {
 }
 
 /// Represents errors that can occur during NVMe operations.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum NVMeError {
     Errno(Errno),
     StatusResult(nvme_status_result),
@@ -137,6 +138,16 @@ pub enum NVMeError {
         max_append: u32,
         trying_to_append: u32,
     },
+    ExtraContext{
+        context: String,
+        original_error: Box<NVMeError>
+    }
+}
+
+impl NVMeError {
+    pub fn add_context(&mut self, context: String) {
+        *self = NVMeError::ExtraContext { context, original_error: Box::new(self.clone()) }
+    }
 }
 
 impl fmt::Display for NVMeError {
@@ -162,6 +173,9 @@ impl fmt::Display for NVMeError {
                     "Append size too large: max append is {} bytes while trying to append {} bytes",
                     max_append, trying_to_append
                 ),
+                NVMeError::ExtraContext { context, original_error } => format!(
+                    "{}\nContext: {}", *original_error, context
+                )
             }
         )
     }

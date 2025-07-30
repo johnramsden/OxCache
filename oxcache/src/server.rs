@@ -78,7 +78,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             evict_tx,
         )?;
 
-        device.reset_all()?;
+        device.reset()?;
 
         remote.set_blocksize(device.get_block_size());
 
@@ -145,6 +145,9 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 shutdown_signal.notify_waiters();
             }
         });
+
+        // Reset device
+        self.device.reset()?;
 
         // Request handling (green threads)
         loop {
