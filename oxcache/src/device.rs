@@ -158,7 +158,7 @@ impl Zoned {
             Ok(mut config) => {
                 let chunk_size_in_logical_blocks =
                     chunk_size as u64 / nvme_config.logical_block_size;
-                config.chunks_per_zone = config.zone_size / chunk_size_in_logical_blocks;
+                config.chunks_per_zone = config.zone_cap / chunk_size_in_logical_blocks;
                 config.chunk_size = chunk_size;
                 let zone_list = ZoneList::new(
                     config.num_zones as usize,
@@ -248,7 +248,7 @@ impl Device for Zoned {
                 // TODO: Does this need to be aligned?
                 let mut read_buf = vec![
                     0_u8;
-                    (self.config.zone_size * self.nvme_config.logical_block_size)
+                    (self.config.zone_cap * self.nvme_config.logical_block_size)
                         as usize
                 ];
                 self.read_into_buffer(

@@ -64,6 +64,7 @@ pub struct ZNSConfig {
     pub zasl: u32, // The zone append size limit. Max append size is zasl bytes.
     pub zone_descriptor_extension_size: u64, // The size of the data that can be associated with a zone, in bytes
     pub zone_size: u64,                      // This is in number of logical blocks
+    pub zone_cap: u64,                       // This is in number of logical blocks
 
     pub chunks_per_zone: u64, // Number of chunks that can be allocated in a zone
     pub chunk_size: usize,    // This is in logical blocks

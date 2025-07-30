@@ -168,6 +168,7 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
     let mor = zns_ns_data.mor + 1;
 
     let zone_fmt = zns_ns_data.lbafe[nvme_config.current_lba_index];
+    let zone_size = zone_fmt.zsze;
     let zdesc_ext_size = (zone_fmt.zdes * 64) as u64;
     let variable_zone_cap = zns_ns_data.zoc & 1 == 1;
     // Variable zone cap means that we'll have to check the return value every time for operations that modify zones. This shouldn't be common at all
@@ -190,7 +191,7 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
     };
 
     // Zone cap
-    let zone_size = match get_zone_capacity(nvme_config.fd, nvme_config.nsid) {
+    let zone_cap = match get_zone_capacity(nvme_config.fd, nvme_config.nsid) {
         Ok(nz) => nz,
         Err(err) => return Err(err),
     };
@@ -202,6 +203,7 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
         num_zones: nzones,
         zasl: zasl,
         zone_descriptor_extension_size: zdesc_ext_size,
+        zone_cap: zone_cap,
         zone_size: zone_size,
         chunks_per_zone: 0,
         chunk_size: 0,
