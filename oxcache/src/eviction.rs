@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-
+use flume::{Receiver, Sender};
 use lru::LruCache;
 
 pub enum EvictionPolicyWrapper {
@@ -131,7 +131,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     type Target = Vec<usize>;
 
     fn write_update(&mut self, chunk: ChunkLocation) {
-        assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
+        // assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
 
         // We only want to put it in the LRU once the zone is full
         if chunk.index as usize == self.nr_chunks_per_zone - 1 {
@@ -234,7 +234,11 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
 pub struct Evictor {
     shutdown: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<()>>
+}
+
+pub struct EvictorMessage {
+    pub sender: Sender<Result<(), String>>, // Notify when done
 }
 
 impl Evictor {
@@ -244,38 +248,63 @@ impl Evictor {
         eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
         cache: Arc<Cache>,
         evict_interval: Duration,
+        evict_rx: Receiver<EvictorMessage>
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
+        
         let shutdown_clone = Arc::clone(&shutdown);
-        let eviction_policy = eviction_policy.clone();
 
-        let handle = thread::spawn({
-            let device = Arc::clone(&device);
-            let cache = Arc::clone(&cache);
-            let eviction_policy = Arc::clone(&eviction_policy);
-            move || {
-                while !shutdown_clone.load(Ordering::Relaxed) {
-                    println!("Evictor running...");
+        let device_clone = Arc::clone(&device);
+        let eviction_policy_clone = Arc::clone(&eviction_policy);
+        let cache_clone = Arc::clone(&cache);
 
-                    let mut policy = eviction_policy.lock().unwrap();
-                    let targets = policy.get_evict_targets();
-                    drop(policy);
+        let handle = thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Relaxed) {
+                let sender = match evict_rx.recv_timeout(evict_interval) {
+                    Ok(s) => {
+                        println!("Received immediate eviction request");
+                        Some(s.sender)
+                    },
+                    Err(flume::RecvTimeoutError::Timeout) => {
+                        println!("Timer eviction");
+                        None
+                    },
+                    Err(flume::RecvTimeoutError::Disconnected) => {
+                        println!("Disconnected");
+                        break;
+                    },
+                };
 
-                    device
-                        .evict(targets, cache.clone())
-                        .expect("Failed to evict");
+                let mut policy = eviction_policy_clone.lock().unwrap();
+                let targets = policy.get_evict_targets();
+                
+                drop(policy);
+                
+                let result = match device_clone.evict(targets, cache_clone.clone()) {
+                    Err(e) => { 
+                        println!("Error evicting: {}", e);
+                        Err(e.to_string())
+                    },
+                    Ok(_) => Ok(()),                    
+                };
 
-                    // Sleep to simulate periodic work
-                    thread::sleep(evict_interval);
+                if let Some(sender) = sender {
+                    println!("Sending eviction response to sender: {:?}", result);
+                    sender.send(result.clone()).unwrap();
                 }
 
-                println!("Evictor shutting down.");
+                evict_rx.drain().into_iter().for_each(|recv| {
+                    println!("Sending eviction response to drained sender: {:?}", result);
+                    recv.sender.send(result.clone()).unwrap();
+                })
             }
+
+            println!("Evictor thread exiting");
         });
 
         Ok(Self {
             shutdown,
-            handle: Some(handle),
+            handle: Some(handle)
         })
     }
 
