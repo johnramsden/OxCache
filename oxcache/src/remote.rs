@@ -177,7 +177,8 @@ mod test {
     #[test]
     fn test_gen_random_buffer_correctness() {
         let chunk_size = 128;
-        let backend = EmulatedBackend::new(chunk_size, None);
+        let mut backend = EmulatedBackend::new(chunk_size, None);
+        backend.set_blocksize(128);
 
         let key = "mykey";
         let offset = 42;
