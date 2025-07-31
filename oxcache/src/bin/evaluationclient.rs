@@ -4,7 +4,6 @@ use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use oxcache::request;
 use oxcache::request::{GetRequest, Request};
-use rand::prelude::IndexedRandom;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -134,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for handle in handles {
-        handle.await?;
+        let _ = handle.await?;
     }
 
     let duration = start.elapsed(); // Stop the timer
