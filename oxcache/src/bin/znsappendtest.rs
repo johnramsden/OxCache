@@ -17,6 +17,8 @@ struct Cli {
     concurrency: usize,
 }
 
+/// Tests throughput for multi-threaded ZNS append
+
 fn main() -> std::io::Result<()> {
     let args = Cli::parse();
     let concurrency = args.concurrency.min(14); // clamp to 14
