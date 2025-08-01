@@ -55,7 +55,7 @@ jobs:
       if: steps.cache-ubuntu.outputs.cache-hit != 'true'
       run: |
         wget -O /tmp/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
-	mv /tmp/ubuntu.qcow2 $HOME/ubuntu.qcow2
+        mv /tmp/ubuntu.qcow2 $HOME/ubuntu.qcow2
         qemu-img resize $HOME/ubuntu.qcow2 12G
 
     - name: Create Cloud-Init Disk
@@ -129,7 +129,7 @@ jobs:
         sudo apt update && sudo apt install -y build-essential libclang-dev
         EOF
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo	
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo    
 
     - name: Test
       run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
