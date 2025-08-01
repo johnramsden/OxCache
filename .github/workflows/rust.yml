@@ -124,11 +124,12 @@ jobs:
     - name: Build project
       if: steps.cache-cargo.outputs.cache-hit != 'true'
       run: |
-        RUNNING_IN_GITHUB_ACTIONS=yes cargo build
+        cargo build
 
     - name: Copy files and install Rust
       run: |
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
         curl https://sh.rustup.rs -sSf | sh -s -- -y
         . "$HOME/.cargo/env"
