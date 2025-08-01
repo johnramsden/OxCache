@@ -132,4 +132,5 @@ jobs:
         EOF
 
     - name: Test
-      run: cargo test
+      run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
+
