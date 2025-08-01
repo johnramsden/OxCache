@@ -117,6 +117,7 @@ jobs:
         rustup component add rust-analyzer
         sudo ln -s ~/.cargo/bin/* /usr/bin/
         cd OxCache
+	ls -la
         RUNNING_IN_GITHUB_ACTIONS=yes cargo build --verbose
         EOF
 
