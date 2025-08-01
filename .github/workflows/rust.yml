@@ -116,7 +116,6 @@ jobs:
         . "$HOME/.cargo/env"
         rustup component add rust-analyzer
         sudo ln -s ~/.cargo/bin/* /usr/bin/
-        mkdir /home/ubuntu/OxCache
         cd OxCache
         RUNNING_IN_GITHUB_ACTIONS=yes cargo build --verbose
         EOF
