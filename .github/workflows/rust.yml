@@ -126,8 +126,8 @@ jobs:
     - name: Copy files and install Rust
       run: |
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
-        curl https://sh.rustup.rs -sSf | sh -s -- -y
-	sudo apt update && install build-essential libclang-dev
+        . "$HOME/.cargo/env"
+	sudo apt update && sudo apt install build-essential libclang-dev
         EOF
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo	
