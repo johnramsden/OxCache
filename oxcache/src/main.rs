@@ -27,6 +27,9 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub chunk_size: Option<usize>,
+    
+    #[arg(long)]
+    pub max_write_size: Option<usize>,
 
     #[arg(long)]
     pub remote_type: Option<String>,
@@ -60,6 +63,7 @@ pub struct ParsedServerConfig {
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
     pub chunk_size: Option<usize>,
+    pub max_write_size: Option<usize>,
     pub block_zone_capacity: Option<usize>,
 }
 
@@ -188,6 +192,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .chunk_size
         .or_else(|| config.as_ref()?.server.chunk_size);
     let chunk_size = chunk_size.ok_or("Missing chunk size")?;
+    let max_write_size = cli
+        .max_write_size
+        .or_else(|| config.as_ref()?.server.max_write_size);
+    let max_write_size = max_write_size.ok_or("Missing max write size")?;
 
     let block_zone_capacity = cli
         .block_zone_capacity
@@ -214,6 +222,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         },
         chunk_size,
         block_zone_capacity,
+        max_write_size
     })
 }
 
