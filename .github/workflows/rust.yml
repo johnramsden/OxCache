@@ -36,11 +36,11 @@ jobs:
         mkdir ~/.ssh
         ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
         sudo apt install -y qemu-system-x86 \
-	qemu-utils \
-	cloud-utils \
-	wget \
-	sshpass \
-	build-essential \
+        qemu-utils \
+        cloud-utils \
+        wget \
+        sshpass \
+        build-essential \
         ninja-build \
         meson \
         libclang-dev > /dev/null
@@ -116,7 +116,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-	  target
+          target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
