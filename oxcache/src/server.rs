@@ -66,6 +66,7 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
     remote: Arc<T>,
     device: Arc<dyn Device>,
     evict_rx: Receiver<EvictorMessage>,
+    pub shutdown: Arc<Notify>,
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
@@ -83,6 +84,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         remote.set_blocksize(device.get_block_size());
 
+        let shutdown = Arc::new(Notify::new());
+
         Ok(Self {
             cache: Arc::new(Cache::new(
                 device.get_num_zones(),
@@ -92,6 +95,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             config,
             device,
             evict_rx,
+            shutdown,
         })
     }
 
@@ -133,8 +137,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         ));
 
         // Shutdown signal
-        let shutdown = Arc::new(Notify::new());
-        let shutdown_signal = shutdown.clone();
+        let shutdown_signal = self.shutdown.clone();
 
         // Spawn a task to listen for Ctrl+C
         let _shutdown_task = tokio::spawn({
@@ -153,7 +156,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         // Request handling (green threads)
         loop {
             tokio::select! {
-                _ = shutdown.notified() => {
+                _ = self.shutdown.notified() => {
                     println!("Shutting down accept loop.");
                     break;
                 }

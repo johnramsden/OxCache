@@ -28,15 +28,6 @@ pub const nullptr: *mut c_void = null::<c_void>() as *mut c_void;
 ///
 /// This function calls into unsafe FFI code and assumes the status code is valid.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::util::get_errno;
-///
-/// // Example usage with a dummy status code
-/// let errno = get_errno(1);
-/// println!("Errno: {}", errno);
-/// ```
 #[allow(dead_code)]
 pub fn get_errno(status: nvme_status_field) -> u8 {
     unsafe { nvme_status_to_errno(status as i32, false) }
@@ -55,16 +46,6 @@ pub fn get_errno(status: nvme_status_field) -> u8 {
 /// # Safety
 ///
 /// This function calls into unsafe FFI code and assumes the status code is valid.
-///
-/// # Example
-///
-/// ```rust
-/// use nvme::util::get_error_string;
-///
-/// // Example usage with a dummy status code
-/// let msg = get_error_string(1);
-/// println!("NVMe error: {}", msg);
-/// ```
 pub fn get_error_string(status: nvme_status_field) -> &'static str {
     // These are all defined as static const char in the C code, so they should have static lifetime
     unsafe {
@@ -84,16 +65,6 @@ pub fn get_error_string(status: nvme_status_field) -> &'static str {
 ///
 /// * `Some(NVMeError)` if an error occurred, or `None` if successful.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::util::check_error;
-///
-/// let status = -1; // Simulate an error
-/// if let Some(err) = check_error(status) {
-///     println!("Error: {}", err);
-/// }
-/// ```
 pub fn check_error(status: i32) -> Option<NVMeError> {
     // Check if errno is set
     // The majority of libnvme functions will either return -1 and set errno, or return some status result that can be extracted as a string.
@@ -118,15 +89,6 @@ pub fn check_error(status: i32) -> Option<NVMeError> {
 ///
 /// * The result of shifting and masking, converted to the desired type.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::util::shift_and_mask;
-///
-/// let value: u32 = 0b1101_0000;
-/// let result: u8 = shift_and_mask(value, 4u32, 0b1111u32);
-/// assert_eq!(result, 0b1101);
-/// ```
 pub fn shift_and_mask<ToShift, ShiftAs, Result>(
     to_shift: ToShift,
     shift: ShiftAs,
