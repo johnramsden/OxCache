@@ -39,7 +39,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-	  /tmp/ubuntu.qcow2
+          /tmp/ubuntu.qcow2
         key: ubuntu-cloudimg-noble-${{ hashFiles('.github/workflows/rust.yml') }}
 
     - name: Download Ubuntu Cloud Image
