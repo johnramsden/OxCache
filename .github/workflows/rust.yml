@@ -50,17 +50,14 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-          /tmp/ubuntu.qcow2
+          /home/ubuntu/ubuntu.qcow2
         key: ubuntu-cloudimg-noble-${{ hashFiles('.github/workflows/rust.yml') }}
 
     - name: Download Ubuntu Cloud Image
       if: steps.cache-ubuntu.outputs.cache-hit != 'true'
       run: |
-        wget -O /tmp/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
-
-    - name: Resize Ubuntu QEMU Disk
-      run: |
-        qemu-img resize /tmp/ubuntu.qcow2 12G
+        wget -O /home/ubuntu/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
+        qemu-img resize /home/ubuntu/ubuntu.qcow2 12G
 
     - name: Create Cloud-Init Disk
       run: |
@@ -90,7 +87,7 @@ jobs:
         -m 12G \
         -smp 2 \
         -cpu host \
-        -drive file=/tmp/ubuntu.qcow2,format=qcow2,if=virtio \
+        -drive file=/home/ubuntu/ubuntu.qcow2,format=qcow2,if=virtio \
         -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
         -net user,hostfwd=tcp::2222-:22 \
         -net nic \
@@ -128,13 +125,12 @@ jobs:
 
     - name: Copy files and install Rust
       run: |
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
         curl https://sh.rustup.rs -sSf | sh -s -- -y
-        . "$HOME/.cargo/env"
-        sudo ln -s ~/.cargo/bin/* /usr/bin/
+	sudo apt update && install build-essential libclang-dev
         EOF
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo	
 
     - name: Test
       run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
