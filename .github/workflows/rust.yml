@@ -2,19 +2,19 @@ name: Rust build and test
 
 on:
   push:
-    branches: [ "*" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "*" ]
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
-  sector_size=4096
-  zone_size=128
-  zone_capacity=0
-  disk_size=32
-  max_open=14
-  max_active=14
-  zasl=5
+  sector_size: 4096
+  zone_size: 128
+  zone_capacity: 0
+  disk_size: 32
+  max_open: 14
+  max_active: 14
+  zasl: 5
 
 jobs:
   build:
