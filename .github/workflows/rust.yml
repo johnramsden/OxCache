@@ -33,9 +33,20 @@ jobs:
 
     - name: Install QEMU
       run: |
-        sudo apt install -y qemu-system-x86 qemu-utils cloud-utils wget sshpass >/dev/null
+        mkdir ~/.ssh
+        ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
+        sudo apt install -y qemu-system-x86 \
+	qemu-utils \
+	cloud-utils \
+	wget \
+	sshpass \
+	build-essential \
+        ninja-build \
+        meson \
+        libclang-dev > /dev/null
 
     - name: Cache Ubuntu Cloud Image
+      id: cache-ubuntu
       uses: actions/cache@v4
       with:
         path: |
@@ -43,6 +54,7 @@ jobs:
         key: ubuntu-cloudimg-noble-${{ hashFiles('.github/workflows/rust.yml') }}
 
     - name: Download Ubuntu Cloud Image
+      if: steps.cache-ubuntu.outputs.cache-hit != 'true'
       run: |
         wget -O /tmp/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
 
@@ -98,38 +110,29 @@ jobs:
         sleep 30
 
     - name: Cache cargo registry, git, and target
+      id: cache-cargo
       uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
+	  target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Install build dependencies
-      run: |
-        mkdir ~/.ssh
-        ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
-        sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'sudo apt update && sudo apt install -y \
-            linux-modules-extra-$(uname -r) \
-            build-essential \
-            git \
-            nvme-cli \
-            ninja-build \
-            meson \
-            libclang-dev'
-
     - name: Build project
+      if: steps.cache-cargo.outputs.cache-hit != 'true'
+      run: |
+        RUNNING_IN_GITHUB_ACTIONS=yes cargo build
+
+    - name: Copy files and install Rust
       run: |
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
         curl https://sh.rustup.rs -sSf | sh -s -- -y
         . "$HOME/.cargo/env"
-        rustup component add rust-analyzer
         sudo ln -s ~/.cargo/bin/* /usr/bin/
-        cd /home/ubuntu/OxCache
-        RUNNING_IN_GITHUB_ACTIONS=yes cargo build --verbose
         EOF
 
     - name: Test
