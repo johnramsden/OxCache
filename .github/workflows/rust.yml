@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:  # Allows manual runs
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,7 +38,8 @@ jobs:
     - name: Cache Ubuntu Cloud Image
       uses: actions/cache@v4
       with:
-        path: /tmp/ubuntu.qcow2
+        path: |
+	  /tmp/ubuntu.qcow2
         key: ubuntu-cloudimg-noble-${{ hashFiles('.github/workflows/rust.yml') }}
 
     - name: Download Ubuntu Cloud Image
@@ -127,10 +129,9 @@ jobs:
         rustup component add rust-analyzer
         sudo ln -s ~/.cargo/bin/* /usr/bin/
         cd /home/ubuntu/OxCache
-        ls -la
         RUNNING_IN_GITHUB_ACTIONS=yes cargo build --verbose
         EOF
 
     - name: Test
-      run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
+      run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
 
