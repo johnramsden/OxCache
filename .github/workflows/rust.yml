@@ -1,4 +1,4 @@
-name: Rust
+name: Rust build and test
 
 on:
   push:
@@ -8,6 +8,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  sector_size=4096
+  zone_size=128
+  zone_capacity=0
+  disk_size=32
+  max_open=14
+  max_active=14
+  zasl=5
 
 jobs:
   build:
@@ -15,14 +22,67 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
 
-    - name: Install Meson
+    - name: Install QEMU
       run: |
-        sudo apt update
-        sudo apt install -y meson
+        sudo apt install -y qemu-system-x86 qemu-utils cloud-utils wget sshpass >/dev/null
+
+    - name: Download Ubuntu Cloud Image
+      run: |
+        wget -O /tmp/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
+
+    - name: Resize Ubuntu QEMU Disk
+      run: |
+        qemu-img resize /tmp/ubuntu.qcow2 12G
+
+    - name: Create Cloud-Init Disk
+      run: |
+        cat > user-data <<EOF
+        #cloud-config
+        password: ubuntu
+        chpasswd: { expire: False }
+        ssh_pwauth: True
+        EOF
+
+        cloud-localds /tmp/cloud-init.iso user-data
+
+    - name: Make raw disk images
+      run: |
+        znsimg=/var/lib/qemu/images/zns.raw
+        sudo mkdir -p "$(dirname ${znsimg})"
+        sudo touch ${znsimg}
+        sudo truncate -s "${disk_size}"G ${znsimg}
+
+        ssdimg=/var/lib/qemu/images/ssd.raw
+        sudo mkdir -p "$(dirname ${ssdimg})"
+        sudo touch ${ssdimg}
+        sudo truncate -s "${disk_size}"G ${ssdimg}
+
+    - name: Run QEMU VM with Ubuntu
+      run: |
+        sudo qemu-system-x86_64 \
+          -enable-kvm \
+          -m 12G \
+          -smp 2 \
+          -cpu host \
+          -drive file=/tmp/ubuntu.qcow2,format=qcow2,if=virtio \
+          -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
+          -net user,hostfwd=tcp::2222-:22 \
+          -net nic \
+	  -device nvme,id=nvme0,serial=deadbeef,zoned.zasl="${zasl}" \
+     	  -drive file="${znsimg}",id=nvmezns0,format=raw,if=none \
+     	  -device nvme-ns,drive=nvmezns0,bus=nvme0,nsid=1,logical_block_size="${sector_size}",\
+physical_block_size="${sector_size}",zoned=true,zoned.zone_size="${zone_size}"M,zoned.zone_capacity="${zone_capacity}"M,\
+zoned.max_open="${max_open}",zoned.max_active="${max_active}",\
+uuid=5e40ec5f-eeb6-4317-bc5e-c919796a5f79 \
+	  -device nvme,id=nvme1,serial=deadbaaf \
+     	  -drive file="${ssdimg}",id=nvmessd1,format=raw,if=none \
+	  -device nvme-ns,drive=nvmessd1,bus=nvme1,nsid=1,logical_block_size="${sector_size}",\
+physical_block_size="${sector_size}",zoned=false,uuid=5e40ec5f-eeb6-4317-bc5e-c919796a5f7a \
+          -nographic &
+
+        # Wait for SSH to be available
+        sleep 60
 
     - name: Cache cargo registry, git, and target
       uses: actions/cache@v4
@@ -35,5 +95,31 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Build
-      run: cargo build --verbose
+    - name: Install build dependencies
+      run: |
+      	mkdir ~/.ssh
+        ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
+        sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'sudo apt update && sudo apt install -y \
+            linux-modules-extra-$(uname -r) \
+            build-essential \
+            git \
+	    nvme-cli \
+	    ninja-build \
+	    meson \
+	    libclang-dev'
+
+    - name: Build project
+      run: |
+      sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
+      sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
+      curl https://sh.rustup.rs -sSf | sh -s -- -y
+      . "$HOME/.cargo/env"
+      rustup component add rust-analyzer
+      sudo ln -s ~/.cargo/bin/* /usr/bin/
+      mkdir /home/ubuntu/OxCache
+      cd OxCache
+      RUNNING_IN_GITHUB_ACTIONS=yes cargo build --verbose
+      EOF
+
+    - name: Test
+      run: cargo test
