@@ -56,8 +56,8 @@ jobs:
     - name: Download Ubuntu Cloud Image
       if: steps.cache-ubuntu.outputs.cache-hit != 'true'
       run: |
-        wget -O /home/ubuntu/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
-        qemu-img resize /home/ubuntu/ubuntu.qcow2 12G
+        wget -O $HOME/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
+        qemu-img resize $HOME/ubuntu.qcow2 12G
 
     - name: Create Cloud-Init Disk
       run: |
@@ -87,7 +87,7 @@ jobs:
         -m 12G \
         -smp 2 \
         -cpu host \
-        -drive file=/home/ubuntu/ubuntu.qcow2,format=qcow2,if=virtio \
+        -drive file=$HOME/ubuntu.qcow2,format=qcow2,if=virtio \
         -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
         -net user,hostfwd=tcp::2222-:22 \
         -net nic \
