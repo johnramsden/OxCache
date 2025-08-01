@@ -44,8 +44,8 @@ jobs:
         execute_install_scripts: true
 
     - name: Cache Ubuntu Cloud Image
-      id: cache-ubuntu
-      uses: actions/cache@v4
+      id: cache-ubuntu-restore
+      uses: actions/cache/restore@v4
       with:
         path: |
           /tmp/ubuntu.qcow2
@@ -55,8 +55,15 @@ jobs:
       if: steps.cache-ubuntu.outputs.cache-hit != 'true'
       run: |
         wget -O /tmp/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
-        mv /tmp/ubuntu.qcow2 $HOME/ubuntu.qcow2
-        qemu-img resize $HOME/ubuntu.qcow2 12G
+        qemu-img resize /tmp/ubuntu.qcow2 12G
+
+    - name: Cache Ubuntu save Cloud Image
+      id: cache-ubuntu
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /tmp/ubuntu.qcow2
+        key: ${{ steps.cache-ubuntu-restore.outputs.cache-primary-key }}
 
     - name: Create Cloud-Init Disk
       run: |
@@ -86,7 +93,7 @@ jobs:
         -m 12G \
         -smp 2 \
         -cpu host \
-        -drive file=$HOME/ubuntu.qcow2,format=qcow2,if=virtio \
+        -drive file=/tmp/ubuntu.qcow2,format=qcow2,if=virtio \
         -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
         -net user,hostfwd=tcp::2222-:22 \
         -net nic \
@@ -124,12 +131,15 @@ jobs:
 
     - name: Copy files and install Rust
       run: |
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
+	curl https://sh.rustup.rs -sSf | sh -s -- -y
         . "$HOME/.cargo/env"
         sudo apt update && sudo apt install -y build-essential libclang-dev
+        RUNNING_IN_GITHUB_ACTIONS=yes cargo build
         EOF
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo    
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo/registry ubuntu@127.0.0.1:/home/ubuntu/.cargo/registry
+        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo/git ubuntu@127.0.0.1:/home/ubuntu/.cargo/git
 
     - name: Test
       run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
