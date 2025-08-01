@@ -31,32 +31,31 @@ jobs:
       with:
           submodules: recursive
 
-    - name: Install QEMU
+    - name: Setup ssh
       run: |
         mkdir ~/.ssh
         ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
-        sudo apt install -y qemu-system-x86 \
-        qemu-utils \
-        cloud-utils \
-        wget \
-        sshpass \
-        build-essential \
-        ninja-build \
-        meson \
-        libclang-dev > /dev/null
+
+    - name: Install packages
+      uses: awalsh128/cache-apt-pkgs-action@latest
+      with:
+        packages: qemu-system-x86 qemu-utils cloud-utils wget sshpass build-essential ninja-build meson libclang-dev
+        version: 1.0
+        execute_install_scripts: true
 
     - name: Cache Ubuntu Cloud Image
       id: cache-ubuntu
       uses: actions/cache@v4
       with:
         path: |
-          /home/ubuntu/ubuntu.qcow2
+          /tmp/ubuntu.qcow2
         key: ubuntu-cloudimg-noble-${{ hashFiles('.github/workflows/rust.yml') }}
 
     - name: Download Ubuntu Cloud Image
       if: steps.cache-ubuntu.outputs.cache-hit != 'true'
       run: |
-        wget -O $HOME/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
+        wget -O /tmp/ubuntu.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -o /dev/null
+	mv /tmp/ubuntu.qcow2 $HOME/ubuntu.qcow2
         qemu-img resize $HOME/ubuntu.qcow2 12G
 
     - name: Create Cloud-Init Disk
@@ -113,7 +112,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
+          target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -127,7 +126,7 @@ jobs:
       run: |
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
         . "$HOME/.cargo/env"
-        sudo apt update && sudo apt install build-essential libclang-dev
+        sudo apt update && sudo apt install -y build-essential libclang-dev
         EOF
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo ubuntu@127.0.0.1:/home/ubuntu/.cargo	
