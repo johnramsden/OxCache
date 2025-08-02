@@ -225,6 +225,14 @@ pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
     }
 }
 
+/// Returns the zone capacity for the given NVMe device and namespace.
+pub fn get_zone_state(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
+    match report_zones(fd, nsid, 0, 1, 0) {
+        Ok((_, inf)) => Ok(inf[0].zone_capacity),
+        Err(err) => Err(err),
+    }
+}
+
 /// Returns a report of all zones for the given NVMe device and namespace.
 /// The result includes the number of zones and a vector of zone descriptors.
 pub fn report_zones_all(fd: RawFd, nsid: u32) -> Result<(u64, Vec<ZNSZoneDescriptor>), NVMeError> {

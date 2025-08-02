@@ -99,6 +99,8 @@ impl ZoneList {
         let write_num = self.writing_zones.get(&zone_index).unwrap();
         if write_num - 1 == 0 {
             self.writing_zones.remove(&zone_index);
+
+            // device.finish_zone(zone_index);
             device.close_zone(zone_index)
         } else {
             self.writing_zones.insert(zone_index, write_num - 1);
@@ -269,6 +271,9 @@ mod zone_list_tests {
         }
 
         fn close_zone(&self, zone_id: usize) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn finish_zone(&self, zone_id: usize) -> std::io::Result<()> {
             Ok(())
         }
     }

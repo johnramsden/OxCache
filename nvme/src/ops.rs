@@ -439,6 +439,19 @@ pub fn close_zone(
     )
 }
 
+pub fn finish_zone(
+    nvme_config: &NVMeConfig,
+    config: &ZNSConfig,
+    perform_on: PerformOn,
+) -> Result<(), NVMeError> {
+    zone_op(
+        nvme_config,
+        config,
+        perform_on,
+        nvme_zns_send_action_NVME_ZNS_ZSA_FINISH,
+    )
+}
+
 /// Resets a specific zone or all zones on a Zoned Namespace (ZNS) NVMe device.
 ///
 /// # Arguments

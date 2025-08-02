@@ -6,7 +6,7 @@ use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use flume::Sender;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{close_zone, reset_zone, zns_append, zns_read};
+use nvme::ops::{close_zone, reset_zone, zns_append, zns_read, finish_zone};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -73,6 +73,8 @@ pub trait Device: Send + Sync {
     fn reset_zone(&self, zone_id: usize) -> io::Result<()>;
 
     fn close_zone(&self, zone_id: usize) -> io::Result<()>;
+
+    fn finish_zone(&self, zone_id: usize) -> io::Result<()>;
 }
 
 pub fn get_device(
@@ -214,9 +216,27 @@ impl Zoned {
         }
     }
 
+    fn lba_to_chunk_index(&self, lba: u64, zone_index: usize) -> u64 {
+        let block_size = self.nvme_config.logical_block_size ;
+        let chunk_size = self.config.chunk_size as u64;
+
+        // Make sure LBA is zone-relative
+        let zone_start_lba = self.config.zone_size * zone_index as u64;
+        let rel_lba = lba.checked_sub(zone_start_lba)
+            .expect("LBA was not inside the specified zone");
+
+        // Convert to byte offset
+        let byte_offset = rel_lba * block_size;
+
+        // Get chunk index
+        byte_offset / chunk_size
+    }
+
     fn chunked_append(&self, data: Bytes, zone_index: usize) -> io::Result<ChunkLocation> {
         let total_sz = data.len();
         let write_sz = total_sz.min(self.max_write_size);
+
+        println!("Write size = {}, max_write_size = {}", write_sz, self.max_write_size);
 
         // Only locks if needed
         let _maybe_guard: Option<MutexGuard<'_, ()>> = if total_sz > self.max_write_size {
@@ -230,7 +250,7 @@ impl Zoned {
         let mut byte_ind= 0;
 
         let mut first_chunk: Option<ChunkLocation> = None;
-        let mut last_chunk: Option<ChunkLocation> = None;
+        let mut last_lba: Option<u64> = None;
 
         while byte_ind < total_sz {
             let end = (byte_ind + write_sz).min(data.len());
@@ -241,18 +261,19 @@ impl Zoned {
                 &data[byte_ind..end],
             ) {
                 Ok(lba) => {
-                    self.complete_write(zone_index)?;
-                    let chunk = lba / self.config.chunk_size as u64;
-                    println!("[append] wrote chunk {} at zone {} from bytes ({}..{})", chunk, zone_index, byte_ind, end);
-                    let new_chunk = Some(ChunkLocation::new(zone_index, chunk));
+                    // println!("[append] wrote to lba {} at zone {} from bytes ({}..{})", lba, zone_index, byte_ind, end);
+                    let lbas_written = (end - byte_ind) as u64 / self.nvme_config.logical_block_size;
                     if first_chunk.is_none() {
-                        first_chunk = new_chunk.clone();
+                        let chunk = self.lba_to_chunk_index(lba, zone_index);
+                        first_chunk = Some(ChunkLocation::new(zone_index, chunk));
+                        // println!("Chunk {:?}", first_chunk);
+                        // println!("lba={}, self.config.chunk_size = {}, lba / write_sz = {}", lba, self.config.chunk_size, lba/write_sz as u64);
                     }
-                    if let Some(last_chunk) = last_chunk {
-                        assert_eq!(last_chunk.index + 1, chunk, "Chunks are not contiguous indices=({:?}, {:?})", last_chunk.index, chunk);
-                        assert_eq!(last_chunk.zone + 1, zone_index, "Chunks are not in the same zone=({}, {})", last_chunk.zone, zone_index);
+                    if let Some(last_lba) = last_lba {
+                        let lba_check = last_lba + lbas_written;
+                        assert_eq!(lba_check, lba, "lbas are not contiguous=({}, {})", lba_check, lba);
                     }
-                    last_chunk = new_chunk;
+                    last_lba = Some(lba);
                 }
                 Err(mut err) => {
                     self.complete_write(zone_index)?;
@@ -260,8 +281,10 @@ impl Zoned {
                     return Err(err.try_into().unwrap());
                 }
             }
+            byte_ind += write_sz;
         }
-
+        println!("Finished writing to zone {} - {:?}", zone_index, first_chunk);
+        self.complete_write(zone_index)?;
         Ok(first_chunk.unwrap())
     }
 }
@@ -413,6 +436,15 @@ impl Device for Zoned {
 
     fn close_zone(&self, zone_id: usize) -> io::Result<()> {
         close_zone(
+            &self.nvme_config,
+            &self.config,
+            PerformOn::Zone(zone_id as u64),
+        )
+        .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+    }
+
+    fn finish_zone(&self, zone_id: usize) -> io::Result<()> {
+        finish_zone(
             &self.nvme_config,
             &self.config,
             PerformOn::Zone(zone_id as u64),
@@ -595,4 +627,5 @@ impl Device for BlockInterface {
     fn close_zone(&self, _zone_id: usize) -> io::Result<()> {
         Ok(())
     }
+    fn finish_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
 }
