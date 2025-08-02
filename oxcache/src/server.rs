@@ -58,6 +58,7 @@ pub struct ServerConfig {
     pub eviction: ServerEvictionConfig,
     pub chunk_size: usize,
     pub block_zone_capacity: usize,
+    pub max_write_size: usize,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -77,6 +78,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             config.chunk_size,
             config.block_zone_capacity,
             evict_tx,
+            config.max_write_size,
         )?;
 
         device.reset()?;

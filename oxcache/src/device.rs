@@ -6,16 +6,18 @@ use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use flume::Sender;
 use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{close_zone, reset_zone, zns_append, zns_read};
+use nvme::ops::{close_zone, reset_zone, zns_append, zns_read, finish_zone};
 use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
 use std::io::{self, ErrorKind};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
     zones: Arc<(Mutex<ZoneList>, Condvar)>,
     eviction_channel: Sender<EvictorMessage>,
+    max_write_size: usize,
+    zone_append_lock: Vec<Mutex<()>>,
 }
 
 // Information about each zone
@@ -71,6 +73,8 @@ pub trait Device: Send + Sync {
     fn reset_zone(&self, zone_id: usize) -> io::Result<()>;
 
     fn close_zone(&self, zone_id: usize) -> io::Result<()>;
+
+    fn finish_zone(&self, zone_id: usize) -> io::Result<()>;
 }
 
 pub fn get_device(
@@ -78,10 +82,11 @@ pub fn get_device(
     chunk_size: usize,
     block_zone_capacity: usize,
     eviction_channel: Sender<EvictorMessage>,
+    max_write_size: usize,
 ) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
-        Ok(Arc::new(Zoned::new(device, chunk_size, eviction_channel)?))
+        Ok(Arc::new(Zoned::new(device, chunk_size, eviction_channel, max_write_size)?))
     } else {
         Ok(Arc::new(BlockInterface::new(
             device,
@@ -174,6 +179,7 @@ impl Zoned {
         device: &str,
         chunk_size: usize,
         eviction_channel: Sender<EvictorMessage>,
+        max_write_size: usize,
     ) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
@@ -186,21 +192,100 @@ impl Zoned {
                     chunk_size as u64 / nvme_config.logical_block_size;
                 config.chunks_per_zone = config.zone_cap / chunk_size_in_logical_blocks;
                 config.chunk_size = chunk_size;
+                let num_zones = config.num_zones as usize;
                 let zone_list = ZoneList::new(
-                    config.num_zones as usize,
+                    num_zones,
                     config.chunks_per_zone as usize,
                     config.max_active_resources as usize,
                 );
+
+                let zone_append_lock: Vec<Mutex<()>> = (0..num_zones)
+                    .map(|_| Mutex::new(()))
+                    .collect();
 
                 Ok(Self {
                     nvme_config,
                     config,
                     eviction_channel,
                     zones: Arc::new((Mutex::new(zone_list), Condvar::new())),
+                    max_write_size,
+                    zone_append_lock
                 })
             }
             Err(err) => Err(err.try_into().unwrap()),
         }
+    }
+
+    fn lba_to_chunk_index(&self, lba: u64, zone_index: usize) -> u64 {
+        let block_size = self.nvme_config.logical_block_size ;
+        let chunk_size = self.config.chunk_size as u64;
+
+        // Make sure LBA is zone-relative
+        let zone_start_lba = self.config.zone_size * zone_index as u64;
+        let rel_lba = lba.checked_sub(zone_start_lba)
+            .expect("LBA was not inside the specified zone");
+
+        // Convert to byte offset
+        let byte_offset = rel_lba * block_size;
+
+        // Get chunk index
+        byte_offset / chunk_size
+    }
+
+    fn chunked_append(&self, data: Bytes, zone_index: usize) -> io::Result<ChunkLocation> {
+        let total_sz = data.len();
+        let write_sz = total_sz.min(self.max_write_size);
+
+        println!("Write size = {}, max_write_size = {}", write_sz, self.max_write_size);
+
+        // Only locks if needed
+        let _maybe_guard: Option<MutexGuard<'_, ()>> = if total_sz > self.max_write_size {
+            Some(self.zone_append_lock[zone_index].lock().unwrap())
+        } else {
+            None
+        };
+
+        // Sequentially write looped
+
+        let mut byte_ind= 0;
+
+        let mut first_chunk: Option<ChunkLocation> = None;
+        let mut last_lba: Option<u64> = None;
+
+        while byte_ind < total_sz {
+            let end = (byte_ind + write_sz).min(data.len());
+            match zns_append(
+                &self.nvme_config,
+                &self.config,
+                zone_index as u64,
+                &data[byte_ind..end],
+            ) {
+                Ok(lba) => {
+                    // println!("[append] wrote to lba {} at zone {} from bytes ({}..{})", lba, zone_index, byte_ind, end);
+                    let lbas_written = (end - byte_ind) as u64 / self.nvme_config.logical_block_size;
+                    if first_chunk.is_none() {
+                        let chunk = self.lba_to_chunk_index(lba, zone_index);
+                        first_chunk = Some(ChunkLocation::new(zone_index, chunk));
+                        // println!("Chunk {:?}", first_chunk);
+                        // println!("lba={}, self.config.chunk_size = {}, lba / write_sz = {}", lba, self.config.chunk_size, lba/write_sz as u64);
+                    }
+                    if let Some(last_lba) = last_lba {
+                        let lba_check = last_lba + lbas_written;
+                        assert_eq!(lba_check, lba, "lbas are not contiguous=({}, {})", lba_check, lba);
+                    }
+                    last_lba = Some(lba);
+                }
+                Err(mut err) => {
+                    self.complete_write(zone_index)?;
+                    err.add_context(format!("Write failed at zone {}\n", zone_index));
+                    return Err(err.try_into().unwrap());
+                }
+            }
+            byte_ind += write_sz;
+        }
+        println!("Finished writing to zone {} - {:?}", zone_index, first_chunk);
+        self.complete_write(zone_index)?;
+        Ok(first_chunk.unwrap())
     }
 }
 
@@ -223,23 +308,7 @@ impl Device for Zoned {
             0
         );
 
-        match zns_append(
-            &self.nvme_config,
-            &self.config,
-            zone_index as u64,
-            data.as_ref(),
-        ) {
-            Ok(lba) => {
-                self.complete_write(zone_index)?;
-                let chunk = lba / self.config.chunk_size as u64;
-                Ok(ChunkLocation::new(zone_index, chunk))
-            }
-            Err(mut err) => {
-                self.complete_write(zone_index)?;
-                err.add_context(format!("Write failed at zone {}\n", zone_index));
-                Err(err.try_into().unwrap())
-            }
-        }
+        self.chunked_append(data, zone_index)
     }
 
     fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>
@@ -367,6 +436,15 @@ impl Device for Zoned {
 
     fn close_zone(&self, zone_id: usize) -> io::Result<()> {
         close_zone(
+            &self.nvme_config,
+            &self.config,
+            PerformOn::Zone(zone_id as u64),
+        )
+        .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
+    }
+
+    fn finish_zone(&self, zone_id: usize) -> io::Result<()> {
+        finish_zone(
             &self.nvme_config,
             &self.config,
             PerformOn::Zone(zone_id as u64),
@@ -549,4 +627,5 @@ impl Device for BlockInterface {
     fn close_zone(&self, _zone_id: usize) -> io::Result<()> {
         Ok(())
     }
+    fn finish_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
 }
