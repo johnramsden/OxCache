@@ -288,6 +288,8 @@ impl Zoned {
 
         let finish_zone = cl.index+1 == self.config.chunks_per_zone;
 
+        println!("Finished writing to zone {} - {:?} - finish_zone={:?}", zone_index, cl, finish_zone);
+
         self.complete_write(zone_index, finish_zone)?;
         Ok(cl)
     }
@@ -319,16 +321,33 @@ impl Device for Zoned {
     where
         Self: Sized,
     {
-        match zns_read(
-            &self.nvme_config,
-            &self.config,
-            location.zone as u64,
-            location.index,
-            read_buffer,
-        ) {
-            Ok(()) => Ok(()),
-            Err(err) => Err(err.try_into().unwrap()),
+        let total_sz = read_buffer.len();
+        let write_sz = total_sz.min(self.max_write_size);
+        let mut byte_ind = 0;
+
+        let mut lba_loc = self.config.get_address_at(location.zone as u64, location.index as u64);
+
+        while byte_ind < total_sz {
+            let end = (byte_ind + write_sz).min(read_buffer.len());
+            let chunk_size = end - byte_ind;
+            let lbas_read = chunk_size as u64 / self.nvme_config.logical_block_size;
+
+            assert_eq!(chunk_size % self.nvme_config.logical_block_size as usize, 0, "Unaligned read size");
+
+
+            if let Err(err) = nvme::ops::read(
+                &self.nvme_config,
+                lba_loc,
+                &mut read_buffer[byte_ind..end],
+            ) {
+                return Err(err.try_into().unwrap());
+            }
+
+            byte_ind += chunk_size;
+            lba_loc += lbas_read;
         }
+
+        Ok(())
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
