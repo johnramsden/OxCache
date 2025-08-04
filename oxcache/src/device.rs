@@ -162,10 +162,10 @@ impl Zoned {
         }
     }
 
-    fn complete_write(&self, zone_idx: usize) -> io::Result<()> {
+    fn complete_write(&self, zone_idx: usize, finish_zone: bool) -> io::Result<()> {
         let (mtx, notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
-        zone_list.write_finish(zone_idx, self)?;
+        zone_list.write_finish(zone_idx, self, finish_zone)?;
         // Tell other threads that we finished writing, so they can
         // come and try to open a new zone if needed.
         notify.notify_all();
@@ -276,16 +276,20 @@ impl Zoned {
                     last_lba = Some(lba);
                 }
                 Err(mut err) => {
-                    self.complete_write(zone_index)?;
+                    self.complete_write(zone_index, false)?;
                     err.add_context(format!("Write failed at zone {}\n", zone_index));
                     return Err(err.try_into().unwrap());
                 }
             }
             byte_ind += write_sz;
         }
-        println!("Finished writing to zone {} - {:?}", zone_index, first_chunk);
-        self.complete_write(zone_index)?;
-        Ok(first_chunk.unwrap())
+
+        let cl = first_chunk.unwrap();
+
+        let finish_zone = cl.index+1 == self.config.chunks_per_zone;
+
+        self.complete_write(zone_index, finish_zone)?;
+        Ok(cl)
     }
 }
 
