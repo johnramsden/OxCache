@@ -89,7 +89,7 @@ pub trait Device: Send + Sync {
 
             assert_eq!(chunk_size % nvme_config.logical_block_size as usize, 0, "Unaligned read size");
 
-            println!("Reading {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
+            // println!("Reading {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
 
             if let Err(err) = nvme::ops::read(
                 nvme_config,
@@ -99,7 +99,7 @@ pub trait Device: Send + Sync {
                 return Err(err.try_into().unwrap());
             }
 
-            println!("Read {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
+            // println!("Read {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
 
             byte_ind += chunk_size;
             lba_loc += lbas_read;
@@ -269,7 +269,7 @@ impl Zoned {
         let total_sz = data.len();
         let write_sz = total_sz.min(self.max_write_size);
 
-        println!("Write size = {}, max_write_size = {}", write_sz, self.max_write_size);
+        // println!("Write size = {}, max_write_size = {}", write_sz, self.max_write_size);
 
         // Only locks if needed
         let _maybe_guard: Option<MutexGuard<'_, ()>> = if total_sz > self.max_write_size {
@@ -321,7 +321,7 @@ impl Zoned {
 
         let finish_zone = cl.index+1 == self.config.chunks_per_zone;
 
-        println!("Finished writing to zone {} - {:?} - finish_zone={:?}", zone_index, cl, finish_zone);
+        // println!("Finished writing to zone {} - {:?} - finish_zone={:?}", zone_index, cl, finish_zone);
 
         self.complete_write(zone_index, finish_zone)?;
         Ok(cl)
