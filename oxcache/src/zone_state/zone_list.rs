@@ -215,10 +215,11 @@ impl ZoneList {
 
 #[cfg(test)]
 mod zone_list_tests {
+    use std::io;
     use std::sync::Arc;
 
     use bytes::Bytes;
-
+    use nvme::types::NVMeConfig;
     use crate::{
         cache::{Cache, bucket::ChunkLocation},
         device::Device,
@@ -235,20 +236,16 @@ mod zone_list_tests {
             Ok(ChunkLocation { zone: 0, index: 0 })
         }
 
-        fn read_into_buffer(
-            &self,
-            location: ChunkLocation,
-            read_buffer: &mut [u8],
-        ) -> std::io::Result<()> {
+        fn read_into_buffer(&self, _max_write_size: usize, _lba_loc: u64, _read_buffer: &mut [u8], _nvme_config: &NVMeConfig) -> io::Result<()> {
             Ok(())
         }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> std::io::Result<()> {
+        fn evict(&self, _locations: EvictTarget, _cache: Arc<Cache>) -> std::io::Result<()> {
             Ok(())
         }
 
-        fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
+        fn read(&self, _location: ChunkLocation) -> std::io::Result<Bytes> {
             Ok(Bytes::new())
         }
 
@@ -270,14 +267,14 @@ mod zone_list_tests {
             Ok(())
         }
 
-        fn reset_zone(&self, zone_id: usize) -> std::io::Result<()> {
+        fn reset_zone(&self, _zone_id: usize) -> std::io::Result<()> {
             Ok(())
         }
 
-        fn close_zone(&self, zone_id: usize) -> std::io::Result<()> {
+        fn close_zone(&self, _zone_id: usize) -> std::io::Result<()> {
             Ok(())
         }
-        fn finish_zone(&self, zone_id: usize) -> std::io::Result<()> {
+        fn finish_zone(&self, _zone_id: usize) -> std::io::Result<()> {
             Ok(())
         }
     }
@@ -342,8 +339,8 @@ mod zone_list_tests {
 
         assert!(zonelist.is_full());
 
-        zonelist.write_finish(0, &md);
-        zonelist.write_finish(0, &md);
+        zonelist.write_finish(0, &md, false);
+        zonelist.write_finish(0, &md, false);
         assert!(zonelist.get_open_zones() == 1);
 
         zonelist.reset_zone(0, &md);
@@ -352,8 +349,8 @@ mod zone_list_tests {
         assert!(zone == 0);
         assert!(zonelist.get_open_zones() == 2);
 
-        zonelist.write_finish(1, &md);
-        zonelist.write_finish(1, &md);
+        zonelist.write_finish(1, &md, false);
+        zonelist.write_finish(1, &md, false);
         assert!(zonelist.get_open_zones() == 1);
 
         let zone = zonelist.remove().unwrap();
@@ -381,9 +378,9 @@ mod zone_list_tests {
         );
 
         assert_state!(zonelist, Wait);
-        zonelist.write_finish(0, &md);
+        zonelist.write_finish(0, &md, false);
         assert_state!(zonelist, Wait);
-        zonelist.write_finish(0, &md);
+        zonelist.write_finish(0, &md, false);
 
         let zone = zonelist.remove().unwrap();
         assert!(zone == 1);

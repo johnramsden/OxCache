@@ -50,12 +50,11 @@ pub struct BlockInterface {
     num_zones: usize,
     state: Arc<Mutex<BlockDeviceState>>,
     eviction_channel: Sender<EvictorMessage>,
+    max_write_size: usize
 }
 
 pub trait Device: Send + Sync {
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation>;
-
-    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>;
 
     /// This is expected to remove elements from the cache as well
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()>;
@@ -75,6 +74,39 @@ pub trait Device: Send + Sync {
     fn close_zone(&self, zone_id: usize) -> io::Result<()>;
 
     fn finish_zone(&self, zone_id: usize) -> io::Result<()>;
+
+    fn read_into_buffer(&self, max_write_size: usize, lba_loc: u64, read_buffer: &mut [u8], nvme_config: &NVMeConfig) -> io::Result<()> {
+        let total_sz = read_buffer.len();
+        let write_sz = total_sz.min(max_write_size);
+        let mut byte_ind = 0;
+
+        let mut lba_loc = lba_loc;
+
+        while byte_ind < total_sz {
+            let end = (byte_ind + write_sz).min(read_buffer.len());
+            let chunk_size = end - byte_ind;
+            let lbas_read = chunk_size as u64 / nvme_config.logical_block_size;
+
+            assert_eq!(chunk_size % nvme_config.logical_block_size as usize, 0, "Unaligned read size");
+
+            println!("Reading {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
+
+            if let Err(err) = nvme::ops::read(
+                nvme_config,
+                lba_loc,
+                &mut read_buffer[byte_ind..end],
+            ) {
+                return Err(err.try_into().unwrap());
+            }
+
+            println!("Read {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
+
+            byte_ind += chunk_size;
+            lba_loc += lbas_read;
+        }
+
+        Ok(())
+    }
 }
 
 pub fn get_device(
@@ -93,6 +125,7 @@ pub fn get_device(
             chunk_size,
             block_zone_capacity,
             eviction_channel,
+            max_write_size
         )?))
     }
 }
@@ -317,42 +350,16 @@ impl Device for Zoned {
         self.chunked_append(data, zone_index)
     }
 
-    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>
-    where
-        Self: Sized,
-    {
-        let total_sz = read_buffer.len();
-        let write_sz = total_sz.min(self.max_write_size);
-        let mut byte_ind = 0;
-
-        let mut lba_loc = self.config.get_address_at(location.zone as u64, location.index as u64);
-
-        while byte_ind < total_sz {
-            let end = (byte_ind + write_sz).min(read_buffer.len());
-            let chunk_size = end - byte_ind;
-            let lbas_read = chunk_size as u64 / self.nvme_config.logical_block_size;
-
-            assert_eq!(chunk_size % self.nvme_config.logical_block_size as usize, 0, "Unaligned read size");
-
-
-            if let Err(err) = nvme::ops::read(
-                &self.nvme_config,
-                lba_loc,
-                &mut read_buffer[byte_ind..end],
-            ) {
-                return Err(err.try_into().unwrap());
-            }
-
-            byte_ind += chunk_size;
-            lba_loc += lbas_read;
-        }
-
-        Ok(())
-    }
-
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
         let mut data = vec![0u8; self.config.chunk_size];
-        self.read_into_buffer(location, &mut data)?;
+        let slba = self.config.get_address_at(location.zone as u64, location.index as u64);
+        println!("Read slba = {} for {:?}", slba, location);
+        self.read_into_buffer(
+            self.max_write_size,
+            slba,
+            &mut data,
+            &self.nvme_config
+        )?;
 
         Ok(Bytes::from(data))
     }
@@ -379,8 +386,10 @@ impl Device for Zoned {
                         as usize
                 ];
                 self.read_into_buffer(
-                    ChunkLocation::new(zone_to_evict, 0),
-                    read_buf.as_mut_slice(),
+                    self.max_write_size,
+                    self.config.get_address_at(zone_to_evict as u64, 0),
+                    &mut read_buf,
+                    &self.nvme_config
                 )?;
                 let zones_to_reset = [chunk_locations[0].zone];
 
@@ -482,6 +491,7 @@ impl BlockInterface {
         chunk_size: usize,
         block_zone_capacity: usize,
         eviction_channel: Sender<EvictorMessage>,
+        max_write_size: usize
     ) -> io::Result<Self> {
         let nvme_config = match nvme_get_info(device) {
             Ok(config) => config,
@@ -495,15 +505,15 @@ impl BlockInterface {
             chunk_size
         );
 
-        // Num_zones: how to get?
-        let _num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
-        // Chunks per zone: how to get?
-        let _chunks_per_zone = block_zone_capacity / chunk_size;
+        // Num_zones
+        let num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
+        // Chunks per zone
+        let chunks_per_zone = block_zone_capacity / chunk_size;
 
-        // Num_zones: how to get?
-        let num_zones = 10;
-        // Chunks per zone: how to get?
-        let chunks_per_zone = 2;
+        // // Num_zones: how to get?
+        // let num_zones = 10;
+        // // Chunks per zone: how to get?
+        // let chunks_per_zone = 2;
 
         Ok(Self {
             nvme_config,
@@ -516,6 +526,7 @@ impl BlockInterface {
             chunks_per_zone,
             num_zones,
             eviction_channel,
+            max_write_size
         })
     }
 }
@@ -564,26 +575,21 @@ impl Device for BlockInterface {
         }
     }
 
-    fn read_into_buffer(&self, location: ChunkLocation, read_buffer: &mut [u8]) -> io::Result<()>
-    where
-        Self: Sized,
-    {
+    fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
+        let mut data = vec![0u8; self.chunk_size];
+
         let slba = get_address_at(
             location.zone as u64,
             location.index,
             (self.chunks_per_zone * self.chunk_size) as u64,
             self.chunk_size as u64,
         );
-
-        match nvme::ops::read(&self.nvme_config, slba, read_buffer) {
-            Ok(()) => Ok(()),
-            Err(err) => Err(err.try_into().unwrap()),
-        }
-    }
-
-    fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.chunk_size];
-        self.read_into_buffer(location, &mut data)?;
+        self.read_into_buffer(
+            self.max_write_size,
+            slba,
+            &mut data,
+            &self.nvme_config
+        )?;
         Ok(Bytes::from(data))
     }
 
