@@ -1,10 +1,10 @@
-use std::error::Error;
+use std::{error::Error, sync::{atomic::{Atomic, AtomicUsize}, Arc, Condvar}};
 
+use bytes::Bytes;
 use flume::Sender;
+use futures::lock::Mutex;
 use oxcache::{
-    device::Device,
-    eviction::EvictorMessage,
-    zone_state::zone_list::{self, ZoneList},
+    cache::bucket::ChunkLocation, device::Device, eviction::EvictorMessage, zone_state::zone_list::{self, ZoneList}
 };
 
 struct Chunk {
@@ -42,12 +42,12 @@ impl Zone {
 pub struct MockZonedDevice {
     chunk_size: usize,
     eviction_channel: Sender<EvictorMessage>,
-    zones: Vec<Zone>,
+    zone_state: Vec<Zone>,
 
     zone_pointers: Vec<usize>, // Stores the write pointer in chunks
     open_resources: usize,
-    max_open_resources: usize,
-    zone_list: ZoneList,
+    max_open_resources: AtomicUsize,
+    zones: Arc<(Mutex<ZoneList>, Condvar)>,
 }
 
 impl MockZonedDevice {
@@ -58,40 +58,100 @@ impl MockZonedDevice {
     ) -> Result<Self, Box<dyn Error>> {
         let nzones = 30;
         let chunks_per_zone = 100;
-        let max_open_resources = 10;
+        let max_open_resources = AtomicUsize::new(10);
 
-        let zones = (0..nzones)
+        let zone_state = (0..nzones)
             .map(|zidx| Zone::new(zidx, chunks_per_zone))
             .collect();
 
         let zone_pointers = (0..nzones).collect();
         let open_resources = 0;
-        let zone_list = ZoneList::new(nzones, chunks_per_zone, max_open_resources);
+        let zone_list = ZoneList::new(nzones, chunks_per_zone, 10);
 
         Ok(Self {
             chunk_size,
             eviction_channel,
-            zones,
+            zone_state,
             zone_pointers,
             open_resources,
             max_open_resources,
-            zone_list,
+            zones: Arc::new((Mutex::new(zone_list), Condvar::new())),
         })
+    }
+
+    fn get_free_zone(&self) -> io::Result<usize> {
+        let (mtx, wait_notify) = &*self.zones;
+        let mut zone_list = mtx.lock().unwrap();
+        match zone_list.remove() {
+            Ok(zone_idx) => Ok(zone_idx),
+            Err(error) => match error {
+                ZoneObtainFailure::EvictNow => {
+                    Err(io::Error::new(ErrorKind::StorageFull, "Cache is full"))
+                }
+                ZoneObtainFailure::Wait => loop {
+                    zone_list = wait_notify.wait(zone_list).unwrap();
+                    match zone_list.remove() {
+                        Ok(idx) => return Ok(idx),
+                        Err(err) => match err {
+                            ZoneObtainFailure::EvictNow => {
+                                return Err(io::Error::new(ErrorKind::Other, "Cache is full"));
+                            }
+                            ZoneObtainFailure::Wait => continue,
+                        },
+                    }
+                },
+            },
+        }
     }
 }
 
-/// Does not actually write data. Only validates it
+
+
+/// Does not actually write data. Only validates that the state of things are correct
 impl Device for MockZonedDevice {
-    fn append(&self, data: bytes::Bytes) -> std::io::Result<oxcache::cache::bucket::ChunkLocation> {
-        todo!()
+    fn append(&self, data: Bytes) -> std::io::Result<oxcache::cache::bucket::ChunkLocation> {
+        let zone_index = loop {
+            match self.get_free_zone() {
+                Ok(res) => break res,
+                Err(err) => {
+                    eprintln!("[append] Failed to get free zone: {}", err);
+                }
+            };
+            trigger_eviction(self.eviction_channel.clone())?;
+        };
+        // Note: this performs a copy every time because we need to
+        // pass in a mutable vector to libnvme
+        assert_eq!(
+            data.as_ptr() as usize % self.nvme_config.logical_block_size as usize,
+            0
+        );
+
+        match zns_append(
+            &self.nvme_config,
+            &self.config,
+            zone_index as u64,
+            data.as_ref(),
+        ) {
+            Ok(lba) => {
+                self.complete_write(zone_index)?;
+                let chunk = lba / self.config.chunk_size as u64;
+                Ok(ChunkLocation::new(zone_index, chunk))
+            }
+            Err(mut err) => {
+                self.complete_write(zone_index)?;
+                err.add_context(format!("Write failed at zone {}\n", zone_index));
+                Err(err.try_into().unwrap())
+            }
+        }
     }
 
     fn read_into_buffer(
         &self,
-        location: oxcache::cache::bucket::ChunkLocation,
-        read_buffer: &mut [u8],
+        _location: ChunkLocation,
+        _read_buffer: &mut [u8],
     ) -> std::io::Result<()> {
-        todo!()
+        // no-op
+        return Ok(())
     }
 
     fn evict(

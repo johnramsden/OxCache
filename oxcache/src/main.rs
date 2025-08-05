@@ -1,6 +1,6 @@
 use clap::Parser;
 use oxcache;
-use oxcache::cli::{load_config, CliArgs};
+use oxcache::cli::{CliArgs, load_config};
 use oxcache::remote;
 use oxcache::server::{RUNTIME, Server};
 use std::process::exit;
