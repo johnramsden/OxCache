@@ -1,8 +1,6 @@
 use std::io::ErrorKind;
-use std::sync::{Arc, Condvar, Mutex};
 use clap::Parser;
 use nvme::types::PerformOn;
-use oxcache::zone_state::zone_list::ZoneList;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -21,7 +19,7 @@ fn main() -> std::io::Result<()> {
     };
 
     let zc = match nvme::info::zns_get_info(&nvme_config) {
-        Ok(mut config) => {
+        Ok(config) => {
             config
         }
         Err(err) => return Err(std::io::Error::new(ErrorKind::Other, err)),
@@ -35,7 +33,7 @@ fn main() -> std::io::Result<()> {
         nvme::ops::reset_zone(&nvme_config, &zc, PerformOn::AllZones).unwrap();
         let data: Vec<u8> = vec![0; start];
         match nvme::ops::zns_append(&nvme_config, &zc, 0, data.as_slice()) {
-            Ok(res) => {
+            Ok(_res) => {
                 println!("Wrote {} bytes", start);
             }
             Err(err) => {

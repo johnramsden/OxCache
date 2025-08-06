@@ -241,7 +241,11 @@ mod zone_list_tests {
             Ok(ChunkLocation { zone: 0, index: 0 })
         }
 
-        fn read_into_buffer(&self, _max_write_size: Byte, _lba_loc: u64, _read_buffer: &mut [u8], _nvme_config: &NVMeConfig) -> io::Result<()> {
+        fn read_into_buffer(
+            &self,
+            _location: ChunkLocation,
+            _read_buffer: &mut [u8],
+        ) -> std::io::Result<()> {
             Ok(())
         }
 
@@ -348,7 +352,7 @@ mod zone_list_tests {
         zonelist.write_finish(0, &md, false);
         assert!(zonelist.get_open_zones() == 1);
 
-        zonelist.reset_zone(0, &md);
+        zonelist.reset_zone(0, &md).unwrap();
 
         let zone = zonelist.remove().unwrap();
         assert!(zone == 0);

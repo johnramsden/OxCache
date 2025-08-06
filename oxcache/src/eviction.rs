@@ -350,7 +350,7 @@ mod tests {
             order.len(),
             lru.len()
         );
-        for (index, ((lru_key, _), order_item)) in lru.iter().zip(order.iter()).enumerate() {
+        for (_index, ((lru_key, _), order_item)) in lru.iter().zip(order.iter()).enumerate() {
             assert_eq!(
                 order_item, lru_key,
                 "Expected {:?}, but got {:?}",

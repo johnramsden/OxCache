@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::thread;
 use clap::Parser;
 use nvme::types::PerformOn;
-use oxcache::zone_state::zone_list::ZoneList;
 use std::time::Instant;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -21,7 +20,7 @@ struct Cli {
 
 fn main() -> std::io::Result<()> {
     let args = Cli::parse();
-    let concurrency = args.concurrency.min(14); // clamp to 14
+    let _concurrency = args.concurrency.min(14); // clamp to 14
 
     let nvme_config = Arc::new(match nvme::info::nvme_get_info(args.device.as_str()) {
         Ok(config) => config,
