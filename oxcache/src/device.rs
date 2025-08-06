@@ -529,9 +529,45 @@ impl BlockInterface {
             max_write_size
         })
     }
+
+    fn chunked_append(&self, data: Bytes, write_addr: u64) -> io::Result<()> {
+        let total_sz = data.len();
+        let write_sz = total_sz.min(self.max_write_size);
+
+        assert!(
+            total_sz % self.nvme_config.logical_block_size as usize == 0,
+            "Unaligned write: {} bytes (LBA size {})",
+            total_sz,
+            self.nvme_config.logical_block_size
+        );
+
+        let mut byte_ind= 0;
+        let mut write_addr_lba = write_addr;
+
+        while byte_ind < total_sz {
+            let end = (byte_ind + write_sz).min(total_sz);
+            if let Err(err) = nvme::ops::write(
+                write_addr_lba,
+                self.nvme_config.fd,
+                0,
+                self.nvme_config.nsid,
+                self.nvme_config.logical_block_size,
+                &data[byte_ind..end],
+            ) {
+                return Err(err.try_into().unwrap());
+            }
+            let bytes_written = end-byte_ind;
+            // println!("Wrote {} bytes starting at {} from lba write_addr_lba {}, bytes ({}..{})", bytes_written, write_addr, write_addr_lba, byte_ind, end);
+            write_addr_lba += bytes_written as u64 / self.nvme_config.logical_block_size;
+            byte_ind += bytes_written;
+        }
+
+        Ok(())
+    }
 }
 
 impl Device for BlockInterface {
+
     /// Hold internal state to keep track of "ssd" zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
         let mtx = self.state.clone();
@@ -562,17 +598,9 @@ impl Device for BlockInterface {
 
         // println!("[append] writing chunk to {} bytes at addr {}", chunk_location.zone, write_addr);
 
-        match nvme::ops::write(
-            write_addr,
-            self.nvme_config.fd,
-            0,
-            self.nvme_config.nsid,
-            self.nvme_config.logical_block_size,
-            data.as_ref(),
-        ) {
-            Ok(()) => Ok(chunk_location),
-            Err(err) => Err(err.try_into().unwrap()),
-        }
+        self.chunked_append(data, write_addr)?;
+
+        Ok(chunk_location)
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
