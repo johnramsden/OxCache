@@ -9,7 +9,7 @@ use errno::errno;
 use libnvme_sys::bindings::*;
 
 use crate::{
-    types::{NVMeConfig, NVMeError, PerformOn, ZNSConfig},
+    types::{Byte, LogicalBlock, NVMeConfig, NVMeError, PerformOn, ZNSConfig, Zone},
     util::{check_error, nullptr},
 };
 
@@ -73,7 +73,7 @@ pub fn open_device(device_name: &str) -> Result<RawFd, NVMeError> {
 pub fn zns_append(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
-    zone_index: u64,
+    zone_index: Zone,
     data: &[u8],
 ) -> Result<u64, NVMeError> {
     let mut result: u64 = 0;
@@ -97,16 +97,16 @@ pub fn zns_append(
         });
     }
 
-    if config.zasl != 0 && config.zasl < data.len() as u32 {
+    if config.zasl != 0 && config.zasl < data.len() as u64 {
         return Err(NVMeError::AppendSizeTooLarge {
             max_append: config.zasl,
-            trying_to_append: data.len() as u32,
+            trying_to_append: data.len() as u64,
         });
     }
 
     // zslba is the starting logical block address
     let mut args: nvme_zns_append_args = nvme_zns_append_args {
-        zslba: config.get_starting_addr(zone_index),
+        zslba: config.get_starting_lba(zone_index),
         result: &mut result,
         data: data.as_ptr() as *mut c_void,
         metadata: nullptr, // type *mut c_void
@@ -135,8 +135,8 @@ pub fn zns_append(
 pub fn zns_write(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
-    zone_index: u64,
-    offset: u64,
+    zone_index: Zone,
+    offset: LogicalBlock,
     data: &[u8],
 ) -> Result<(), NVMeError> {
     if data.len().rem(nvme_config.logical_block_size as usize) != 0 {
@@ -150,7 +150,7 @@ pub fn zns_write(
     let nlb = data.len() as u64 / nvme_config.logical_block_size - 1;
 
     let mut args = nvme_io_args {
-        slba: config.get_starting_addr(zone_index) + offset,
+        slba: config.get_starting_lba(zone_index) + offset,
         storage_tag: 0,                    // End to end protection
         result: null::<u32>() as *mut u32, // submit_io in nvme-cli sets this as null
         data: data.as_ptr() as *mut c_void,
@@ -189,7 +189,7 @@ pub fn write(
     fd: RawFd,
     timeout: u32,
     nsid: u32,
-    block_size: u64,
+    block_size: Byte,
     data: &[u8],
 ) -> Result<(), NVMeError> {
     if data.len().rem(block_size as usize) != 0 {
@@ -340,7 +340,7 @@ fn zone_op(
     let mut args = nvme_zns_mgmt_send_args {
         slba: match perform_on {
             PerformOn::AllZones => 0,
-            PerformOn::Zone(idx) => config.get_starting_addr(idx),
+            PerformOn::Zone(idx) => config.get_starting_lba(idx),
         },
         result: null::<u32>() as *mut u32,
         data: nullptr,

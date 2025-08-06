@@ -4,6 +4,7 @@ use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use std::error::Error;
+use nvme::types::Byte;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -43,8 +44,8 @@ pub struct ServerRemoteConfig {
 #[derive(Debug, Clone)]
 pub struct ServerEvictionConfig {
     pub eviction_type: String,
-    pub high_water_evict: usize,
-    pub low_water_evict: usize,
+    pub high_water_evict: u64,
+    pub low_water_evict: u64,
     pub eviction_interval: u64,
 }
 
@@ -56,9 +57,9 @@ pub struct ServerConfig {
     pub reader_threads: usize,
     pub remote: ServerRemoteConfig,
     pub eviction: ServerEvictionConfig,
-    pub chunk_size: usize,
-    pub block_zone_capacity: usize,
-    pub max_write_size: usize,
+    pub chunk_size: Byte,
+    pub block_zone_capacity: Byte,
+    pub max_write_size: Byte,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -201,7 +202,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
     reader_pool: Arc<ReaderPool>,
     remote: Arc<T>,
     cache: Arc<Cache>,
-    chunk_size: usize,
+    chunk_size: Byte,
 ) -> tokio::io::Result<()> {
     let (read_half, write_half) = tokio::io::split(stream);
 

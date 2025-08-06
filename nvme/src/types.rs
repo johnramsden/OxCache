@@ -10,6 +10,11 @@ use libnvme_sys::bindings::nvme_status_result;
 
 use crate::util::get_error_string;
 
+pub type Byte = u64;
+pub type LogicalBlock = u64;
+pub type Zone = u64;
+pub type Chunk = u64;
+
 /// Represents the state of a ZNS (Zoned Namespace) zone.
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
@@ -44,12 +49,22 @@ impl TryFrom<u8> for ZoneState {
 pub struct NVMeConfig {
     pub fd: RawFd,
     pub nsid: u32,
-    pub logical_block_size: u64,
-    pub total_size_in_bytes: u64,
+    pub logical_block_size: Byte,
+    pub total_size_in_bytes: Byte,
     pub current_lba_index: usize,
-    pub maximum_data_transfer_size: usize, // Zero means that there is no limit
+    pub maximum_data_transfer_size: usize, // Zero means that there is no limit, otherwise in units of minimum memory page size
     pub lba_perf: u64,                     // Unimplemented
     pub timeout: u32,                      // Default 0
+}
+
+impl NVMeConfig {
+    pub fn lba_to_byte_address(&self, lba: LogicalBlock) -> Byte {
+        self.logical_block_size * lba
+    }
+
+    pub fn byte_address_to_lba(&self, byte_address: Byte) -> LogicalBlock {
+        byte_address / self.logical_block_size
+    }
 }
 
 // Assumes that the zone capacity is the same for every zone
@@ -61,25 +76,39 @@ pub struct ZNSConfig {
     pub max_open_resources: u32,   // Just open zones
 
     // These are per-controller
-    pub zasl: u32, // The zone append size limit. Max append size is zasl bytes.
+    pub zasl: Byte, // The zone append size limit. Max append size is zasl bytes.
     pub zone_descriptor_extension_size: u64, // The size of the data that can be associated with a zone, in bytes
-    pub zone_size: u64,                      // This is in number of logical blocks
-    pub zone_cap: u64,                       // This is in number of logical blocks
+    pub zone_size: LogicalBlock,                      // This is in number of logical blocks
+    pub zone_cap: LogicalBlock,                       // This is in number of logical blocks
 
-    pub chunks_per_zone: u64, // Number of chunks that can be allocated in a zone
-    pub chunk_size: usize,    // This is in logical blocks
+    pub chunks_per_zone: Chunk, // Number of chunks that can be allocated in a zone
+    pub chunk_size: LogicalBlock,    // This is in logical blocks
 
-    pub num_zones: u64,
+    pub num_zones: Zone,
 }
 
 impl ZNSConfig {
-    // The ZSLBA field is referenced in logical blocks
-    pub fn get_starting_addr(&self, zone_index: u64) -> u64 {
+    /// Returns the starting byte address of the zone
+    pub fn get_starting_address(&self, nvme_config: &NVMeConfig, zone_index: Zone) -> Byte {
+        self.zone_size * zone_index * nvme_config.logical_block_size
+    }
+
+    /// Returns the starting logical block address of the zone
+    pub fn get_starting_lba(&self, zone_index: Zone) -> LogicalBlock {
         self.zone_size * zone_index
     }
 
-    pub fn get_address_at(&self, zone_index: u64, chunk_index: u64) -> u64 {
+    /// Get the logical block address at a chunk
+    pub fn get_address_at(&self, zone_index: Zone, chunk_index: Chunk) -> LogicalBlock {
         self.zone_size * zone_index + chunk_index * self.chunk_size as u64
+    }
+
+    pub fn chunks_to_logical_blocks(&self, chunk_count: Chunk) -> LogicalBlock {
+        self.chunk_size * chunk_count
+    }
+
+    pub fn chunks_to_bytes(&self, nvme_config: &NVMeConfig, chunk_count: Chunk) -> Byte {
+        nvme_config.lba_to_byte_address(self.chunks_to_logical_blocks(chunk_count))
     }
 }
 
@@ -87,7 +116,7 @@ impl ZNSConfig {
 #[derive(PartialEq)]
 pub enum PerformOn {
     AllZones,
-    Zone(u64),
+    Zone(Zone),
 }
 
 /// Describes the properties and state of a single ZNS (Zoned Namespace) zone.
@@ -120,9 +149,9 @@ pub enum PerformOn {
 pub struct ZNSZoneDescriptor {
     pub seq_write_required: bool,
     pub zone_state: ZoneState,
-    pub zone_capacity: u64,
-    pub zone_start_address: u64,
-    pub write_pointer: u64,
+    pub zone_capacity: LogicalBlock,
+    pub zone_start_address: LogicalBlock,
+    pub write_pointer: LogicalBlock,
 }
 
 /// Represents errors that can occur during NVMe operations.
@@ -131,12 +160,12 @@ pub enum NVMeError {
     Errno(Errno),
     StatusResult(nvme_status_result),
     UnalignedDataBuffer {
-        want: u64,
-        has: u64,
+        want: Byte,
+        has: Byte,
     },
     AppendSizeTooLarge {
-        max_append: u32,
-        trying_to_append: u32,
+        max_append: Byte,
+        trying_to_append: Byte,
     },
     ExtraContext {
         context: String,

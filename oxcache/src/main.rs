@@ -1,4 +1,5 @@
 use clap::Parser;
+use nvme::types::Byte;
 use oxcache;
 use oxcache::remote;
 use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
@@ -26,10 +27,10 @@ pub struct CliArgs {
     pub reader_threads: Option<usize>,
 
     #[arg(long)]
-    pub chunk_size: Option<usize>,
+    pub chunk_size: Option<Byte>,
     
     #[arg(long)]
-    pub max_write_size: Option<usize>,
+    pub max_write_size: Option<Byte>,
 
     #[arg(long)]
     pub remote_type: Option<String>,
@@ -41,13 +42,13 @@ pub struct CliArgs {
     pub eviction_policy: Option<String>,
 
     #[arg(long)]
-    pub high_water_evict: Option<usize>,
+    pub high_water_evict: Option<u64>,
 
     #[arg(long)]
-    pub low_water_evict: Option<usize>,
+    pub low_water_evict: Option<u64>,
 
     #[arg(long)]
-    pub block_zone_capacity: Option<usize>,
+    pub block_zone_capacity: Option<Byte>,
 
     #[arg(long)]
     pub eviction_interval: Option<usize>,
@@ -62,9 +63,9 @@ pub struct ParsedServerConfig {
     pub disk: Option<String>,
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
-    pub chunk_size: Option<usize>,
-    pub max_write_size: Option<usize>,
-    pub block_zone_capacity: Option<usize>,
+    pub chunk_size: Option<Byte>,
+    pub max_write_size: Option<Byte>,
+    pub block_zone_capacity: Option<Byte>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,8 +78,8 @@ pub struct ParsedRemoteConfig {
 #[derive(Debug, Deserialize)]
 pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
-    pub high_water_evict: Option<usize>,
-    pub low_water_evict: Option<usize>,
+    pub high_water_evict: Option<u64>,
+    pub low_water_evict: Option<u64>,
     pub eviction_interval: Option<usize>,
 }
 

@@ -1,15 +1,17 @@
+use nvme::types::Chunk;
+
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self};
 
-type ZoneIndex = usize;
+type ZoneIndex = nvme::types::Zone;
 
 #[derive(Copy, Clone)]
 pub struct Zone {
     pub index: ZoneIndex,
-    pub chunks_available: usize,
+    pub chunks_available: Chunk,
 }
 
 #[derive(Debug)]
@@ -22,12 +24,12 @@ pub struct ZoneList {
     free_zones: VecDeque<Zone>, // Unopened zones with full capacity
     open_zones: VecDeque<Zone>, // Opened zones
     writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
-    chunks_per_zone: usize,
+    chunks_per_zone: Chunk,
     max_active_resources: usize,
 }
 
 impl ZoneList {
-    pub fn new(num_zones: usize, chunks_per_zone: usize, max_active_resources: usize) -> Self {
+    pub fn new(num_zones: ZoneIndex, chunks_per_zone: Chunk, max_active_resources: usize) -> Self {
         // List of all zones, initially all are "free"
         let avail_zones = (0..num_zones)
             .map(|index| Zone {
@@ -151,6 +153,9 @@ impl ZoneList {
     // zones listed in open_zones and writing_zones
     pub fn get_open_zones(&self) -> usize {
         // TODO: This is slow, O(n)
+
+        // I don't think it's super slow because there will be at most
+        // 2 * max_active_resources zones.
         let open_zone_list = self
             .open_zones
             .iter()
@@ -198,18 +203,18 @@ impl ZoneList {
         Ok(())
     }
 
-    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: usize) {
+    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: Chunk) {
         self.free_zones.push_back(Zone {
             index: idx,
             chunks_available: remaining,
         });
     }
 
-    pub fn get_num_available_chunks(&self) -> usize {
+    pub fn get_num_available_chunks(&self) -> Chunk {
         self.open_zones
             .iter()
             .fold(0, |avail, zone| avail + zone.chunks_available)
-            + self.free_zones.len() * self.chunks_per_zone
+            + (self.free_zones.len() as ZoneIndex * self.chunks_per_zone)
     }
 }
 
@@ -219,7 +224,7 @@ mod zone_list_tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use nvme::types::NVMeConfig;
+    use nvme::types::{Byte, NVMeConfig, Zone};
     use crate::{
         cache::{Cache, bucket::ChunkLocation},
         device::Device,
@@ -232,11 +237,11 @@ mod zone_list_tests {
     struct MockDevice {}
 
     impl Device for MockDevice {
-        fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
+        fn append(&self, _data: Bytes) -> std::io::Result<ChunkLocation> {
             Ok(ChunkLocation { zone: 0, index: 0 })
         }
 
-        fn read_into_buffer(&self, _max_write_size: usize, _lba_loc: u64, _read_buffer: &mut [u8], _nvme_config: &NVMeConfig) -> io::Result<()> {
+        fn read_into_buffer(&self, _max_write_size: Byte, _lba_loc: u64, _read_buffer: &mut [u8], _nvme_config: &NVMeConfig) -> io::Result<()> {
             Ok(())
         }
 
@@ -267,14 +272,14 @@ mod zone_list_tests {
             Ok(())
         }
 
-        fn reset_zone(&self, _zone_id: usize) -> std::io::Result<()> {
+        fn reset_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
             Ok(())
         }
 
-        fn close_zone(&self, _zone_id: usize) -> std::io::Result<()> {
+        fn close_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
             Ok(())
         }
-        fn finish_zone(&self, _zone_id: usize) -> std::io::Result<()> {
+        fn finish_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
             Ok(())
         }
     }
