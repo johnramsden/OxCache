@@ -5,9 +5,9 @@ use crate::server::RUNTIME;
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use flume::Sender;
-use nvme::info::{get_address_at, is_zoned_device, nvme_get_info};
-use nvme::ops::{close_zone, reset_zone, zns_append, zns_read, finish_zone};
-use nvme::types::{NVMeConfig, PerformOn, ZNSConfig};
+use nvme::info::{get_lba_at, is_zoned_device, nvme_get_info};
+use nvme::ops::{close_zone, reset_zone, zns_append, finish_zone};
+use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Zone};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
@@ -16,28 +16,28 @@ pub struct Zoned {
     config: ZNSConfig,
     zones: Arc<(Mutex<ZoneList>, Condvar)>,
     eviction_channel: Sender<EvictorMessage>,
-    max_write_size: usize,
+    max_write_size: Byte,
     zone_append_lock: Vec<Mutex<()>>,
 }
 
 // Information about each zone
 #[derive(Clone)]
 pub struct BlockZoneInfo {
-    _write_pointer: u64,
+    _write_pointer: LogicalBlock,
 }
 
 pub struct BlockDeviceState {
     _zones: Vec<BlockZoneInfo>,
     active_zones: ZoneList,
-    _chunk_size: usize,
+    _chunk_size: LogicalBlock,
 }
 
 impl BlockDeviceState {
-    fn new(num_zones: usize, chunks_per_zone: usize, chunk_size: usize) -> Self {
-        let zones = vec![BlockZoneInfo { _write_pointer: 0 }; num_zones];
+    fn new(num_zones: Zone, chunks_per_zone: Chunk, chunk_size: LogicalBlock) -> Self {
+        let zones = vec![BlockZoneInfo { _write_pointer: 0 }; num_zones as usize];
         Self {
             _zones: zones,
-            active_zones: ZoneList::new(num_zones, chunks_per_zone, num_zones),
+            active_zones: ZoneList::new(num_zones, chunks_per_zone, num_zones as usize),
             _chunk_size: chunk_size,
         }
     }
@@ -45,12 +45,12 @@ impl BlockDeviceState {
 
 pub struct BlockInterface {
     nvme_config: NVMeConfig,
-    chunk_size: usize,
-    chunks_per_zone: usize,
-    num_zones: usize,
+    chunk_size: Byte,
+    chunks_per_zone: Chunk,
+    num_zones: Zone,
     state: Arc<Mutex<BlockDeviceState>>,
     eviction_channel: Sender<EvictorMessage>,
-    max_write_size: usize
+    max_write_size: Byte
 }
 
 pub trait Device: Send + Sync {
@@ -61,23 +61,23 @@ pub trait Device: Send + Sync {
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
-    fn get_num_zones(&self) -> usize;
+    fn get_num_zones(&self) -> Zone;
 
-    fn get_chunks_per_zone(&self) -> usize;
-    fn get_block_size(&self) -> usize;
+    fn get_chunks_per_zone(&self) -> Chunk;
+    fn get_block_size(&self) -> Byte;
     fn get_use_percentage(&self) -> f32;
 
     fn reset(&self) -> io::Result<()>;
 
-    fn reset_zone(&self, zone_id: usize) -> io::Result<()>;
+    fn reset_zone(&self, zone_id: Zone) -> io::Result<()>;
 
-    fn close_zone(&self, zone_id: usize) -> io::Result<()>;
+    fn close_zone(&self, zone_id: Zone) -> io::Result<()>;
 
-    fn finish_zone(&self, zone_id: usize) -> io::Result<()>;
+    fn finish_zone(&self, zone_id: Zone) -> io::Result<()>;
 
-    fn read_into_buffer(&self, max_write_size: usize, lba_loc: u64, read_buffer: &mut [u8], nvme_config: &NVMeConfig) -> io::Result<()> {
+    fn read_into_buffer(&self, max_write_size: Byte, lba_loc: LogicalBlock, read_buffer: &mut [u8], nvme_config: &NVMeConfig) -> io::Result<()> {
         let total_sz = read_buffer.len();
-        let write_sz = total_sz.min(max_write_size);
+        let write_sz = total_sz.min(max_write_size as usize);
         let mut byte_ind = 0;
 
         let mut lba_loc = lba_loc;
@@ -111,10 +111,10 @@ pub trait Device: Send + Sync {
 
 pub fn get_device(
     device: &str,
-    chunk_size: usize,
-    block_zone_capacity: usize,
+    chunk_size: Byte,
+    block_zone_capacity: Byte,
     eviction_channel: Sender<EvictorMessage>,
-    max_write_size: usize,
+    max_write_size: Byte,
 ) -> io::Result<Arc<dyn Device>> {
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
@@ -150,19 +150,19 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
 impl Zoned {
     fn compact_zone(
         &self,
-        zone_to_compact: usize,
+        zone_to_compact: Zone,
         chunks_to_keep: &[ChunkLocation],
         buffer: &mut [u8],
     ) -> io::Result<Vec<ChunkLocation>> {
         let mut new_locations = Vec::with_capacity(chunks_to_keep.len());
         for chunk in chunks_to_keep {
-            let starting_byte_loc = chunk.index as usize * self.config.chunk_size;
-            let ending_byte_loc = (chunk.index + 1) as usize * self.config.chunk_size;
+            let starting_byte_loc: Byte = self.config.chunks_to_bytes(&self.nvme_config, chunk.index);
+            let ending_byte_loc: Byte = self.config.chunks_to_bytes(&self.nvme_config, chunk.index + 1);
             let new_idx = zns_append(
                 &self.nvme_config,
                 &self.config,
-                zone_to_compact as u64,
-                &mut buffer[starting_byte_loc..ending_byte_loc],
+                zone_to_compact,
+                &mut buffer[starting_byte_loc as usize..ending_byte_loc as usize],
             )
             .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?;
             new_locations.push(ChunkLocation::new(zone_to_compact, new_idx));
@@ -170,7 +170,8 @@ impl Zoned {
         Ok(new_locations)
     }
 
-    fn get_free_zone(&self) -> io::Result<usize> {
+    /// Wrapper for ZoneList, handles mutex and notification
+    fn get_free_zone(&self) -> io::Result<Zone> {
         let (mtx, wait_notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
         match zone_list.remove() {
@@ -195,7 +196,7 @@ impl Zoned {
         }
     }
 
-    fn complete_write(&self, zone_idx: usize, finish_zone: bool) -> io::Result<()> {
+    fn complete_write(&self, zone_idx: Zone, finish_zone: bool) -> io::Result<()> {
         let (mtx, notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
         zone_list.write_finish(zone_idx, self, finish_zone)?;
@@ -210,9 +211,9 @@ impl Zoned {
 impl Zoned {
     fn new(
         device: &str,
-        chunk_size: usize,
+        chunk_size: Byte,
         eviction_channel: Sender<EvictorMessage>,
-        max_write_size: usize,
+        max_write_size: Byte,
     ) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
@@ -221,14 +222,15 @@ impl Zoned {
 
         match nvme::info::zns_get_info(&nvme_config) {
             Ok(mut config) => {
-                let chunk_size_in_logical_blocks =
-                    chunk_size as u64 / nvme_config.logical_block_size;
+
+                let chunk_size_in_logical_blocks: LogicalBlock =
+                    nvme_config.byte_address_to_lba(chunk_size);
                 config.chunks_per_zone = config.zone_cap / chunk_size_in_logical_blocks;
                 config.chunk_size = chunk_size;
-                let num_zones = config.num_zones as usize;
+                let num_zones: Zone = config.num_zones;
                 let zone_list = ZoneList::new(
                     num_zones,
-                    config.chunks_per_zone as usize,
+                    config.chunks_per_zone,
                     config.max_active_resources as usize,
                 );
 
@@ -249,31 +251,25 @@ impl Zoned {
         }
     }
 
-    fn lba_to_chunk_index(&self, lba: u64, zone_index: usize) -> u64 {
-        let block_size = self.nvme_config.logical_block_size ;
-        let chunk_size = self.config.chunk_size as u64;
-
+    fn lba_to_chunk_index(&self, lba: LogicalBlock, zone_index: Zone) -> u64 {
         // Make sure LBA is zone-relative
-        let zone_start_lba = self.config.zone_size * zone_index as u64;
-        let rel_lba = lba.checked_sub(zone_start_lba)
+        let zone_start_lba = self.config.get_starting_lba(zone_index);
+        let rel_lba: LogicalBlock = lba.checked_sub(zone_start_lba)
             .expect("LBA was not inside the specified zone");
 
-        // Convert to byte offset
-        let byte_offset = rel_lba * block_size;
-
         // Get chunk index
-        byte_offset / chunk_size
+        rel_lba / self.config.chunk_size
     }
 
-    fn chunked_append(&self, data: Bytes, zone_index: usize) -> io::Result<ChunkLocation> {
-        let total_sz = data.len();
+    fn chunked_append(&self, data: Bytes, zone_index: Zone) -> io::Result<ChunkLocation> {
+        let total_sz = data.len() as Byte;
         let write_sz = total_sz.min(self.max_write_size);
 
         // println!("Write size = {}, max_write_size = {}", write_sz, self.max_write_size);
 
         // Only locks if needed
         let _maybe_guard: Option<MutexGuard<'_, ()>> = if total_sz > self.max_write_size {
-            Some(self.zone_append_lock[zone_index].lock().unwrap())
+            Some(self.zone_append_lock[zone_index as usize].lock().unwrap())
         } else {
             None
         };
@@ -286,16 +282,16 @@ impl Zoned {
         let mut last_lba: Option<u64> = None;
 
         while byte_ind < total_sz {
-            let end = (byte_ind + write_sz).min(data.len());
+            let end = (byte_ind + write_sz).min(data.len() as Byte);
             match zns_append(
                 &self.nvme_config,
                 &self.config,
                 zone_index as u64,
-                &data[byte_ind..end],
+                &data[byte_ind as usize..end as usize],
             ) {
                 Ok(lba) => {
                     // println!("[append] wrote to lba {} at zone {} from bytes ({}..{})", lba, zone_index, byte_ind, end);
-                    let lbas_written = (end - byte_ind) as u64 / self.nvme_config.logical_block_size;
+                    let lbas_written = self.nvme_config.byte_address_to_lba(end - byte_ind);
                     if first_chunk.is_none() {
                         let chunk = self.lba_to_chunk_index(lba, zone_index);
                         first_chunk = Some(ChunkLocation::new(zone_index, chunk));
@@ -331,7 +327,7 @@ impl Zoned {
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-        let zone_index = loop {
+        let zone_index: Zone = loop {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
@@ -343,7 +339,7 @@ impl Device for Zoned {
         // Note: this performs a copy every time because we need to
         // pass in a mutable vector to libnvme
         assert_eq!(
-            data.as_ptr() as usize % self.nvme_config.logical_block_size as usize,
+            data.as_ptr() as u64 % self.nvme_config.logical_block_size,
             0
         );
 
@@ -351,8 +347,8 @@ impl Device for Zoned {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.config.chunk_size];
-        let slba = self.config.get_address_at(location.zone as u64, location.index as u64);
+        let mut data = vec![0u8; self.config.chunk_size as usize];
+        let slba = self.config.get_address_at(location.zone, location.index);
         println!("Read slba = {} for {:?}", slba, location);
         self.read_into_buffer(
             self.max_write_size,
@@ -369,6 +365,8 @@ impl Device for Zoned {
 
         match locations {
             EvictTarget::Chunk(mut chunk_locations) => {
+                // TODO: Check that the units match
+
                 // Check all zones are the same, this isn't a
                 // restriction but it makes implementation
                 // easier. This can be changed later
@@ -387,7 +385,7 @@ impl Device for Zoned {
                 ];
                 self.read_into_buffer(
                     self.max_write_size,
-                    self.config.get_address_at(zone_to_evict as u64, 0),
+                    self.config.get_starting_lba(zone_to_evict),
                     &mut read_buf,
                     &self.nvme_config
                 )?;
@@ -417,7 +415,7 @@ impl Device for Zoned {
                 // TODO: reset zones for device
                 zones.reset_zone_with_capacity(
                     zone_to_evict,
-                    self.get_chunks_per_zone() - to_keep.len(),
+                    self.get_chunks_per_zone() - to_keep.len() as Chunk,
                 );
                 Ok(())
             }
@@ -433,16 +431,16 @@ impl Device for Zoned {
         }
     }
 
-    fn get_num_zones(&self) -> usize {
-        self.config.num_zones as usize
+    fn get_num_zones(&self) -> Zone {
+        self.config.num_zones
     }
 
-    fn get_chunks_per_zone(&self) -> usize {
-        self.config.chunks_per_zone as usize
+    fn get_chunks_per_zone(&self) -> Chunk {
+        self.config.chunks_per_zone
     }
 
-    fn get_block_size(&self) -> usize {
-        self.nvme_config.logical_block_size as usize
+    fn get_block_size(&self) -> Byte {
+        self.nvme_config.logical_block_size
     }
 
     fn get_use_percentage(&self) -> f32 {
@@ -457,29 +455,29 @@ impl Device for Zoned {
         reset_zone(&self.nvme_config, &self.config, PerformOn::AllZones)
             .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
-    fn reset_zone(&self, zone_id: usize) -> io::Result<()> {
+    fn reset_zone(&self, zone_id: Zone) -> io::Result<()> {
         reset_zone(
             &self.nvme_config,
             &self.config,
-            PerformOn::Zone(zone_id as u64),
+            PerformOn::Zone(zone_id),
         )
         .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 
-    fn close_zone(&self, zone_id: usize) -> io::Result<()> {
+    fn close_zone(&self, zone_id: Zone) -> io::Result<()> {
         close_zone(
             &self.nvme_config,
             &self.config,
-            PerformOn::Zone(zone_id as u64),
+            PerformOn::Zone(zone_id),
         )
         .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
 
-    fn finish_zone(&self, zone_id: usize) -> io::Result<()> {
+    fn finish_zone(&self, zone_id: Zone) -> io::Result<()> {
         finish_zone(
             &self.nvme_config,
             &self.config,
-            PerformOn::Zone(zone_id as u64),
+            PerformOn::Zone(zone_id),
         )
         .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))
     }
@@ -488,10 +486,10 @@ impl Device for Zoned {
 impl BlockInterface {
     fn new(
         device: &str,
-        chunk_size: usize,
-        block_zone_capacity: usize,
+        chunk_size: Byte,
+        block_zone_capacity: Byte,
         eviction_channel: Sender<EvictorMessage>,
-        max_write_size: usize
+        max_write_size: Byte
     ) -> io::Result<Self> {
         let nvme_config = match nvme_get_info(device) {
             Ok(config) => config,
@@ -506,14 +504,9 @@ impl BlockInterface {
         );
 
         // Num_zones
-        let num_zones = nvme_config.total_size_in_bytes as usize / block_zone_capacity;
+        let num_zones = nvme_config.total_size_in_bytes / block_zone_capacity;
         // Chunks per zone
         let chunks_per_zone = block_zone_capacity / chunk_size;
-
-        // // Num_zones: how to get?
-        // let num_zones = 10;
-        // // Chunks per zone: how to get?
-        // let chunks_per_zone = 2;
 
         Ok(Self {
             nvme_config,
@@ -529,6 +522,24 @@ impl BlockInterface {
             max_write_size
         })
     }
+
+    fn chunk_lba_size(&self) -> LogicalBlock {
+        self.nvme_config.byte_address_to_lba(self.chunk_size)
+    }
+
+    fn zone_size(&self) -> LogicalBlock {
+        self.chunks_per_zone as u64 * self.chunk_lba_size()
+    }
+
+    fn get_lba_at(&self, location: &ChunkLocation) -> LogicalBlock {
+        get_lba_at(
+            location.zone,
+            location.index,
+            self.zone_size(),
+            self.chunk_lba_size(),
+        )        
+    }
+
 }
 
 impl Device for BlockInterface {
@@ -553,12 +564,7 @@ impl Device for BlockInterface {
 
         assert_eq!(data.len() % self.nvme_config.logical_block_size as usize, 0);
 
-        let write_addr = get_address_at(
-            chunk_location.zone as u64,
-            chunk_location.index,
-            (self.chunks_per_zone * self.chunk_size) as u64,
-            self.chunk_size as u64,
-        );
+        let write_addr = self.get_lba_at(&chunk_location);
 
         // println!("[append] writing chunk to {} bytes at addr {}", chunk_location.zone, write_addr);
 
@@ -576,17 +582,13 @@ impl Device for BlockInterface {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.chunk_size];
+        let mut data = vec![0u8; self.chunk_size as usize];
 
-        let slba = get_address_at(
-            location.zone as u64,
-            location.index,
-            (self.chunks_per_zone * self.chunk_size) as u64,
-            self.chunk_size as u64,
-        );
+        let write_addr = self.get_lba_at(&location);
+
         self.read_into_buffer(
             self.max_write_size,
-            slba,
+            write_addr,
             &mut data,
             &self.nvme_config
         )?;
@@ -596,11 +598,14 @@ impl Device for BlockInterface {
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
             EvictTarget::Chunk(chunk_locations) => {
+                // TODO: Check units
+                
                 if chunk_locations.is_empty() {
                     println!("[evict:Chunk] No zones to evict");
                     return Ok(());
                 }
                 println!("[evict:Chunk] Evicting zones {:?}", chunk_locations);
+
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let _state = state_mtx.lock().unwrap();
@@ -626,16 +631,16 @@ impl Device for BlockInterface {
         }
     }
 
-    fn get_num_zones(&self) -> usize {
+    fn get_num_zones(&self) -> Zone {
         self.num_zones
     }
 
-    fn get_chunks_per_zone(&self) -> usize {
+    fn get_chunks_per_zone(&self) -> Chunk {
         self.chunks_per_zone
     }
 
-    fn get_block_size(&self) -> usize {
-        self.nvme_config.logical_block_size as usize
+    fn get_block_size(&self) -> Byte {
+        self.nvme_config.logical_block_size
     }
 
     fn get_use_percentage(&self) -> f32 {
@@ -649,12 +654,12 @@ impl Device for BlockInterface {
         Ok(())
     }
 
-    fn reset_zone(&self, _zone_id: usize) -> io::Result<()> {
+    fn reset_zone(&self, _zone_id: Zone) -> io::Result<()> {
         Ok(())
     }
 
-    fn close_zone(&self, _zone_id: usize) -> io::Result<()> {
+    fn close_zone(&self, _zone_id: Zone) -> io::Result<()> {
         Ok(())
     }
-    fn finish_zone(&self, zone_id: usize) -> io::Result<()> { Ok(()) }
+    fn finish_zone(&self, _zone_id: Zone) -> io::Result<()> { Ok(()) }
 }
