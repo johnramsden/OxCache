@@ -99,16 +99,26 @@ impl ZoneList {
         device: &dyn device::Device,
         finish_zone: bool
     ) -> io::Result<()> {
+        println!("[ZoneList]: Finishing write to {}", zone_index);
         let write_num = self.writing_zones.get(&zone_index).unwrap();
         if write_num - 1 == 0 {
+            println!("[ZoneList]: Removing {} from writing zones", zone_index);
             self.writing_zones.remove(&zone_index);
 
             if finish_zone {
-                device.finish_zone(zone_index)
+                let res = device.finish_zone(zone_index);
+                let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
+                assert!(zones[zone_index as usize].zone_state == ZoneState::Closed, "{:?} got instead", zones[zone_index as usize].zone_state);
+                if res.is_err() {
+                    panic!("{:?}", res);
+                }
+                println!("[ZoneList]: Finishing {}", zone_index);
+                res
             } else {
-                device.close_zone(zone_index)
+                Ok(())
             }
         } else {
+            println!("[ZoneList]: Decrementing {}", zone_index);
             self.writing_zones.insert(zone_index, write_num - 1);
             Ok(())
         }
