@@ -10,7 +10,7 @@ use libnvme_sys::bindings::*;
 
 use crate::{
     ops::open_device,
-    types::{Byte, Chunk, LogicalBlock, NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor, Zone},
+    types::{Byte, Chunk, LogicalBlock, NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor, Zone, ZoneState},
     util::{check_error, shift_and_mask},
 };
 
@@ -310,6 +310,22 @@ pub fn report_zones(
     };
 
     Ok((nzones, zone_descriptors))
+}
+
+/// Returns the number of zones for the given NVMe device and namespace.
+pub fn get_active_zones(fd: RawFd, nsid: u32) -> Result<usize, NVMeError> {
+    match report_zones(fd, nsid, 0, 256, 0) {
+        Ok((nz, zd)) => {
+            let mut cnt = 0;
+            for z in zd {
+                if z.zone_state == ZoneState::ExplicitlyOpened || z.zone_state == ZoneState::ImplicitlyOpened {
+                    cnt+=1;
+                }
+            }
+            Ok(cnt)
+        },
+        Err(err) => Err(err),
+    }
 }
 
 pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
