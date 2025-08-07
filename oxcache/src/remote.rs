@@ -105,8 +105,8 @@ impl EmulatedBackend {
 
         // Zero pad up to full capacity
         let current_len = buffer.len() as Byte;
-        if current_len < capacity {
-            buffer.resize(capacity as usize, 0);
+        if current_len < self.chunk_size {
+            buffer.resize(self.chunk_size as usize, 0);
         }
 
         // Check size
