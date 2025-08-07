@@ -1,4 +1,5 @@
-use nvme::types::Chunk;
+use nvme::info::report_zones_all;
+use nvme::types::{Chunk, ZoneState};
 
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
@@ -8,7 +9,7 @@ use std::io::{self};
 
 type ZoneIndex = nvme::types::Zone;
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Zone {
     pub index: ZoneIndex,
     pub chunks_available: Chunk,
@@ -20,12 +21,13 @@ pub enum ZoneObtainFailure {
     Wait,
 }
 
+#[derive(Debug)]
 pub struct ZoneList {
-    free_zones: VecDeque<Zone>, // Unopened zones with full capacity
-    open_zones: VecDeque<Zone>, // Opened zones
-    writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
-    chunks_per_zone: Chunk,
-    max_active_resources: usize,
+    pub free_zones: VecDeque<Zone>, // Unopened zones with full capacity
+    pub open_zones: VecDeque<Zone>, // Opened zones
+    pub writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
+    pub chunks_per_zone: Chunk,
+    pub max_active_resources: usize,
 }
 
 impl ZoneList {
@@ -46,6 +48,7 @@ impl ZoneList {
             max_active_resources,
         }
     }
+
 
     // Get a zone to write to
     pub fn remove(&mut self) -> Result<ZoneIndex, ZoneObtainFailure> {
@@ -74,21 +77,33 @@ impl ZoneList {
         }
 
         let zone = if can_open_more_zones {
-            self.free_zones.pop_front()
+            let res = self.free_zones.pop_front();
+            println!("[ZoneList]: Opening zone {}", res.unwrap().index);
+            res
         } else {
-            self.open_zones.pop_front()
+            let res = self.open_zones.pop_front();
+            println!("[ZoneList]: Using existing zone {} with {} chunks", res.unwrap().index, res.unwrap().chunks_available);
+            res
         };
         let mut zone = zone.unwrap();
+
+        if zone.chunks_available <= 0 {
+            panic!("[ZoneList]: Checked subtraction failed: {:?}", self);
+        }
+
         zone.chunks_available -= 1;
         if zone.chunks_available >= 1 {
+            println!("[ZoneList]: Returning zone back to use: {}", zone.index);
             self.open_zones.push_back(zone);
+        } else {
+            println!("[ZoneList]: Not returning zone back to use: {}", zone.index);
         }
 
         self.writing_zones
             .entry(zone.index)
             .and_modify(|v| *v += 1)
             .or_insert(1);
-
+        println!("[ZoneList]: Now {} threads are writing into zone {}", self.writing_zones.get(&zone.index).unwrap(), zone.index);
         Ok(zone.index)
     }
 
@@ -234,7 +249,7 @@ mod zone_list_tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use nvme::types::{Byte, NVMeConfig, Zone};
+    use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
     use crate::{
         cache::{Cache, bucket::ChunkLocation},
         device::Device,
@@ -252,9 +267,7 @@ mod zone_list_tests {
         }
 
         fn read_into_buffer(
-            &self,
-            _location: ChunkLocation,
-            _read_buffer: &mut [u8],
+            &self, max_write_size: Byte, lba_loc: LogicalBlock, read_buffer: &mut [u8], nvme_config: &NVMeConfig
         ) -> std::io::Result<()> {
             Ok(())
         }
@@ -268,14 +281,14 @@ mod zone_list_tests {
             Ok(Bytes::new())
         }
 
-        fn get_num_zones(&self) -> usize {
+        fn get_num_zones(&self) -> Zone {
             0
         }
 
-        fn get_chunks_per_zone(&self) -> usize {
+        fn get_chunks_per_zone(&self) -> nvme::types::Chunk {
             0
         }
-        fn get_block_size(&self) -> usize {
+        fn get_block_size(&self) -> Byte {
             0
         }
         fn get_use_percentage(&self) -> f32 {

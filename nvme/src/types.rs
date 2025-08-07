@@ -17,7 +17,7 @@ pub type Chunk = u64;
 
 /// Represents the state of a ZNS (Zoned Namespace) zone.
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ZoneState {
     Empty = 1,
     ImplicitlyOpened = 2,
@@ -145,7 +145,7 @@ pub enum PerformOn {
 /// };
 /// println!("Zone state: {:?}", desc.zone_state);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ZNSZoneDescriptor {
     pub seq_write_required: bool,
     pub zone_state: ZoneState,
@@ -169,16 +169,26 @@ pub enum NVMeError {
     },
     ExtraContext {
         context: String,
+        context_index: usize,
         original_error: Box<NVMeError>,
     },
 }
 
 impl NVMeError {
-    pub fn add_context(&mut self, context: String) {
-        *self = NVMeError::ExtraContext {
+    pub fn add_context(mut self, context: String) -> Self {
+        self = NVMeError::ExtraContext {
             context,
+            context_index: match self {
+                NVMeError::ExtraContext {
+                    context: _,
+                    context_index,
+                    original_error: _
+                } => context_index + 1,
+                _ => 0
+            },
             original_error: Box::new(self.clone()),
-        }
+        };
+        self
     }
 }
 
@@ -207,8 +217,9 @@ impl fmt::Display for NVMeError {
                 ),
                 NVMeError::ExtraContext {
                     context,
+                    context_index,
                     original_error,
-                } => format!("{}\nContext: {}", *original_error, context),
+                } => format!("{}\nContext backtrace #{}: {}", *original_error, context_index, context),
             }
         )
     }
