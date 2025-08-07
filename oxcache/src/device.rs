@@ -46,7 +46,8 @@ impl BlockDeviceState {
 
 pub struct BlockInterface {
     nvme_config: NVMeConfig,
-    chunk_size: Byte,
+    chunk_size_in_bytes: Byte,
+    chunk_size_in_lbas: LogicalBlock,
     chunks_per_zone: Chunk,
     num_zones: Zone,
     state: Arc<Mutex<BlockDeviceState>>,
@@ -236,12 +237,13 @@ impl Zoned {
 
         match nvme::info::zns_get_info(&nvme_config) {
             Ok(mut config) => {
-                println!("ZNSConfig: {:?}", config); 
-                
+                println!("ZNSConfig: {:?}", config);
+
                 let chunk_size_in_logical_blocks: LogicalBlock =
                     nvme_config.byte_address_to_lba(chunk_size);
                 config.chunks_per_zone = config.zone_cap / chunk_size_in_logical_blocks;
-                config.chunk_size = chunk_size;
+                config.chunk_size_in_lbas = chunk_size_in_logical_blocks;
+                config.chunk_size_in_bytes = chunk_size;
                 let num_zones: Zone = config.num_zones;
                 let zone_list = ZoneList::new(
                     num_zones,
@@ -259,7 +261,7 @@ impl Zoned {
                     eviction_channel,
                     zones: Arc::new((Mutex::new(zone_list), Condvar::new())),
                     max_write_size,
-                    zone_append_lock
+                    zone_append_lock,
                 })
             }
             Err(err) => Err(err.try_into().unwrap()),
@@ -267,13 +269,20 @@ impl Zoned {
     }
 
     fn lba_to_chunk_index(&self, lba: LogicalBlock, zone_index: Zone) -> u64 {
+
+
         // Make sure LBA is zone-relative
         let zone_start_lba = self.config.get_starting_lba(zone_index);
         let rel_lba: LogicalBlock = lba.checked_sub(zone_start_lba)
             .expect("LBA was not inside the specified zone");
 
         // Get chunk index
-        rel_lba / self.config.chunk_size
+        let chunk_ind = rel_lba / self.config.chunk_size_in_lbas;
+
+        println!("zone_index={}, zone_start_lba={}, rel_lba={}, chunk_size={}, chunk_ind={}",
+                 zone_index, zone_start_lba, rel_lba, self.config.chunk_size_in_lbas, chunk_ind);
+
+        chunk_ind
     }
 
     fn chunked_append(&self, data: Bytes, zone_index: Zone) -> io::Result<ChunkLocation> {
@@ -307,7 +316,7 @@ impl Zoned {
                 &data[byte_ind as usize..end as usize],
             ) {
                 Ok(lba) => {
-                    println!("[append] wrote to lba {} at zone {} from bytes ({}..{})", lba, zone_index, byte_ind, end);
+                    // println!("[append] wrote to lba {} at zone {} from bytes ({}..{})", lba, zone_index, byte_ind, end);
                     let lbas_written = self.nvme_config.byte_address_to_lba(end - byte_ind);
                     if first_chunk.is_none() {
                         let chunk = self.lba_to_chunk_index(lba, zone_index);
@@ -394,7 +403,7 @@ impl Device for Zoned {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.config.chunk_size as usize];
+        let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
         let slba = self.config.get_address_at(location.zone, location.index);
         println!("Read slba = {} for {:?}", slba, location);
         self.read_into_buffer(
@@ -586,6 +595,8 @@ impl BlockInterface {
         // Chunks per zone
         let chunks_per_zone = block_zone_capacity / chunk_size;
 
+        let chunk_size_in_lbas = nvme_config.byte_address_to_lba(chunk_size);
+
         Ok(Self {
             nvme_config,
             state: Arc::new(Mutex::new(BlockDeviceState::new(
@@ -593,7 +604,8 @@ impl BlockInterface {
                 chunks_per_zone,
                 chunk_size,
             ))),
-            chunk_size,
+            chunk_size_in_bytes: chunk_size,
+            chunk_size_in_lbas,
             chunks_per_zone,
             num_zones,
             eviction_channel,
@@ -601,12 +613,8 @@ impl BlockInterface {
         })
     }
 
-    fn chunk_lba_size(&self) -> LogicalBlock {
-        self.nvme_config.byte_address_to_lba(self.chunk_size)
-    }
-
     fn zone_size(&self) -> LogicalBlock {
-        self.chunks_per_zone as u64 * self.chunk_lba_size()
+        self.chunks_per_zone as u64 * self.chunk_size_in_lbas
     }
 
     fn get_lba_at(&self, location: &ChunkLocation) -> LogicalBlock {
@@ -614,8 +622,8 @@ impl BlockInterface {
             location.zone,
             location.index,
             self.zone_size(),
-            self.chunk_lba_size(),
-        )        
+            self.chunk_size_in_lbas,
+        )
     }
 
     fn chunked_append(&self, data: Bytes, write_addr: LogicalBlock) -> io::Result<()> {
@@ -688,7 +696,7 @@ impl Device for BlockInterface {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.chunk_size as usize];
+        let mut data = vec![0u8; self.chunk_size_in_bytes as usize];
 
         let write_addr = self.get_lba_at(&location);
 
@@ -705,7 +713,7 @@ impl Device for BlockInterface {
         match locations {
             EvictTarget::Chunk(chunk_locations) => {
                 // TODO: Check units
-                
+
                 if chunk_locations.is_empty() {
                     println!("[evict:Chunk] No zones to evict");
                     return Ok(());

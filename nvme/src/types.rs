@@ -82,7 +82,8 @@ pub struct ZNSConfig {
     pub zone_cap: LogicalBlock,                       // This is in number of logical blocks
 
     pub chunks_per_zone: Chunk, // Number of chunks that can be allocated in a zone
-    pub chunk_size: LogicalBlock,    // This is in logical blocks
+    pub chunk_size_in_lbas: LogicalBlock,    // This is in logical blocks
+    pub chunk_size_in_bytes: Byte,    // This is in logical blocks
 
     pub num_zones: Zone,
 }
@@ -100,11 +101,11 @@ impl ZNSConfig {
 
     /// Get the logical block address at a chunk
     pub fn get_address_at(&self, zone_index: Zone, chunk_index: Chunk) -> LogicalBlock {
-        self.zone_size * zone_index + chunk_index * self.chunk_size as u64
+        self.zone_size * zone_index + chunk_index * self.chunk_size_in_lbas as u64
     }
 
     pub fn chunks_to_logical_blocks(&self, chunk_count: Chunk) -> LogicalBlock {
-        self.chunk_size * chunk_count
+        self.chunk_size_in_lbas * chunk_count
     }
 
     pub fn chunks_to_bytes(&self, nvme_config: &NVMeConfig, chunk_count: Chunk) -> Byte {

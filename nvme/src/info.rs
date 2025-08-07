@@ -205,7 +205,8 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
         zone_cap: zone_cap,
         zone_size: zone_size,
         chunks_per_zone: 0,
-        chunk_size: 0,
+        chunk_size_in_bytes: 0,
+        chunk_size_in_lbas: 0,
     })
 }
 
