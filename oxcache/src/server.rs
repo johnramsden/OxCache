@@ -5,6 +5,7 @@ use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
 use nvme::types::Byte;
 use std::error::Error;
+use std::net::SocketAddr;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -22,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-
+use crate::metrics::init_metrics_exporter;
 // Global tokio runtime
 // pub static RUNTIME: Lazy<Runtime> =
 // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
@@ -49,6 +50,11 @@ pub struct ServerEvictionConfig {
     pub eviction_interval: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ServerMetricsConfig {
+    pub metrics_exporter_addr: Option<SocketAddr>,
+}
+
 #[derive(Debug)]
 pub struct ServerConfig {
     pub socket: String,
@@ -60,6 +66,7 @@ pub struct ServerConfig {
     pub chunk_size: Byte,
     pub block_zone_capacity: Byte,
     pub max_write_size: Byte,
+    pub metrics: ServerMetricsConfig,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -108,6 +115,10 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         let listener = UnixListener::bind(socket_path)?;
         log::info!("Listening on socket: {}", self.config.socket);
+
+        if let Some(addr) = self.config.metrics.metrics_exporter_addr {
+            init_metrics_exporter(addr);
+        }
 
         let eviction_policy = Arc::new(std::sync::Mutex::new(EvictionPolicyWrapper::new(
             self.config.eviction.eviction_type.as_str(),
