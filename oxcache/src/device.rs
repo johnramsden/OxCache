@@ -138,7 +138,7 @@ pub fn get_device(
 fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> {
     let (resp_tx, resp_rx) = flume::bounded(1);
     if let Err(e) = eviction_channel.send(EvictorMessage { sender: resp_tx }) {
-        eprintln!("[append] Failed to send eviction message: {}", e);
+        log::error!("[append] Failed to send eviction message: {}", e);
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "Failed to send eviction message",
@@ -146,7 +146,7 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
     };
 
     if let Err(e) = resp_rx.recv() {
-        eprintln!("[append] Failed to receive eviction message: {}", e);
+        log::error!("[append] Failed to receive eviction message: {}", e);
     }
 
     Ok(())
@@ -181,7 +181,7 @@ impl Zoned {
         let mut zone_list = mtx.lock().unwrap();
 
         let active_zones = get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap();
-        println!("active zones: {}", active_zones);
+        log::debug!("active zones: {}", active_zones);
         // assert!(zone_list.get_open_zones() == active_zones, "{} vs {}", zone_list.get_open_zones(), active_zones);
         assert!(active_zones <= self.config.max_active_resources as usize);
 
@@ -237,7 +237,7 @@ impl Zoned {
 
         match nvme::info::zns_get_info(&nvme_config) {
             Ok(mut config) => {
-                println!("ZNSConfig: {:?}", config);
+                log::debug!("ZNSConfig: {:?}", config);
 
                 let chunk_size_in_logical_blocks: LogicalBlock =
                     nvme_config.byte_address_to_lba(chunk_size);
@@ -279,19 +279,19 @@ impl Zoned {
         // Get chunk index
         let chunk_ind = rel_lba / self.config.chunk_size_in_lbas;
 
-        println!("zone_index={}, zone_start_lba={}, rel_lba={}, chunk_size={}, chunk_ind={}",
+        log::debug!("zone_index={}, zone_start_lba={}, rel_lba={}, chunk_size={}, chunk_ind={}",
                  zone_index, zone_start_lba, rel_lba, self.config.chunk_size_in_lbas, chunk_ind);
 
         chunk_ind
     }
 
     fn chunked_append(&self, data: Bytes, zone_index: Zone) -> io::Result<ChunkLocation> {
-        println!("Chunk appending to zone {}", zone_index);
+        log::debug!("Chunk appending to zone {}", zone_index);
 
         let total_sz = data.len() as Byte;
         let write_sz = total_sz.min(self.max_write_size);
 
-        println!("[Device]: Total size = {}, Write size = {}, max_write_size = {}", total_sz, write_sz, self.max_write_size);
+        log::debug!("[Device]: Total size = {}, Write size = {}, max_write_size = {}", total_sz, write_sz, self.max_write_size);
 
         // Only locks if needed
         let _maybe_guard: Option<MutexGuard<'_, ()>> = if total_sz > self.max_write_size {
@@ -369,7 +369,7 @@ impl Zoned {
 
         let finish_zone = cl.index+1 == self.config.chunks_per_zone;
 
-        println!("[Device]: Finished writing {}. Finish zone: {} with comparison {} == {} ", zone_index, finish_zone, cl.index+1, self.config.chunks_per_zone);
+        log::debug!("[Device]: Finished writing {}. Finish zone: {} with comparison {} == {} ", zone_index, finish_zone, cl.index+1, self.config.chunks_per_zone);
 
         // println!("Finished writing to zone {} - {:?} - finish_zone={:?}", zone_index, cl, finish_zone);
 
@@ -381,13 +381,13 @@ impl Zoned {
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-        println!("Appending");
+        log::debug!("Appending");
 
         let zone_index: Zone = loop {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
-                    eprintln!("[append] Failed to get free zone: {}", err);
+                    log::error!("[append] Failed to get free zone: {}", err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -405,7 +405,7 @@ impl Device for Zoned {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
         let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
         let slba = self.config.get_address_at(location.zone, location.index);
-        println!("Read slba = {} for {:?}", slba, location);
+        log::debug!("Read slba = {} for {:?}", slba, location);
         self.read_into_buffer(
             self.max_write_size,
             slba,
@@ -417,7 +417,7 @@ impl Device for Zoned {
     }
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
-        println!("Current device usage is at: {}", self.get_use_percentage());
+        log::debug!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
             EvictTarget::Chunk(mut chunk_locations) => {
@@ -666,7 +666,7 @@ impl Device for BlockInterface {
 
     /// Hold internal state to keep track of "ssd" zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-        println!("Appending");
+        log::debug!("Appending");
         let mtx = self.state.clone();
 
         let chunk_location = loop {
@@ -674,7 +674,7 @@ impl Device for BlockInterface {
             match state.active_zones.remove_chunk_location() {
                 Ok(location) => break location,
                 Err(_) => {
-                    eprintln!(
+                    log::error!(
                         "[append] Failed to allocate chunk: no available space in active zones"
                     );
                 }
@@ -715,10 +715,10 @@ impl Device for BlockInterface {
                 // TODO: Check units
 
                 if chunk_locations.is_empty() {
-                    println!("[evict:Chunk] No zones to evict");
+                    log::debug!("[evict:Chunk] No zones to evict");
                     return Ok(());
                 }
-                println!("[evict:Chunk] Evicting zones {:?}", chunk_locations);
+                log::debug!("[evict:Chunk] Evicting zones {:?}", chunk_locations);
 
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
                 let state_mtx = Arc::clone(&self.state);
@@ -729,10 +729,10 @@ impl Device for BlockInterface {
             }
             EvictTarget::Zone(locations) => {
                 if locations.is_empty() {
-                    println!("[evict:Zone] No zones to evict");
+                    log::debug!("[evict:Zone] No zones to evict");
                     return Ok(());
                 }
-                println!("[evict:Zone] Evicting zones {:?}", locations);
+                log::debug!("[evict:Zone] Evicting zones {:?}", locations);
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()?;

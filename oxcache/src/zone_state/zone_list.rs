@@ -78,11 +78,15 @@ impl ZoneList {
 
         let zone = if can_open_more_zones {
             let res = self.free_zones.pop_front();
-            println!("[ZoneList]: Opening zone {}", res.unwrap().index);
+            log::debug!("[ZoneList]: Opening zone {}", res.as_ref().unwrap().index);
             res
         } else {
             let res = self.open_zones.pop_front();
-            println!("[ZoneList]: Using existing zone {} with {} chunks", res.unwrap().index, res.unwrap().chunks_available);
+            log::debug!(
+                "[ZoneList]: Using existing zone {} with {} chunks",
+                res.as_ref().unwrap().index,
+                res.as_ref().unwrap().chunks_available
+            );
             res
         };
         let mut zone = zone.unwrap();
@@ -93,17 +97,21 @@ impl ZoneList {
 
         zone.chunks_available -= 1;
         if zone.chunks_available >= 1 {
-            println!("[ZoneList]: Returning zone back to use: {}", zone.index);
+            log::debug!("[ZoneList]: Returning zone back to use: {}", zone.index);
             self.open_zones.push_back(zone);
         } else {
-            println!("[ZoneList]: Not returning zone back to use: {}", zone.index);
+            log::debug!("[ZoneList]: Not returning zone back to use: {}", zone.index);
         }
 
         self.writing_zones
             .entry(zone.index)
             .and_modify(|v| *v += 1)
             .or_insert(1);
-        println!("[ZoneList]: Now {} threads are writing into zone {}", self.writing_zones.get(&zone.index).unwrap(), zone.index);
+        log::debug!(
+            "[ZoneList]: Now {} threads are writing into zone {}",
+            self.writing_zones.get(&zone.index).unwrap(),
+            zone.index
+        );
         Ok(zone.index)
     }
 
@@ -115,9 +123,9 @@ impl ZoneList {
         finish_zone: bool
     ) -> io::Result<()> {
         let write_num = self.writing_zones.get(&zone_index).unwrap();
-        println!("[ZoneList]: Finishing write to {}, writenum = {}", zone_index, write_num);
+        log::debug!("[ZoneList]: Finishing write to {}, writenum = {}", zone_index, write_num);
         if write_num - 1 == 0 {
-            println!("[ZoneList]: Removing {} from writing zones, finish = {:?}", zone_index, finish_zone);
+                log::debug!("[ZoneList]: Removing {} from writing zones, finish = {:?}", zone_index, finish_zone);
             self.writing_zones.remove(&zone_index);
 
             if finish_zone {
@@ -127,13 +135,13 @@ impl ZoneList {
                 if res.is_err() {
                     panic!("{:?}", res);
                 }
-                println!("[ZoneList]: Finishing {}", zone_index);
+                log::debug!("[ZoneList]: Finishing {}", zone_index);
                 res
             } else {
                 Ok(())
             }
         } else {
-            println!("[ZoneList]: Decrementing {}", zone_index);
+            log::debug!("[ZoneList]: Decrementing {}", zone_index);
             self.writing_zones.insert(zone_index, write_num - 1);
             Ok(())
         }
@@ -308,6 +316,13 @@ mod zone_list_tests {
         }
         fn finish_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
             Ok(())
+        }
+
+        fn get_fd(&self) -> i32 {
+            0
+        }
+        fn get_nsid(&self) -> u32 {
+            0
         }
     }
 

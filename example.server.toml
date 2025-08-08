@@ -1,10 +1,13 @@
+log_level = "info"
+
 [server]
 socket = "/tmp/oxcache.sock"
-disk = "/dev/nvme1n1"
+disk = "/dev/nvme3n1"
 writer_threads = 14
 reader_threads = 14
-chunk_size = 8192
+chunk_size = 65536
 block_zone_capacity = 1129316352
+max_write_size = 262144
 
 [remote]
 remote_type = "emulated" # emulated | S3

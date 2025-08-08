@@ -107,7 +107,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         }
 
         let listener = UnixListener::bind(socket_path)?;
-        println!("Listening on socket: {}", self.config.socket);
+        log::info!("Listening on socket: {}", self.config.socket);
 
         let eviction_policy = Arc::new(std::sync::Mutex::new(EvictionPolicyWrapper::new(
             self.config.eviction.eviction_type.as_str(),
@@ -145,7 +145,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 tokio::signal::ctrl_c()
                     .await
                     .expect("Failed to listen for ctrl_c");
-                println!("Ctrl+C received, shutting down...");
+                log::info!("Ctrl+C received, shutting down...");
                 shutdown_signal.notify_waiters();
             }
         });
@@ -157,14 +157,14 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         loop {
             tokio::select! {
                 _ = shutdown.notified() => {
-                    println!("Shutting down accept loop.");
+                    log::debug!("Shutting down accept loop.");
                     break;
                 }
 
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, addr)) => {
-                            println!("Accepted connection: {:?}", addr);
+                            log::debug!("Accepted connection: {:?}", addr);
 
                             tokio::spawn({
                                 let remote = Arc::clone(&self.remote);
@@ -174,12 +174,12 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let chunk_size = self.config.chunk_size;
                                 async move {
                                 if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache, chunk_size).await {
-                                    eprintln!("Connection error: {}", e);
+                                    log::error!("Connection error: {}", e);
                                 }
                             }});
                         },
                         Err(e) => {
-                            eprintln!("Accept failed: {}", e);
+                            log::error!("Accept failed: {}", e);
                         }
                     }
                 }
@@ -360,13 +360,13 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                         ).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("cache.get_or_insert_with failed: {}", e)))?;
                     }
                     request::Request::Close => {
-                        println!("Received close request");
+                        log::debug!("Received close request");
                         break;
                     }
                 }
             }
             Err(e) => {
-                println!("Error receiving data: {:?}", e);
+                log::error!("Error receiving data: {:?}", e);
                 break;
             }
         }

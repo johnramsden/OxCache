@@ -264,15 +264,15 @@ impl Evictor {
             while !shutdown_clone.load(Ordering::Relaxed) {
                 let sender = match evict_rx.recv_timeout(evict_interval) {
                     Ok(s) => {
-                        println!("Received immediate eviction request");
+                        log::debug!("Received immediate eviction request");
                         Some(s.sender)
                     }
                     Err(flume::RecvTimeoutError::Timeout) => {
-                        println!("Timer eviction");
+                        log::debug!("Timer eviction");
                         None
                     }
                     Err(flume::RecvTimeoutError::Disconnected) => {
-                        println!("Disconnected");
+                        log::debug!("Disconnected");
                         break;
                     }
                 };
@@ -284,24 +284,24 @@ impl Evictor {
 
                 let result = match device_clone.evict(targets, cache_clone.clone()) {
                     Err(e) => {
-                        println!("Error evicting: {}", e);
+                        log::error!("Error evicting: {}", e);
                         Err(e.to_string())
                     }
                     Ok(_) => Ok(()),
                 };
 
                 if let Some(sender) = sender {
-                    println!("Sending eviction response to sender: {:?}", result);
+                    log::debug!("Sending eviction response to sender: {:?}", result);
                     sender.send(result.clone()).unwrap();
                 }
 
                 evict_rx.drain().into_iter().for_each(|recv| {
-                    println!("Sending eviction response to drained sender: {:?}", result);
+                    log::debug!("Sending eviction response to drained sender: {:?}", result);
                     recv.sender.send(result.clone()).unwrap();
                 })
             }
 
-            println!("Evictor thread exiting");
+            log::debug!("Evictor thread exiting");
         });
 
         Ok(Self {
@@ -317,15 +317,15 @@ impl Evictor {
             if let Err(e) = handle.join() {
                 // A panic occurred — e is a Box<dyn Any + Send + 'static>
                 if let Some(msg) = e.downcast_ref::<&str>() {
-                    eprintln!("Evictor thread panicked with message: {}", msg);
+                    log::error!("Evictor thread panicked with message: {}", msg);
                 } else if let Some(msg) = e.downcast_ref::<String>() {
-                    eprintln!("Evictor thread panicked with message: {}", msg);
+                    log::error!("Evictor thread panicked with message: {}", msg);
                 } else {
-                    eprintln!("Evictor thread panicked with unknown payload.");
+                    log::error!("Evictor thread panicked with unknown payload.");
                 }
             }
         } else {
-            eprintln!("Evictor thread was already stopped or never started.");
+            log::error!("Evictor thread was already stopped or never started.");
         }
     }
 }

@@ -43,7 +43,7 @@ impl Writer {
     }
 
     fn run(self) {
-        println!("Writer {} started", self.id);
+        log::info!("Writer {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             // println!("Writer {} processing: {:?}", self.id, msg);
             let result = self.device.append(msg.data).inspect(|loc| {
@@ -54,13 +54,13 @@ impl Writer {
             let resp = WriteResponse { location: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
-                eprintln!(
+                log::error!(
                     "Failed to send response from writer: {}",
                     snd.err().unwrap()
                 );
             }
         }
-        println!("Writer {} exiting", self.id);
+        log::info!("Writer {} exiting", self.id);
     }
 }
 
@@ -108,11 +108,11 @@ impl WriterPool {
             if let Err(e) = handle.join() {
                 // A panic occurred — e is a Box<dyn Any + Send + 'static>
                 if let Some(msg) = e.downcast_ref::<&str>() {
-                    eprintln!("Writer thread panicked with message: {}", msg);
+                    log::error!("Writer thread panicked with message: {}", msg);
                 } else if let Some(msg) = e.downcast_ref::<String>() {
-                    eprintln!("Writer thread panicked with message: {}", msg);
+                    log::error!("Writer thread panicked with message: {}", msg);
                 } else {
-                    eprintln!("Writer thread panicked with unknown payload.");
+                    log::error!("Writer thread panicked with unknown payload.");
                 }
             }
         }
