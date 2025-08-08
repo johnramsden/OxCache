@@ -47,7 +47,7 @@ impl Reader {
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);
                 let mut policy = mtx.lock().unwrap();
-                policy.write_update(msg.location);
+                policy.read_update(msg.location);
             }
             let resp = ReadResponse { data: result };
             let snd = msg.responder.send(resp);

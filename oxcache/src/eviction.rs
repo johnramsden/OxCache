@@ -133,7 +133,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     type Target = Vec<Zone>;
 
     fn write_update(&mut self, chunk: ChunkLocation) {
-        // assert!(!self.lru.contains(&chunk.zone)); // TODO: Fails sometimes
+        assert!(!self.lru.contains(&chunk.zone));
 
         // We only want to put it in the LRU once the zone is full
         if chunk.index == self.nr_chunks_per_zone - 1 {
