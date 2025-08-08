@@ -43,7 +43,7 @@ impl Writer {
     }
 
     fn run(self) {
-        log::info!("Writer {} started", self.id);
+        log::debug!("Writer {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             // println!("Writer {} processing: {:?}", self.id, msg);
             let result = self.device.append(msg.data).inspect(|loc| {
