@@ -7,7 +7,7 @@ use bytes::Bytes;
 use flume::Sender;
 use nvme::info::{get_active_zones, get_lba_at, is_zoned_device, nvme_get_info, report_zones_all};
 use nvme::ops::{close_zone, reset_zone, zns_append, finish_zone};
-use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, NVMeError, PerformOn, ZNSConfig, Zone, ZoneState};
+use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Zone, ZoneState};
 use std::io::{self, ErrorKind};
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};

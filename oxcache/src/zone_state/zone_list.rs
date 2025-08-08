@@ -253,7 +253,7 @@ impl ZoneList {
 
 #[cfg(test)]
 mod zone_list_tests {
-    use std::io;
+    
     use std::sync::Arc;
 
     use bytes::Bytes;
