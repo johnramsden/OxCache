@@ -111,8 +111,7 @@ impl EmulatedBackend {
 
         // Check size
         assert_eq!(
-            current_len,
-            capacity,
+            current_len, capacity,
             "Buffer should be exactly capacity-sized"
         );
 
@@ -219,8 +218,7 @@ mod test {
         rng.fill_bytes(&mut expected_random);
 
         assert_eq!(
-            &buffer[prefix_len..
-                size as usize],
+            &buffer[prefix_len..size as usize],
             &expected_random[..],
             "Random portion of buffer does not match expected"
         );

@@ -37,7 +37,10 @@ impl Cache {
         Self {
             bm: RwLock::new(BucketMap {
                 buckets: HashMap::new(),
-                zone_to_entry: ArrayBase::from_elem((num_zones as usize, chunks_per_zone as usize), None),
+                zone_to_entry: ArrayBase::from_elem(
+                    (num_zones as usize, chunks_per_zone as usize),
+                    None,
+                ),
             }),
         }
     }

@@ -78,12 +78,12 @@ pub struct ZNSConfig {
     // These are per-controller
     pub zasl: Byte, // The zone append size limit. Max append size is zasl bytes.
     pub zone_descriptor_extension_size: u64, // The size of the data that can be associated with a zone, in bytes
-    pub zone_size: LogicalBlock,                      // This is in number of logical blocks
-    pub zone_cap: LogicalBlock,                       // This is in number of logical blocks
+    pub zone_size: LogicalBlock,             // This is in number of logical blocks
+    pub zone_cap: LogicalBlock,              // This is in number of logical blocks
 
     pub chunks_per_zone: Chunk, // Number of chunks that can be allocated in a zone
-    pub chunk_size_in_lbas: LogicalBlock,    // This is in logical blocks
-    pub chunk_size_in_bytes: Byte,    // This is in logical blocks
+    pub chunk_size_in_lbas: LogicalBlock, // This is in logical blocks
+    pub chunk_size_in_bytes: Byte, // This is in logical blocks
 
     pub num_zones: Zone,
 }
@@ -183,9 +183,9 @@ impl NVMeError {
                 NVMeError::ExtraContext {
                     context: _,
                     context_index,
-                    original_error: _
+                    original_error: _,
                 } => context_index + 1,
-                _ => 0
+                _ => 0,
             },
             original_error: Box::new(self.clone()),
         };
@@ -220,7 +220,10 @@ impl fmt::Display for NVMeError {
                     context,
                     context_index,
                     original_error,
-                } => format!("{}\nContext backtrace #{}: {}", *original_error, context_index, context),
+                } => format!(
+                    "{}\nContext backtrace #{}: {}",
+                    *original_error, context_index, context
+                ),
             }
         )
     }

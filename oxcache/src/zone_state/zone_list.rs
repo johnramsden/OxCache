@@ -49,7 +49,6 @@ impl ZoneList {
         }
     }
 
-
     // Get a zone to write to
     pub fn remove(&mut self) -> Result<ZoneIndex, ZoneObtainFailure> {
         if self.is_full() {
@@ -120,18 +119,31 @@ impl ZoneList {
         &mut self,
         zone_index: ZoneIndex,
         device: &dyn device::Device,
-        finish_zone: bool
+        finish_zone: bool,
     ) -> io::Result<()> {
         let write_num = self.writing_zones.get(&zone_index).unwrap();
-        log::debug!("[ZoneList]: Finishing write to {}, writenum = {}", zone_index, write_num);
+        log::debug!(
+            "[ZoneList]: Finishing write to {}, writenum = {}",
+            zone_index,
+            write_num
+        );
         if write_num - 1 == 0 {
-                log::debug!("[ZoneList]: Removing {} from writing zones, finish = {:?}", zone_index, finish_zone);
+            log::debug!(
+                "[ZoneList]: Removing {} from writing zones, finish = {:?}",
+                zone_index,
+                finish_zone
+            );
             self.writing_zones.remove(&zone_index);
 
             if finish_zone {
                 let res = device.finish_zone(zone_index);
                 let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
-                assert!(zones[zone_index as usize].zone_state == ZoneState::Closed || zones[zone_index as usize].zone_state == ZoneState::Full, "{:?} got instead", zones[zone_index as usize].zone_state);
+                assert!(
+                    zones[zone_index as usize].zone_state == ZoneState::Closed
+                        || zones[zone_index as usize].zone_state == ZoneState::Full,
+                    "{:?} got instead",
+                    zones[zone_index as usize].zone_state
+                );
                 if res.is_err() {
                     panic!("{:?}", res);
                 }
@@ -253,17 +265,17 @@ impl ZoneList {
 
 #[cfg(test)]
 mod zone_list_tests {
-    
+
     use std::sync::Arc;
 
-    use bytes::Bytes;
-    use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
     use crate::{
         cache::{Cache, bucket::ChunkLocation},
         device::Device,
         eviction::EvictTarget,
         zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait},
     };
+    use bytes::Bytes;
+    use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
 
     use super::ZoneList;
 
@@ -275,7 +287,11 @@ mod zone_list_tests {
         }
 
         fn read_into_buffer(
-            &self, max_write_size: Byte, lba_loc: LogicalBlock, read_buffer: &mut [u8], nvme_config: &NVMeConfig
+            &self,
+            max_write_size: Byte,
+            lba_loc: LogicalBlock,
+            read_buffer: &mut [u8],
+            nvme_config: &NVMeConfig,
         ) -> std::io::Result<()> {
             Ok(())
         }

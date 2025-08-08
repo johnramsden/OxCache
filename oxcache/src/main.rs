@@ -1,4 +1,5 @@
 use clap::Parser;
+use log::LevelFilter;
 use nvme::types::Byte;
 use oxcache;
 use oxcache::remote;
@@ -6,7 +7,6 @@ use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, Serve
 use serde::Deserialize;
 use std::fs;
 use std::process::exit;
-use log::LevelFilter;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -29,7 +29,7 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub chunk_size: Option<Byte>,
-    
+
     #[arg(long)]
     pub max_write_size: Option<Byte>,
 
@@ -230,7 +230,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         },
         chunk_size,
         block_zone_capacity,
-        max_write_size
+        max_write_size,
     })
 }
 

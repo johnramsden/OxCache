@@ -1,6 +1,6 @@
-use std::io::ErrorKind;
 use clap::Parser;
 use nvme::types::PerformOn;
+use std::io::ErrorKind;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -19,15 +19,13 @@ fn main() -> std::io::Result<()> {
     };
 
     let zc = match nvme::info::zns_get_info(&nvme_config) {
-        Ok(config) => {
-            config
-        }
+        Ok(config) => config,
         Err(err) => return Err(std::io::Error::new(ErrorKind::Other, err)),
     };
-    
-    let stop = 1024*1024*1024;
-    
-    let mut start = 64*1024;
+
+    let stop = 1024 * 1024 * 1024;
+
+    let mut start = 64 * 1024;
 
     loop {
         nvme::ops::reset_zone(&nvme_config, &zc, PerformOn::AllZones).unwrap();

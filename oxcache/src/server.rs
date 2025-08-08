@@ -3,8 +3,8 @@ use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
-use std::error::Error;
 use nvme::types::Byte;
+use std::error::Error;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 

@@ -1,6 +1,6 @@
 use crate::request::GetRequest;
-use std::sync::Arc;
 use nvme::types::{Byte, Zone};
+use std::sync::Arc;
 use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]

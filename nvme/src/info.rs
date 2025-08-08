@@ -10,7 +10,10 @@ use libnvme_sys::bindings::*;
 
 use crate::{
     ops::open_device,
-    types::{Byte, Chunk, LogicalBlock, NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor, Zone, ZoneState},
+    types::{
+        Byte, Chunk, LogicalBlock, NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor, Zone,
+        ZoneState,
+    },
     util::{check_error, shift_and_mask},
 };
 
@@ -319,12 +322,14 @@ pub fn get_active_zones(fd: RawFd, nsid: u32) -> Result<usize, NVMeError> {
         Ok((_nz, zd)) => {
             let mut cnt = 0;
             for z in zd {
-                if z.zone_state == ZoneState::ExplicitlyOpened || z.zone_state == ZoneState::ImplicitlyOpened {
-                    cnt+=1;
+                if z.zone_state == ZoneState::ExplicitlyOpened
+                    || z.zone_state == ZoneState::ImplicitlyOpened
+                {
+                    cnt += 1;
                 }
             }
             Ok(cnt)
-        },
+        }
         Err(err) => Err(err),
     }
 }
@@ -336,10 +341,21 @@ pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
 }
 
 /// Zone size is in logical blocks
-pub fn get_lba_at(zone_index: Zone, chunk_index: Chunk, zone_size: LogicalBlock, chunk_size: LogicalBlock) -> LogicalBlock {
+pub fn get_lba_at(
+    zone_index: Zone,
+    chunk_index: Chunk,
+    zone_size: LogicalBlock,
+    chunk_size: LogicalBlock,
+) -> LogicalBlock {
     zone_size * zone_index + chunk_index * chunk_size
 }
 
-pub fn get_address_at(zone_index: Zone, chunk_index: Chunk, zone_size: LogicalBlock, chunk_size: LogicalBlock, lba_size: Byte) -> Byte {
+pub fn get_address_at(
+    zone_index: Zone,
+    chunk_index: Chunk,
+    zone_size: LogicalBlock,
+    chunk_size: LogicalBlock,
+    lba_size: Byte,
+) -> Byte {
     (zone_size * zone_index + chunk_index * chunk_size) * lba_size
 }

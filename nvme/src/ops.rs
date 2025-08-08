@@ -127,9 +127,7 @@ pub fn zns_append(
     };
 
     match check_error(unsafe { nvme_zns_append(&mut args) }) {
-        Some(err) => Err(
-            err.add_context(format!("Append args: {:?}", args))
-        ),
+        Some(err) => Err(err.add_context(format!("Append args: {:?}", args))),
         None => Ok(result),
     }
 }
