@@ -2373,6 +2373,7 @@ dependencies = [
  "libnvme-sys",
  "log",
  "lru 0.16.0",
+ "metrics",
  "metrics-exporter-prometheus",
  "ndarray",
  "nvme",
