@@ -1,0 +1,8 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: oxcache-prometheus
+    network_mode: host
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped

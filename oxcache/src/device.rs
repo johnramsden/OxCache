@@ -11,6 +11,7 @@ use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Z
 use std::io::{self, ErrorKind};
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use crate::metrics::{MetricType, METRICS};
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -424,6 +425,8 @@ impl Device for Zoned {
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
         log::debug!("Appending");
 
+        let sz = data.len() as u64;
+
         let zone_index: Zone = loop {
             match self.get_free_zone() {
                 Ok(res) => break res,
@@ -440,15 +443,22 @@ impl Device for Zoned {
             0
         );
 
-        self.chunked_append(data, zone_index)
+        let start = std::time::Instant::now();
+        let res = self.chunked_append(data, zone_index);
+        METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_counter("written_bytes_total", sz);
+        res
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
         let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
         let slba = self.config.get_address_at(location.zone, location.index);
         log::debug!("Read slba = {} for {:?}", slba, location);
-        self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
 
+        let start = std::time::Instant::now();
+        self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
+        METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 
@@ -701,6 +711,7 @@ impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
         log::debug!("Appending");
+        let sz = data.len() as u64;
         let mtx = self.state.clone();
 
         let chunk_location = loop {
@@ -724,8 +735,10 @@ impl Device for BlockInterface {
 
         // println!("[append] writing chunk to {} bytes at addr {}", chunk_location.zone, write_addr);
 
+        let start = std::time::Instant::now();
         self.chunked_append(data, write_addr)?;
-
+        METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_counter("written_bytes_total", sz);
         Ok(chunk_location)
     }
 
@@ -734,12 +747,15 @@ impl Device for BlockInterface {
 
         let write_addr = self.get_lba_at(&location);
 
+        let start = std::time::Instant::now();
         self.read_into_buffer(
             self.max_write_size,
             write_addr,
             &mut data,
             &self.nvme_config,
         )?;
+        METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 

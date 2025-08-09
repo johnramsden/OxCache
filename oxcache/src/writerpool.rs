@@ -7,6 +7,7 @@ use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use crate::metrics::{MetricType, METRICS};
 
 #[derive(Debug)]
 pub struct WriteResponse {
@@ -46,11 +47,16 @@ impl Writer {
         log::debug!("Writer {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             // println!("Writer {} processing: {:?}", self.id, msg);
+
+            let start = std::time::Instant::now();
+
             let result = self.device.append(msg.data).inspect(|loc| {
                 let mtx = Arc::clone(&self.eviction);
                 let mut policy = mtx.lock().unwrap();
                 policy.write_update(loc.clone());
             });
+            METRICS.update_metric_histogram_latency("device_write_latency_ms", start.elapsed(), MetricType::MsLatency);
+            
             let resp = WriteResponse { location: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
