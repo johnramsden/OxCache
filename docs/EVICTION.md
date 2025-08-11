@@ -6,7 +6,18 @@ Maintain LRU of chunks, this determines when to invalidate.
 
 ### Block Storage
 
-Invalidations will:
+Invalidation/Eviction will:
 
-* Update map
-* Add chunk back to Zone chunk vector (modify impl to have Zone store ordered Vec of chunks)
+* Remove from map
+* Add chunk back to ZoneList Zone `chunks_available: Vec<Chunk>`
+
+### Zoned
+
+Invalidation will:
+
+* Remove from map
+* Mark chunk None in cache `zone_to_entry` reverse map
+* Keep an invalid queue (priority-queue), with each zone index and its invalid count
+
+Eviction will:
+
