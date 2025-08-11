@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .clone();
 
             queries.push(GetRequest {
-                key: uuid.to_string(),
+                key: Uuid::new_v4().to_string(),
                 size: args.query_size,
                 offset: 0,
             });

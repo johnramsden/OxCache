@@ -9,10 +9,10 @@ use std::io::{self};
 
 type ZoneIndex = nvme::types::Zone;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Zone {
     pub index: ZoneIndex,
-    pub chunks_available: Chunk,
+    pub chunks_available: Vec<Chunk>,
 }
 
 #[derive(Debug)]
@@ -36,7 +36,7 @@ impl ZoneList {
         let avail_zones = (0..num_zones)
             .map(|index| Zone {
                 index,
-                chunks_available: chunks_per_zone,
+                chunks_available: (0..chunks_per_zone).rev().collect(),
             })
             .collect();
 
@@ -82,20 +82,22 @@ impl ZoneList {
         } else {
             let res = self.open_zones.pop_front();
             log::debug!(
-                "[ZoneList]: Using existing zone {} with {} chunks",
+                "[ZoneList]: Using existing zone {} with {:?} chunks",
                 res.as_ref().unwrap().index,
                 res.as_ref().unwrap().chunks_available
             );
             res
         };
         let mut zone = zone.unwrap();
+        
+        let zone_index = zone.index;
 
-        if zone.chunks_available <= 0 {
+        if zone.chunks_available.len() <= 0 {
             panic!("[ZoneList]: Checked subtraction failed: {:?}", self);
         }
 
-        zone.chunks_available -= 1;
-        if zone.chunks_available >= 1 {
+        zone.chunks_available.pop();
+        if zone.chunks_available.len() >= 1 {
             log::debug!("[ZoneList]: Returning zone back to use: {}", zone.index);
             self.open_zones.push_back(zone);
         } else {
@@ -103,15 +105,15 @@ impl ZoneList {
         }
 
         self.writing_zones
-            .entry(zone.index)
+            .entry(zone_index)
             .and_modify(|v| *v += 1)
             .or_insert(1);
         log::debug!(
             "[ZoneList]: Now {} threads are writing into zone {}",
-            self.writing_zones.get(&zone.index).unwrap(),
-            zone.index
+            self.writing_zones.get(&zone_index).unwrap(),
+            zone_index
         );
-        Ok(zone.index)
+        Ok(zone_index)
     }
 
     // Zoned implementations should call this once they are finished with appending.
@@ -177,15 +179,15 @@ impl ZoneList {
             self.open_zones.pop_front()
         };
         let mut zone = zone.unwrap();
-        zone.chunks_available -= 1;
-        if zone.chunks_available >= 1 {
+        let zone_index = zone.index;
+        let chunk = zone.chunks_available.pop().unwrap();
+        if zone.chunks_available.len() >= 1 {
             self.open_zones.push_back(zone);
         }
 
         Ok(ChunkLocation {
-            zone: zone.index,
-            // + 1 since we subtracted by 1 earlier
-            index: (self.chunks_per_zone - (zone.chunks_available + 1)) as u64,
+            zone: zone_index,
+            index: chunk,
         })
     }
 
@@ -230,7 +232,7 @@ impl ZoneList {
 
         self.free_zones.push_back(Zone {
             index: idx,
-            chunks_available: self.chunks_per_zone,
+            chunks_available: (0..self.chunks_per_zone).rev().collect(),
         });
 
         device.reset_zone(idx)
@@ -248,17 +250,10 @@ impl ZoneList {
         Ok(())
     }
 
-    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: Chunk) {
-        self.free_zones.push_back(Zone {
-            index: idx,
-            chunks_available: remaining,
-        });
-    }
-
     pub fn get_num_available_chunks(&self) -> Chunk {
         self.open_zones
             .iter()
-            .fold(0, |avail, zone| avail + zone.chunks_available)
+            .fold(0, |avail, zone| avail + zone.chunks_available.len() as Chunk)
             + (self.free_zones.len() as ZoneIndex * self.chunks_per_zone)
     }
 }
