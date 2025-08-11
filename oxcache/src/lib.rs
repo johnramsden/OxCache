@@ -9,3 +9,4 @@ pub mod server;
 pub mod util;
 pub mod writerpool;
 pub mod zone_state;
+mod metrics;

@@ -1,5 +1,6 @@
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
 use ndarray::{Array2, ArrayBase, s};
+use nvme::types::{self, Zone};
 use std::io::ErrorKind;
 use std::iter::zip;
 use std::sync::Arc;
@@ -32,11 +33,14 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new(num_zones: usize, chunks_per_zone: usize) -> Self {
+    pub fn new(num_zones: Zone, chunks_per_zone: types::Chunk) -> Self {
         Self {
             bm: RwLock::new(BucketMap {
                 buckets: HashMap::new(),
-                zone_to_entry: ArrayBase::from_elem((num_zones, chunks_per_zone), None),
+                zone_to_entry: ArrayBase::from_elem(
+                    (num_zones as usize, chunks_per_zone as usize),
+                    None,
+                ),
             }),
         }
     }
@@ -162,13 +166,13 @@ impl Cache {
     ///
     /// Internal use: won't remove them from the map if they don't
     /// exist in the reverse mapping
-    pub async fn remove_zones(&self, zone_indices: &[usize]) -> tokio::io::Result<()> {
+    pub async fn remove_zones(&self, zone_indices: &[Zone]) -> tokio::io::Result<()> {
         let mut map_guard = self.bm.write().await;
 
         // Loop over zones
         for zone_index in zone_indices {
             // Get slice representing a zone
-            let zone_slice = s![*zone_index, ..];
+            let zone_slice = s![*zone_index as usize, ..];
             // loop over zone chunks
             let zone_view = map_guard.zone_to_entry.slice(zone_slice);
 
@@ -208,7 +212,7 @@ impl Cache {
     /// should return a list of new locations on disk
     pub async fn remove_zones_and_update_entries<W>(
         &self,
-        zones_to_reset: &[usize],
+        zones_to_reset: &[Zone],
         to_relocate: &[ChunkLocation],
         writer: W,
     ) -> tokio::io::Result<()>

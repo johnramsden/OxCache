@@ -25,7 +25,10 @@ pub struct CliArgs {
     pub reader_threads: Option<usize>,
 
     #[arg(long)]
-    pub chunk_size: Option<usize>,
+    pub chunk_size: Option<Byte>,
+
+    #[arg(long)]
+    pub max_write_size: Option<Byte>,
 
     #[arg(long)]
     pub remote_type: Option<String>,
@@ -37,19 +40,29 @@ pub struct CliArgs {
     pub eviction_policy: Option<String>,
 
     #[arg(long)]
-    pub high_water_evict: Option<usize>,
+    pub high_water_evict: Option<u64>,
 
     #[arg(long)]
-    pub low_water_evict: Option<usize>,
+    pub low_water_evict: Option<u64>,
 
     #[arg(long)]
-    pub block_zone_capacity: Option<usize>,
+    pub block_zone_capacity: Option<Byte>,
 
     #[arg(long)]
     pub eviction_interval: Option<usize>,
 
     #[arg(long)]
     pub remote_artificial_delay_microsec: Option<usize>,
+
+    #[arg(long)]
+    pub metrics_ip_addr: Option<String>,
+
+    #[arg(long)]
+    pub metrics_port: Option<u16>,
+
+    /// Logging level: error, warn, info, debug, trace. Overrides config if set.
+    #[arg(long)]
+    pub log_level: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,8 +71,9 @@ pub struct ParsedServerConfig {
     pub disk: Option<String>,
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
-    pub chunk_size: Option<usize>,
-    pub block_zone_capacity: Option<usize>,
+    pub chunk_size: Option<Byte>,
+    pub max_write_size: Option<Byte>,
+    pub block_zone_capacity: Option<Byte>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,9 +86,15 @@ pub struct ParsedRemoteConfig {
 #[derive(Debug, Deserialize)]
 pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
-    pub high_water_evict: Option<usize>,
-    pub low_water_evict: Option<usize>,
+    pub high_water_evict: Option<u64>,
+    pub low_water_evict: Option<u64>,
     pub eviction_interval: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ParsedMetricsConfig {
+    pub ip_addr: Option<String>,
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,9 +102,11 @@ pub struct AppConfig {
     pub server: ParsedServerConfig,
     pub remote: ParsedRemoteConfig,
     pub eviction: ParsedEvictionConfig,
+    pub metrics: ParsedMetricsConfig,
+    pub log_level: Option<String>,
 }
 
-pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let config = if let Some(path) = &cli.config {
         let config_str = fs::read_to_string(path)?;
         Some(toml::from_str::<AppConfig>(&config_str)?)
@@ -152,8 +174,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
     }
 
     if remote_type != "emulated" && remote_artificial_delay_microsec.is_some() {
-        eprintln!(
-            "WARNING: remote_artificial_delay_microsec has no effect if remote_type is not `emulated`"
+        // Warn if artificial delay is set for non-emulated remote types
+        log::warn!(
+            "remote_artificial_delay_microsec has no effect if remote_type is not `emulated`"
         );
     }
 
@@ -187,11 +210,42 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .chunk_size
         .or_else(|| config.as_ref()?.server.chunk_size);
     let chunk_size = chunk_size.ok_or("Missing chunk size")?;
+    let max_write_size = cli
+        .max_write_size
+        .or_else(|| config.as_ref()?.server.max_write_size);
+    let max_write_size = max_write_size.ok_or("Missing max write size")?;
 
     let block_zone_capacity = cli
         .block_zone_capacity
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
+    
+    // Metrics
+
+    let metrics_port = cli
+        .metrics_port
+        .clone()
+        .or_else(|| config.as_ref()?.metrics.port.clone());
+    let metrics_ip = cli
+        .metrics_ip_addr
+        .clone()
+        .or_else(|| config.as_ref()?.metrics.ip_addr.clone());
+    
+    if metrics_port.is_none() && metrics_ip.is_some() || metrics_port.is_some() && metrics_ip.is_none() {
+        return Err("Missing metrics ip or port, both must be set or neither".into());
+    }
+    
+    let metrics_exporter_addr = if metrics_port.is_some() {
+        let ip = match metrics_ip.unwrap().parse::<IpAddr>() {
+            Ok(ip) => ip,
+            Err(e) => {
+                return Err(format!("Invalid metrics ip address {:?}", e).into());
+            }       
+        };
+        Some(SocketAddr::new(ip, metrics_port.unwrap()))
+    } else {
+        None
+    };
 
     // TODO: Add secrets from env vars
 
@@ -213,5 +267,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         },
         chunk_size,
         block_zone_capacity,
+        max_write_size,
+        metrics: ServerMetricsConfig {
+            metrics_exporter_addr 
+        }
     })
 }

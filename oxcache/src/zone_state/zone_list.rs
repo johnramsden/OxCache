@@ -1,15 +1,18 @@
+use nvme::info::report_zones_all;
+use nvme::types::{Chunk, ZoneState};
+
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self};
 
-type ZoneIndex = usize;
+type ZoneIndex = nvme::types::Zone;
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Zone {
     pub index: ZoneIndex,
-    pub chunks_available: usize,
+    pub chunks_available: Chunk,
 }
 
 #[derive(Debug)]
@@ -18,16 +21,17 @@ pub enum ZoneObtainFailure {
     Wait,
 }
 
+#[derive(Debug)]
 pub struct ZoneList {
-    free_zones: VecDeque<Zone>, // Unopened zones with full capacity
-    open_zones: VecDeque<Zone>, // Opened zones
-    writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
-    chunks_per_zone: usize,
-    max_active_resources: usize,
+    pub free_zones: VecDeque<Zone>, // Unopened zones with full capacity
+    pub open_zones: VecDeque<Zone>, // Opened zones
+    pub writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
+    pub chunks_per_zone: Chunk,
+    pub max_active_resources: usize,
 }
 
 impl ZoneList {
-    pub fn new(num_zones: usize, chunks_per_zone: usize, max_active_resources: usize) -> Self {
+    pub fn new(num_zones: ZoneIndex, chunks_per_zone: Chunk, max_active_resources: usize) -> Self {
         // List of all zones, initially all are "free"
         let avail_zones = (0..num_zones)
             .map(|index| Zone {
@@ -72,21 +76,41 @@ impl ZoneList {
         }
 
         let zone = if can_open_more_zones {
-            self.free_zones.pop_front()
+            let res = self.free_zones.pop_front();
+            log::debug!("[ZoneList]: Opening zone {}", res.as_ref().unwrap().index);
+            res
         } else {
-            self.open_zones.pop_front()
+            let res = self.open_zones.pop_front();
+            log::debug!(
+                "[ZoneList]: Using existing zone {} with {} chunks",
+                res.as_ref().unwrap().index,
+                res.as_ref().unwrap().chunks_available
+            );
+            res
         };
         let mut zone = zone.unwrap();
+
+        if zone.chunks_available <= 0 {
+            panic!("[ZoneList]: Checked subtraction failed: {:?}", self);
+        }
+
         zone.chunks_available -= 1;
         if zone.chunks_available >= 1 {
+            log::debug!("[ZoneList]: Returning zone back to use: {}", zone.index);
             self.open_zones.push_back(zone);
+        } else {
+            log::debug!("[ZoneList]: Not returning zone back to use: {}", zone.index);
         }
 
         self.writing_zones
             .entry(zone.index)
             .and_modify(|v| *v += 1)
             .or_insert(1);
-
+        log::debug!(
+            "[ZoneList]: Now {} threads are writing into zone {}",
+            self.writing_zones.get(&zone.index).unwrap(),
+            zone.index
+        );
         Ok(zone.index)
     }
 
@@ -95,12 +119,41 @@ impl ZoneList {
         &mut self,
         zone_index: ZoneIndex,
         device: &dyn device::Device,
+        finish_zone: bool,
     ) -> io::Result<()> {
         let write_num = self.writing_zones.get(&zone_index).unwrap();
+        log::debug!(
+            "[ZoneList]: Finishing write to {}, writenum = {}",
+            zone_index,
+            write_num
+        );
         if write_num - 1 == 0 {
+            log::debug!(
+                "[ZoneList]: Removing {} from writing zones, finish = {:?}",
+                zone_index,
+                finish_zone
+            );
             self.writing_zones.remove(&zone_index);
-            device.close_zone(zone_index)
+
+            if finish_zone {
+                let res = device.finish_zone(zone_index);
+                let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
+                assert!(
+                    zones[zone_index as usize].zone_state == ZoneState::Closed
+                        || zones[zone_index as usize].zone_state == ZoneState::Full,
+                    "{:?} got instead",
+                    zones[zone_index as usize].zone_state
+                );
+                if res.is_err() {
+                    panic!("{:?}", res);
+                }
+                log::debug!("[ZoneList]: Finishing {}", zone_index);
+                res
+            } else {
+                Ok(())
+            }
         } else {
+            log::debug!("[ZoneList]: Decrementing {}", zone_index);
             self.writing_zones.insert(zone_index, write_num - 1);
             Ok(())
         }
@@ -145,6 +198,9 @@ impl ZoneList {
     // zones listed in open_zones and writing_zones
     pub fn get_open_zones(&self) -> usize {
         // TODO: This is slow, O(n)
+
+        // I don't think it's super slow because there will be at most
+        // 2 * max_active_resources zones.
         let open_zone_list = self
             .open_zones
             .iter()
@@ -192,26 +248,25 @@ impl ZoneList {
         Ok(())
     }
 
-    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: usize) {
+    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: Chunk) {
         self.free_zones.push_back(Zone {
             index: idx,
             chunks_available: remaining,
         });
     }
 
-    pub fn get_num_available_chunks(&self) -> usize {
+    pub fn get_num_available_chunks(&self) -> Chunk {
         self.open_zones
             .iter()
             .fold(0, |avail, zone| avail + zone.chunks_available)
-            + self.free_zones.len() * self.chunks_per_zone
+            + (self.free_zones.len() as ZoneIndex * self.chunks_per_zone)
     }
 }
 
 #[cfg(test)]
 mod zone_list_tests {
-    use std::sync::Arc;
 
-    use bytes::Bytes;
+    use std::sync::Arc;
 
     use crate::{
         cache::{Cache, bucket::ChunkLocation},
@@ -219,6 +274,8 @@ mod zone_list_tests {
         eviction::EvictTarget,
         zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait},
     };
+    use bytes::Bytes;
+    use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
 
     use super::ZoneList;
 
@@ -231,8 +288,10 @@ mod zone_list_tests {
 
         fn read_into_buffer(
             &self,
-            _location: ChunkLocation,
-            _read_buffer: &mut [u8],
+            max_write_size: Byte,
+            lba_loc: LogicalBlock,
+            read_buffer: &mut [u8],
+            nvme_config: &NVMeConfig,
         ) -> std::io::Result<()> {
             Ok(())
         }
@@ -246,14 +305,14 @@ mod zone_list_tests {
             Ok(Bytes::new())
         }
 
-        fn get_num_zones(&self) -> usize {
+        fn get_num_zones(&self) -> Zone {
             0
         }
 
-        fn get_chunks_per_zone(&self) -> usize {
+        fn get_chunks_per_zone(&self) -> nvme::types::Chunk {
             0
         }
-        fn get_block_size(&self) -> usize {
+        fn get_block_size(&self) -> Byte {
             0
         }
         fn get_use_percentage(&self) -> f32 {
@@ -264,12 +323,22 @@ mod zone_list_tests {
             Ok(())
         }
 
-        fn reset_zone(&self, _zone_id: usize) -> std::io::Result<()> {
+        fn reset_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
             Ok(())
         }
 
-        fn close_zone(&self, _zone_id: usize) -> std::io::Result<()> {
+        fn close_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
             Ok(())
+        }
+        fn finish_zone(&self, _zone_id: Zone) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn get_fd(&self) -> i32 {
+            0
+        }
+        fn get_nsid(&self) -> u32 {
+            0
         }
     }
 
@@ -333,8 +402,8 @@ mod zone_list_tests {
 
         assert!(zonelist.is_full());
 
-        zonelist.write_finish(0, &md).unwrap();
-        zonelist.write_finish(0, &md).unwrap();
+        zonelist.write_finish(0, &md, false);
+        zonelist.write_finish(0, &md, false);
         assert!(zonelist.get_open_zones() == 1);
 
         zonelist.reset_zone(0, &md).unwrap();
@@ -343,8 +412,8 @@ mod zone_list_tests {
         assert!(zone == 0);
         assert!(zonelist.get_open_zones() == 2);
 
-        zonelist.write_finish(1, &md).unwrap();
-        zonelist.write_finish(1, &md).unwrap();
+        zonelist.write_finish(1, &md, false);
+        zonelist.write_finish(1, &md, false);
         assert!(zonelist.get_open_zones() == 1);
 
         let zone = zonelist.remove().unwrap();
@@ -372,9 +441,9 @@ mod zone_list_tests {
         );
 
         assert_state!(zonelist, Wait);
-        zonelist.write_finish(0, &md).unwrap();
+        zonelist.write_finish(0, &md, false);
         assert_state!(zonelist, Wait);
-        zonelist.write_finish(0, &md).unwrap();
+        zonelist.write_finish(0, &md, false);
 
         let zone = zonelist.remove().unwrap();
         assert!(zone == 1);

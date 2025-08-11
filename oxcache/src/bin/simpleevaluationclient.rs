@@ -2,6 +2,7 @@ use bincode::error::DecodeError;
 use bytes::Bytes;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
+use nvme::types::Byte;
 use oxcache::request;
 use oxcache::request::{GetRequest, Request};
 use rand::prelude::IndexedRandom;
@@ -27,7 +28,7 @@ struct Cli {
     num_clients: usize,
 
     #[arg(long)]
-    query_size: usize,
+    query_size: Byte,
 }
 
 const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB

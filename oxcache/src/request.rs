@@ -1,11 +1,12 @@
 use bytes::Bytes;
+use nvme::types::Byte;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetRequest {
     pub key: String,
-    pub offset: usize,
-    pub size: usize,
+    pub offset: Byte,
+    pub size: Byte,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,7 +22,7 @@ pub enum Request {
 }
 
 impl GetRequest {
-    pub fn validate(&self, chunk_size: usize) -> tokio::io::Result<()> {
+    pub fn validate(&self, chunk_size: Byte) -> tokio::io::Result<()> {
         if self.offset % chunk_size != 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

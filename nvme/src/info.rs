@@ -10,7 +10,10 @@ use libnvme_sys::bindings::*;
 
 use crate::{
     ops::open_device,
-    types::{NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor},
+    types::{
+        Byte, Chunk, LogicalBlock, NVMeConfig, NVMeError, ZNSConfig, ZNSZoneDescriptor, Zone,
+        ZoneState,
+    },
     util::{check_error, shift_and_mask},
 };
 
@@ -181,7 +184,7 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
     let zasl = if zns_ctrl_data.zasl == 0 {
         0
     } else {
-        (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as u32
+        (1 << zns_ctrl_data.zasl) * nvme_config.logical_block_size as Byte
     };
 
     // Number of zones
@@ -205,12 +208,13 @@ pub fn zns_get_info(nvme_config: &NVMeConfig) -> Result<ZNSConfig, NVMeError> {
         zone_cap: zone_cap,
         zone_size: zone_size,
         chunks_per_zone: 0,
-        chunk_size: 0,
+        chunk_size_in_bytes: 0,
+        chunk_size_in_lbas: 0,
     })
 }
 
 /// Returns the number of zones for the given NVMe device and namespace.
-pub fn get_num_zones(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
+pub fn get_num_zones(fd: RawFd, nsid: u32) -> Result<Zone, NVMeError> {
     match report_zones(fd, nsid, 0, 0, 0) {
         Ok((nz, _)) => Ok(nz),
         Err(err) => Err(err),
@@ -218,7 +222,15 @@ pub fn get_num_zones(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
 }
 
 /// Returns the zone capacity for the given NVMe device and namespace.
-pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
+pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<LogicalBlock, NVMeError> {
+    match report_zones(fd, nsid, 0, 1, 0) {
+        Ok((_, inf)) => Ok(inf[0].zone_capacity),
+        Err(err) => Err(err),
+    }
+}
+
+/// Returns the zone capacity for the given NVMe device and namespace.
+pub fn get_zone_state(fd: RawFd, nsid: u32) -> Result<LogicalBlock, NVMeError> {
     match report_zones(fd, nsid, 0, 1, 0) {
         Ok((_, inf)) => Ok(inf[0].zone_capacity),
         Err(err) => Err(err),
@@ -227,7 +239,7 @@ pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<u64, NVMeError> {
 
 /// Returns a report of all zones for the given NVMe device and namespace.
 /// The result includes the number of zones and a vector of zone descriptors.
-pub fn report_zones_all(fd: RawFd, nsid: u32) -> Result<(u64, Vec<ZNSZoneDescriptor>), NVMeError> {
+pub fn report_zones_all(fd: RawFd, nsid: u32) -> Result<(Zone, Vec<ZNSZoneDescriptor>), NVMeError> {
     match get_num_zones(fd, nsid) {
         Ok(nz) => report_zones(fd, nsid, 0, nz, 0),
         Err(err) => Err(err),
@@ -239,10 +251,10 @@ pub fn report_zones_all(fd: RawFd, nsid: u32) -> Result<(u64, Vec<ZNSZoneDescrip
 pub fn report_zones(
     fd: RawFd,
     nsid: u32,
-    starting_address: u64,
-    report_count: u64, // 0 to just report the number of zones
+    starting_address: LogicalBlock,
+    report_count: Zone, // 0 to just report the number of zones
     timeout: u32,
-) -> Result<(u64, Vec<ZNSZoneDescriptor>), NVMeError> {
+) -> Result<(Zone, Vec<ZNSZoneDescriptor>), NVMeError> {
     // dword0, has nothing useful
     let mut result: u32 = 0;
 
@@ -304,6 +316,24 @@ pub fn report_zones(
     Ok((nzones, zone_descriptors))
 }
 
+/// Returns the number of zones for the given NVMe device and namespace.
+pub fn get_active_zones(fd: RawFd, nsid: u32) -> Result<usize, NVMeError> {
+    match report_zones(fd, nsid, 0, 256, 0) {
+        Ok((_nz, zd)) => {
+            let mut cnt = 0;
+            for z in zd {
+                if z.zone_state == ZoneState::ExplicitlyOpened
+                    || z.zone_state == ZoneState::ImplicitlyOpened
+                {
+                    cnt += 1;
+                }
+            }
+            Ok(cnt)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
     let device_name_ = device_name(device);
     let zoned = fs::read_to_string(format!("/sys/block/{}/queue/zoned", device_name_))?;
@@ -311,6 +341,21 @@ pub fn is_zoned_device(device: &str) -> Result<bool, io::Error> {
 }
 
 /// Zone size is in logical blocks
-pub fn get_address_at(zone_index: u64, chunk_index: u64, zone_size: u64, chunk_size: u64) -> u64 {
+pub fn get_lba_at(
+    zone_index: Zone,
+    chunk_index: Chunk,
+    zone_size: LogicalBlock,
+    chunk_size: LogicalBlock,
+) -> LogicalBlock {
     zone_size * zone_index + chunk_index * chunk_size
+}
+
+pub fn get_address_at(
+    zone_index: Zone,
+    chunk_index: Chunk,
+    zone_size: LogicalBlock,
+    chunk_size: LogicalBlock,
+    lba_size: Byte,
+) -> Byte {
+    (zone_size * zone_index + chunk_index * chunk_size) * lba_size
 }

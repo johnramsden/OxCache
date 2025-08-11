@@ -1,6 +1,7 @@
 use aligned_vec::{AVec, RuntimeAlign};
 use async_trait::async_trait;
 use bytes::Bytes;
+use nvme::types::Byte;
 use rand::{RngCore, SeedableRng};
 use rand_pcg::Pcg64;
 use std::collections::hash_map::DefaultHasher;
@@ -11,19 +12,19 @@ use tokio::time::sleep;
 
 #[async_trait]
 pub trait RemoteBackend: Send + Sync {
-    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes>;
+    async fn get(&self, key: &str, offset: Byte, size: Byte) -> tokio::io::Result<Bytes>;
 
-    fn set_blocksize(&mut self, blocksize: usize);
+    fn set_blocksize(&mut self, blocksize: Byte);
 }
 
 pub struct S3Backend {
     _bucket: String,
-    _chunk_size: usize,
-    block_size: Option<usize>, // For buffer alignment
+    _chunk_size: Byte,
+    block_size: Option<Byte>, // For buffer alignment
 }
 
 impl S3Backend {
-    pub fn new(bucket: String, chunk_size: usize) -> Self {
+    pub fn new(bucket: String, chunk_size: Byte) -> Self {
         Self {
             _bucket: bucket,
             _chunk_size: chunk_size,
@@ -34,13 +35,13 @@ impl S3Backend {
 
 const EMULATED_BUFFER_SEED: u64 = 1;
 pub struct EmulatedBackend {
-    chunk_size: usize,
-    block_size: Option<usize>, // For buffer alignment
+    chunk_size: Byte,
+    block_size: Option<Byte>, // For buffer alignment
     remote_artificial_delay_microsec: Option<usize>,
 }
 
 impl EmulatedBackend {
-    pub fn new(chunk_size: usize, remote_artificial_delay_microsec: Option<usize>) -> Self {
+    pub fn new(chunk_size: Byte, remote_artificial_delay_microsec: Option<usize>) -> Self {
         Self {
             chunk_size,
             block_size: None,
@@ -48,7 +49,7 @@ impl EmulatedBackend {
         }
     }
 
-    fn gen_buffer_prefix(buf: &mut AVec<u8, RuntimeAlign>, key: &str, offset: usize, size: usize) {
+    fn gen_buffer_prefix(buf: &mut AVec<u8, RuntimeAlign>, key: &str, offset: Byte, size: Byte) {
         // Hash using DefaultHasher (64-bit hash)
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
@@ -60,7 +61,7 @@ impl EmulatedBackend {
         buf.extend_from_slice(&size.to_be_bytes());
     }
 
-    fn gen_random_buffer(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
+    fn gen_random_buffer(&self, key: &str, offset: Byte, size: Byte) -> tokio::io::Result<Bytes> {
         if size > self.chunk_size {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -80,11 +81,11 @@ impl EmulatedBackend {
 
         let capacity = get_aligned_buffer_size(size, self.block_size.unwrap());
         let mut buffer: AVec<u8, RuntimeAlign> =
-            AVec::with_capacity(self.block_size.unwrap(), capacity);
+            AVec::with_capacity(self.block_size.unwrap() as usize, capacity as usize);
         Self::gen_buffer_prefix(&mut buffer, key, offset, size);
 
         // Add prefix
-        let prefix_len = buffer.len();
+        let prefix_len = buffer.len() as u64;
         if size < prefix_len {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -98,20 +99,19 @@ impl EmulatedBackend {
         // Fill the rest of the buffer with random bytes
         let mut rng = Pcg64::seed_from_u64(EMULATED_BUFFER_SEED);
         let remaining = size - prefix_len;
-        let mut random_bytes = vec![0u8; remaining];
+        let mut random_bytes = vec![0u8; remaining as usize];
         rng.fill_bytes(&mut random_bytes);
         buffer.extend_from_slice(&random_bytes);
 
         // Zero pad up to full capacity
-        let current_len = buffer.len();
-        if current_len < capacity {
-            buffer.resize(capacity, 0);
+        let current_len = buffer.len() as Byte;
+        if current_len < self.chunk_size {
+            buffer.resize(self.chunk_size as usize, 0);
         }
 
         // Check size
         assert_eq!(
-            buffer.len(),
-            capacity,
+            current_len, capacity,
             "Buffer should be exactly capacity-sized"
         );
 
@@ -119,7 +119,7 @@ impl EmulatedBackend {
     }
 }
 
-fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
+fn get_aligned_buffer_size(buffer_size: Byte, block_size: Byte) -> Byte {
     if buffer_size.rem_euclid(block_size) != 0 {
         buffer_size + (block_size - buffer_size.rem_euclid(block_size))
     } else {
@@ -129,19 +129,19 @@ fn get_aligned_buffer_size(buffer_size: usize, block_size: usize) -> usize {
 
 #[async_trait]
 impl RemoteBackend for S3Backend {
-    async fn get(&self, _key: &str, _offset: usize, _size: usize) -> tokio::io::Result<Bytes> {
+    async fn get(&self, _key: &str, _offset: Byte, _size: Byte) -> tokio::io::Result<Bytes> {
         // TODO: Implement with AWS SDK
         Ok(Bytes::from(vec![]))
     }
 
-    fn set_blocksize(&mut self, blocksize: usize) {
+    fn set_blocksize(&mut self, blocksize: Byte) {
         self.block_size = Some(blocksize);
     }
 }
 
 #[async_trait]
 impl RemoteBackend for EmulatedBackend {
-    async fn get(&self, key: &str, offset: usize, size: usize) -> tokio::io::Result<Bytes> {
+    async fn get(&self, key: &str, offset: Byte, size: Byte) -> tokio::io::Result<Bytes> {
         if let Some(remote_artificial_delay_microsec) = self.remote_artificial_delay_microsec {
             sleep(Duration::from_micros(
                 remote_artificial_delay_microsec as u64,
@@ -152,7 +152,7 @@ impl RemoteBackend for EmulatedBackend {
         self.gen_random_buffer(key, offset, size)
     }
 
-    fn set_blocksize(&mut self, blocksize: usize) {
+    fn set_blocksize(&mut self, blocksize: Byte) {
         self.block_size = Some(blocksize);
     }
 }
@@ -189,7 +189,7 @@ mod test {
         // === Validate buffer length ===
         assert_eq!(
             buffer.len(),
-            chunk_size,
+            chunk_size as usize,
             "Expected buffer to be chunk_size padded"
         );
 
@@ -215,19 +215,19 @@ mod test {
 
         // === Validate random data ===
         let mut rng = rand_pcg::Pcg64::seed_from_u64(EMULATED_BUFFER_SEED);
-        let mut expected_random = vec![0u8; size - prefix_len];
+        let mut expected_random = vec![0u8; size as usize - prefix_len];
         rng.fill_bytes(&mut expected_random);
 
         assert_eq!(
-            &buffer[prefix_len..size],
+            &buffer[prefix_len..size as usize],
             &expected_random[..],
             "Random portion of buffer does not match expected"
         );
 
         // === Validate padding ===
         assert_eq!(
-            &buffer[size..],
-            vec![0u8; chunk_size - size].as_slice(),
+            &buffer[(size as usize)..],
+            vec![0u8; (chunk_size - size) as usize].as_slice(),
             "Padding bytes after size are not zero"
         );
     }

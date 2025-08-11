@@ -1,32 +1,33 @@
 use crate::request::GetRequest;
+use nvme::types::{Byte, Zone};
 use std::sync::Arc;
 use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Chunk {
     pub uuid: String,
-    pub offset: usize,
-    pub size: usize,
+    pub offset: Byte,
+    pub size: Byte,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct ChunkLocation {
-    pub zone: usize,
-    pub index: u64,
+    pub zone: Zone,
+    pub index: nvme::types::Chunk,
 }
 
 impl ChunkLocation {
-    pub fn new(zone: usize, index: u64) -> Self {
+    pub fn new(zone: Zone, index: nvme::types::Chunk) -> Self {
         Self { zone, index }
     }
 
     pub fn as_index(&self) -> [usize; 2] {
-        [self.zone, self.index as usize]
+        [self.zone as usize, self.index as usize]
     }
 }
 
 impl Chunk {
-    pub fn new(uuid: String, offset: usize, size: usize) -> Self {
+    pub fn new(uuid: String, offset: Byte, size: Byte) -> Self {
         Self { uuid, offset, size }
     }
 }

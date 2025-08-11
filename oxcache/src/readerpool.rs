@@ -4,6 +4,7 @@ use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use crate::metrics::{MetricType, METRICS};
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -40,25 +41,27 @@ impl Reader {
     }
 
     fn run(self) {
-        println!("Reader {} started", self.id);
+        log::debug!("Reader {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             // println!("Reader {} processing: {:?}", self.id, msg);
+            let start = std::time::Instant::now();
             let result = self.device.read(msg.location.clone());
+            METRICS.update_metric_histogram_latency("device_read_latency_ms", start.elapsed(), MetricType::MsLatency);
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);
                 let mut policy = mtx.lock().unwrap();
-                policy.write_update(msg.location);
+                policy.read_update(msg.location);
             }
             let resp = ReadResponse { data: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
-                eprintln!(
+                log::error!(
                     "Failed to send response from writer: {}",
                     snd.err().unwrap()
                 );
             }
         }
-        println!("Reader {} exiting", self.id);
+        log::debug!("Reader {} exiting", self.id);
     }
 }
 
@@ -106,11 +109,11 @@ impl ReaderPool {
             if let Err(e) = handle.join() {
                 // A panic occurred — e is a Box<dyn Any + Send + 'static>
                 if let Some(msg) = e.downcast_ref::<&str>() {
-                    eprintln!("Reader thread panicked with message: {}", msg);
+                    log::error!("Reader thread panicked with message: {}", msg);
                 } else if let Some(msg) = e.downcast_ref::<String>() {
-                    eprintln!("Reader thread panicked with message: {}", msg);
+                    log::error!("Reader thread panicked with message: {}", msg);
                 } else {
-                    eprintln!("Reader thread panicked with unknown payload.");
+                    log::error!("Reader thread panicked with unknown payload.");
                 }
             }
         }
