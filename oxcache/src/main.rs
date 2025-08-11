@@ -3,9 +3,10 @@ use log::LevelFilter;
 use nvme::types::Byte;
 use oxcache;
 use oxcache::remote;
-use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
+use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig, ServerMetricsConfig};
 use serde::Deserialize;
 use std::fs;
+use std::net::{IpAddr, SocketAddr};
 use std::process::exit;
 
 #[derive(Parser, Debug)]
@@ -56,6 +57,12 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub remote_artificial_delay_microsec: Option<usize>,
+    
+    #[arg(long)]
+    pub metrics_ip_addr: Option<String>,
+    
+    #[arg(long)]
+    pub metrics_port: Option<u16>,
 
     /// Logging level: error, warn, info, debug, trace. Overrides config if set.
     #[arg(long)]
@@ -89,10 +96,17 @@ pub struct ParsedEvictionConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ParsedMetricsConfig {
+    pub ip_addr: Option<String>,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub server: ParsedServerConfig,
     pub remote: ParsedRemoteConfig,
     pub eviction: ParsedEvictionConfig,
+    pub metrics: ParsedMetricsConfig,
     pub log_level: Option<String>,
 }
 
@@ -209,6 +223,33 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .block_zone_capacity
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
+    
+    // Metrics
+
+    let metrics_port = cli
+        .metrics_port
+        .clone()
+        .or_else(|| config.as_ref()?.metrics.port.clone());
+    let metrics_ip = cli
+        .metrics_ip_addr
+        .clone()
+        .or_else(|| config.as_ref()?.metrics.ip_addr.clone());
+    
+    if metrics_port.is_none() && metrics_ip.is_some() || metrics_port.is_some() && metrics_ip.is_none() {
+        return Err("Missing metrics ip or port, both must be set or neither".into());
+    }
+    
+    let metrics_exporter_addr = if metrics_port.is_some() {
+        let ip = match metrics_ip.unwrap().parse::<IpAddr>() {
+            Ok(ip) => ip,
+            Err(e) => {
+                return Err(format!("Invalid metrics ip address {:?}", e).into());
+            }       
+        };
+        Some(SocketAddr::new(ip, metrics_port.unwrap()))
+    } else {
+        None
+    };
 
     // TODO: Add secrets from env vars
 
@@ -231,6 +272,9 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         chunk_size,
         block_zone_capacity,
         max_write_size,
+        metrics: ServerMetricsConfig {
+            metrics_exporter_addr 
+        }
     })
 }
 
