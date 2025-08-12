@@ -3,8 +3,10 @@ use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
+use log::debug;
 use nvme::types::Byte;
 use std::error::Error;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
@@ -75,6 +77,24 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
     remote: Arc<T>,
     device: Arc<dyn Device>,
     evict_rx: Receiver<EvictorMessage>,
+}
+
+fn validate_read_response(buf: &[u8], key: &str, offset: Byte, size: Byte) {
+    // Hash using DefaultHasher (64-bit hash)
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let key_hash = hasher.finish(); // 8bytes
+
+    // Check the buffer
+    let mut buffer = [0u8; 8];
+    buffer.copy_from_slice(&buf[0..8]);
+    debug_assert_eq!(u64::from_be_bytes(buffer), key_hash);
+
+    buffer.copy_from_slice(&buf[8..16]);
+    debug_assert_eq!(u64::from_be_bytes(buffer), offset);
+
+    buffer.copy_from_slice(&buf[16..24]);
+    debug_assert_eq!(u64::from_be_bytes(buffer), size);
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
@@ -265,6 +285,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                         // println!("Received get request: {:?}", req);
                         let chunk: Chunk = req.into();
+                        let chunk_clone = chunk.clone();
 
                         cache.get_or_insert_with(
                             chunk.clone(),
@@ -274,6 +295,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let start = Arc::clone(&start);
                                 // let chunk = chunk.clone();
                                 |location| async move {
+                                    let chunk = chunk.clone();
                                     // println!("HIT {:?}", chunk);
                                     let location = location.as_ref().clone();
 
@@ -299,6 +321,9 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         }
                                     };
 
+                                    // Validate read response
+                                    validate_read_response(&read_response, &chunk.uuid, chunk.offset, chunk.size);
+
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(read_response.clone()),
                                         bincode::config::standard()
@@ -316,7 +341,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 }
                             },
                             {
-                                let chunk = chunk.clone();
+                                let chunk = chunk_clone.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);
                                 let writer_pool = Arc::clone(&writer_pool);
