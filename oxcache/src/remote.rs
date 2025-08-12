@@ -111,7 +111,7 @@ impl EmulatedBackend {
 
         // Check size
         assert_eq!(
-            current_len, capacity,
+            buffer.len() as u64, capacity,
             "Buffer should be exactly capacity-sized"
         );
 
