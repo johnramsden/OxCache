@@ -770,6 +770,11 @@ impl Device for BlockInterface {
                 log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
+                let state_mtx = Arc::clone(&self.state);
+                let mut state = state_mtx.lock().unwrap();
+                for c in chunk_locations {
+                    state.active_zones.return_chunk_location(&c);
+                }
 
                 Ok(())
             }

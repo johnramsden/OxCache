@@ -1,4 +1,4 @@
-log_level = "debug"
+log_level = "trace"
 
 [server]
 socket = "/tmp/oxcache.sock"
@@ -15,7 +15,7 @@ bucket = "S3_BUCKET"
 remote_artificial_delay_microsec = 40632
 
 [eviction]
-eviction_policy = "promotional"
+eviction_policy = "chunk"
 high_water_evict = 50 # Number remaining from end, evicts if reaches here
 low_water_evict = 100  # Evict until below mark
 eviction_interval = 1  # Evict every 1s

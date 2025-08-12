@@ -120,6 +120,10 @@ impl ZoneList {
             self.writing_zones.get(&zone_index).unwrap(),
             zone_index
         );
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
         Ok(zone_index)
     }
 
@@ -192,34 +196,41 @@ impl ZoneList {
             self.open_zones.push_back(zone_index);
         }
 
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
         Ok(ChunkLocation {
             zone: zone_index,
             index: chunk,
         })
     }
 
-    pub fn return_chunk_location(&mut self, chunk: ChunkLocation) -> Result<(), ZoneObtainFailure> {
-        // let can_open_more_zones =
-        //     self.open_zones.len() < self.max_active_resources && self.free_zones.len() > 0;
-        //
-        // let zone = if can_open_more_zones {
-        //     self.free_zones.pop_front()
-        // } else {
-        //     self.open_zones.pop_front()
-        // };
-        // let mut zone = zone.unwrap();
-        // let zone_index = zone.index;
-        // let chunk = zone.chunks_available.pop().unwrap();
-        // if zone.chunks_available.len() >= 1 {
-        //     self.open_zones.push_back(zone);
-        // }
-        //
-        // Ok(ChunkLocation {
-        //     zone: zone_index,
-        //     index: chunk,
-        // })
+    // Used to return chunks after chunk eviction
+    pub fn return_chunk_location(&mut self, chunk: &ChunkLocation) {
+        {
+            let zone = self.zones.get_mut(&chunk.zone).unwrap();
 
-        Ok(())
+            assert!(
+                !zone.chunks_available.contains(&chunk.index),
+                "Zone {} should not contain chunk {} we are trying to return",
+                chunk.zone, chunk.index
+            );
+
+            log::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+
+            // Return it
+            zone.chunks_available.push(chunk.index);
+
+            // If len == 1, it was empty, must be returned to free zones, otherwise it already was
+            // Goes in free to avoid exceeding max_active_resources
+            if zone.chunks_available.len() == 1 {
+                self.free_zones.push_back(chunk.zone);
+            }
+            log::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
+        }
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
     }
 
     // Check if all zones are full
@@ -256,6 +267,9 @@ impl ZoneList {
 
         self.free_zones.push_back(idx);
 
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
         device.reset_zone(idx)
     }
 
@@ -291,6 +305,28 @@ impl ZoneList {
 
         // Grand total
         open_zone_chunks + free_zone_chunks
+    }
+
+    fn check_invariants(&self) {
+        // TODO: Add more checks
+
+        // free_zones & open are unique and dont share elems
+        {
+
+            let set_free: HashSet<_> = self.free_zones.iter().collect();
+            let set_open: HashSet<_> = self.open_zones.iter().collect();
+
+            // Assert no overlap
+            assert!(
+                set_free.is_disjoint(&set_open),
+                "Free and Open zone have overlapping elements"
+            );
+
+            // no dupes
+            assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
+
+            assert_eq!(set_open.len(), self.open_zones.len(), "Free list has duplicate elements");
+        }
     }
 }
 
