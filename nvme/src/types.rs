@@ -132,20 +132,6 @@ pub enum PerformOn {
 /// * `zone_start_address` - The starting logical block address (LBA) of the zone.
 /// * `write_pointer` - The current write pointer LBA for the zone.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::{ZNSZoneDescriptor, ZoneState};
-///
-/// let desc = ZNSZoneDescriptor {
-///     seq_write_required: true,
-///     zone_state: ZoneState::Empty,
-///     zone_capacity: 1024,
-///     zone_start_address: 0,
-///     write_pointer: 0,
-/// };
-/// println!("Zone state: {:?}", desc.zone_state);
-/// ```
 #[derive(Debug, Clone)]
 pub struct ZNSZoneDescriptor {
     pub seq_write_required: bool,

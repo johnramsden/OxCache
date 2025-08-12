@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod cli;
 pub mod device;
 pub mod eviction;
 pub mod readerpool;

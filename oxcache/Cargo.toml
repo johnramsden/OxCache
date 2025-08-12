@@ -36,3 +36,6 @@ metrics-exporter-prometheus = "0.17.2"
 axum = "0.6.20"
 metrics = "0.24.2"
 
+[[test]]
+  name = "integration_tests"
+  harness = false
