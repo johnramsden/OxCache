@@ -762,20 +762,16 @@ impl Device for BlockInterface {
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
             EvictTarget::Chunk(chunk_locations) => {
-                // TODO: Check units
 
                 if chunk_locations.is_empty() {
                     log::debug!("[evict:Chunk] No zones to evict");
                     return Ok(());
                 }
-                log::debug!("[evict:Chunk] Evicting zones {:?}", chunk_locations);
+                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
-                let state_mtx = Arc::clone(&self.state);
-                let _state = state_mtx.lock().unwrap();
-                // Need to change the block interface bookkeeping so
-                // that it can keep track of the list of empty chunks
-                todo!();
+
+                Ok(())
             }
             EvictTarget::Zone(locations) => {
                 if locations.is_empty() {

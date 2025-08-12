@@ -17,7 +17,11 @@ Invalidation will:
 
 * Remove from map
 * Mark chunk None in cache `zone_to_entry` reverse map
-* Keep an invalid queue (priority-queue), with each zone index and its invalid count
+* Keep an invalid queue (priority-queue (max)), with each zone index and its invalid count
 
 Eviction will:
 
+* while above low water mark
+  * pop zone from pq
+  * buffer valid chunks
+  * write valids to disk, update map
