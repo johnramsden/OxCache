@@ -1,9 +1,10 @@
-use std::fs;
+use std::{fs, net::{IpAddr, SocketAddr}};
 
 use clap::Parser;
+use nvme::types::Byte;
 use serde::Deserialize;
 
-use crate::server::{ServerConfig, ServerEvictionConfig, ServerRemoteConfig};
+use crate::server::{ServerConfig, ServerEvictionConfig, ServerMetricsConfig, ServerRemoteConfig};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -106,7 +107,7 @@ pub struct AppConfig {
     pub log_level: Option<String>,
 }
 
-fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let config = if let Some(path) = &cli.config {
         let config_str = fs::read_to_string(path)?;
         Some(toml::from_str::<AppConfig>(&config_str)?)

@@ -132,7 +132,7 @@ pub enum PerformOn {
 /// * `zone_start_address` - The starting logical block address (LBA) of the zone.
 /// * `write_pointer` - The current write pointer LBA for the zone.
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ZNSZoneDescriptor {
     pub seq_write_required: bool,
     pub zone_state: ZoneState,

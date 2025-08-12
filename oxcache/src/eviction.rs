@@ -226,8 +226,8 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         // We want to evict to the high water mark?
         let cap = lru_len - low_water_mark;
 
-        let mut targets = Vec::with_capacity(cap);
-        while self.lru.len() >= low_water_mark {
+        let mut targets = Vec::with_capacity(cap as usize);
+        while self.lru.len() >= low_water_mark as usize {
             targets.push(self.lru.pop_lru().unwrap().0)
         }
 

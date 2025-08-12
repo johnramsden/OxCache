@@ -1,13 +1,10 @@
 use clap::Parser;
 use log::LevelFilter;
-use nvme::types::Byte;
 use oxcache;
-use oxcache::cli::{CliArgs, load_config};
+use oxcache::cli::{load_config, AppConfig, CliArgs};
 use oxcache::remote;
-use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig, ServerMetricsConfig};
-use serde::Deserialize;
+use oxcache::server::{RUNTIME, Server};
 use std::fs;
-use std::net::{IpAddr, SocketAddr};
 use std::process::exit;
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
