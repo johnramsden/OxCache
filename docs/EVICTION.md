@@ -21,7 +21,7 @@ Eviction/Invalidation will:
 * Mark chunk None in cache `zone_to_entry` reverse map
 * Keep an invalid queue (priority-queue (max)), with each zone index and its invalid count
 
-Cleaning will:
+"Cleaning" will:
 
 * while above low water mark
   * pop zone from pq

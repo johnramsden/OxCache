@@ -1,5 +1,7 @@
+use std::io::ErrorKind;
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
+use crate::zone_state::zone_priority_queue::ZoneIndex;
 use flume::{Receiver, Sender};
 use lru::LruCache;
 use nvme::types::{Chunk, Zone};
@@ -29,15 +31,24 @@ impl EvictionPolicyWrapper {
         low_water: Zone,
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
+        clean_high_water: Option<Chunk>,
+        clean_low_water: Option<Chunk>,
     ) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
             "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
-            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(
-                high_water,
-                low_water,
-                nr_zones,
-                nr_chunks_per_zone,
-            ))),
+            "chunk" => {
+                if clean_high_water.is_none() || clean_low_water.is_none() {
+                    return Err(std::io::Error::new(ErrorKind::InvalidInput, "Chunk eviction must have clean_high_water and clean_low_water"));
+                }
+                Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(
+                    high_water,
+                    low_water,
+                    clean_high_water.unwrap(),
+                    clean_low_water.unwrap(),
+                    nr_zones,
+                    nr_chunks_per_zone,
+                )))
+            },
             "promotional" => Ok(EvictionPolicyWrapper::Promotional(
                 PromotionalEvictionPolicy::new(high_water, low_water, nr_zones, nr_chunks_per_zone),
             )),
@@ -76,10 +87,13 @@ impl EvictionPolicyWrapper {
 
 pub trait EvictionPolicy: Send + Sync {
     type Target: Clone + Send + Sync + 'static;
+    type CleanTarget: Clone + Send + Sync + 'static;
 
     fn write_update(&mut self, chunk: ChunkLocation);
     fn read_update(&mut self, chunk: ChunkLocation);
     fn get_evict_targets(&mut self) -> Self::Target;
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget;
 }
 
 pub struct DummyEvictionPolicy {}
@@ -92,6 +106,7 @@ impl DummyEvictionPolicy {
 
 impl EvictionPolicy for DummyEvictionPolicy {
     type Target = Vec<Zone>;
+    type CleanTarget = ();
     fn write_update(&mut self, _chunk: ChunkLocation) {}
 
     fn read_update(&mut self, _chunk: ChunkLocation) {}
@@ -99,6 +114,8 @@ impl EvictionPolicy for DummyEvictionPolicy {
     fn get_evict_targets(&mut self) -> Self::Target {
         vec![]
     }
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
 }
 
 pub struct PromotionalEvictionPolicy {
@@ -131,6 +148,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     /// Promotional LRU
     /// Performs LRU based on full zones
     type Target = Vec<Zone>;
+    type CleanTarget = ();
 
     fn write_update(&mut self, chunk: ChunkLocation) {
         assert!(!self.lru.contains(&chunk.zone));
@@ -172,6 +190,8 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
 
         targets
     }
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
 }
 
 pub struct ChunkEvictionPolicy {
@@ -186,6 +206,8 @@ impl ChunkEvictionPolicy {
     pub fn new(
         high_water: Chunk,
         low_water: Chunk,
+        clean_high_water: Chunk,
+        clean_low_water: Chunk,
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
     ) -> Self {
@@ -201,6 +223,7 @@ impl ChunkEvictionPolicy {
 
 impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
+    type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
         self.lru.put(chunk, ());
     }
@@ -231,6 +254,10 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         }
 
         targets
+    }
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget {
+        vec![]
     }
 }
 
@@ -361,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_chunk_update_ordering() {
-        let mut policy = ChunkEvictionPolicy::new(1, 3, 2, 2);
+        let mut policy = ChunkEvictionPolicy::new(1, 3, 0, 0, 2, 2);
 
         // zone=[_,_,_,_], lru=()
         let c = ChunkLocation::new(1, 0);

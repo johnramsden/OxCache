@@ -1,6 +1,6 @@
 use priority_queue::PriorityQueue;
 
-type ZoneIndex = nvme::types::Zone;
+pub(crate) type ZoneIndex = nvme::types::Zone;
 type ZonePriority = usize;
 
 pub struct ZonePriorityQueue {

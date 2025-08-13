@@ -12,6 +12,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::metrics::{MetricType, METRICS};
+use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -20,7 +21,6 @@ pub struct Zoned {
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
     zone_append_lock: Vec<Mutex<()>>,
-
 }
 
 // Information about each zone
