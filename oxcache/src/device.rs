@@ -462,15 +462,16 @@ impl Device for Zoned {
         Ok(Bytes::from(data))
     }
 
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
+    fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
         log::debug!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
-            EvictTarget::Chunk(mut chunk_locations) => {
+            EvictTarget::Chunk(mut chunk_locations, mut clean_locations) => {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
                 log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
+                
 
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
@@ -478,6 +479,7 @@ impl Device for Zoned {
                 // Update pq
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
+                log::debug!("[evict:Chunk] Cleaning zones {:?}", clean_locations);
 
                 Ok(())
             }
@@ -722,7 +724,7 @@ impl Device for BlockInterface {
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
-            EvictTarget::Chunk(chunk_locations) => {
+            EvictTarget::Chunk(chunk_locations, _) => {
 
                 if chunk_locations.is_empty() {
                     log::debug!("[evict:Chunk] No zones to evict");

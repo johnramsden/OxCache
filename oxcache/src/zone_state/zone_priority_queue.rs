@@ -43,6 +43,7 @@ impl ZonePriorityQueue {
     // If above high watermark, clean until strictly below low watermark
     pub fn remove_if_thresh_met(&mut self) -> Vec<ZoneIndex> {
         let mut zones = Vec::new();
+        log::trace!("[evict:Chunk] Cleaning zones, invalid={}", self.invalid_count);
         if self.invalid_count < self.high_water_thresh {
             return zones;
         }
