@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
-use crate::zone_state::zone_priority_queue::ZoneIndex;
+use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru::LruCache;
 use nvme::types::{Chunk, Zone};
@@ -11,6 +11,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use crate::zone_state::zone_priority_queue;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -200,6 +201,7 @@ pub struct ChunkEvictionPolicy {
     nr_zones: Zone,
     nr_chunks_per_zone: Chunk,
     lru: LruCache<ChunkLocation, ()>,
+    pq: ZonePriorityQueue
 }
 
 impl ChunkEvictionPolicy {
@@ -217,6 +219,7 @@ impl ChunkEvictionPolicy {
             nr_zones,
             nr_chunks_per_zone,
             lru: LruCache::unbounded(),
+            pq: ZonePriorityQueue::new(nr_zones, nr_chunks_per_zone, clean_high_water, clean_low_water)
         }
     }
 }
@@ -250,14 +253,20 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
         let mut targets = Vec::with_capacity(cap as usize);
         while self.lru.len() as Chunk >= low_water_mark {
-            targets.push(self.lru.pop_lru().unwrap().0)
+            let targ = self.lru.pop_lru().unwrap().0;
+            let target_zone = targ.zone;
+            targets.push(targ);
+
+            // Adjust pq
+            self.pq.modify_priority(target_zone, 1);
+            log::trace!("Increased priority for zone {}", target_zone);
         }
 
         targets
     }
 
     fn get_clean_targets(&mut self) -> Self::CleanTarget {
-        vec![]
+        self.pq.remove_if_thresh_met()
     }
 }
 
@@ -508,5 +517,24 @@ mod tests {
         assert_eq!(expect, et, "Expected = {:?}, but got {:?}", expect, et);
 
         compare_order(&mut policy.lru, &VecDeque::from(vec![]));
+    }
+
+    #[test]
+    fn check_chunk_priority_queue() {
+        // 8 zones, 1 chunks per zone. Should evict at 3 inserted
+        let mut policy = ChunkEvictionPolicy::new(
+            2, 6, 1, 4, 4, 2);
+
+        for z in 0..3 {
+            for i in 0..2 {
+                policy.write_update(ChunkLocation::new(z, i));
+            }
+        }
+
+        let got = policy.get_evict_targets().len();
+        assert_eq!(5, got, "Expected 5, but got {}", got);
+
+        let got = policy.get_clean_targets().len();
+        assert_eq!(0, got, "Expected 0, but got {}", got);
     }
 }
