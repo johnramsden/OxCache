@@ -13,13 +13,15 @@ Invalidation/Eviction will:
 
 ### Zoned
 
-Invalidation will:
+Two threshholds, one for "cleaning", one for "evicting/invalidating"
+
+Eviction/Invalidation will:
 
 * Remove from map
 * Mark chunk None in cache `zone_to_entry` reverse map
 * Keep an invalid queue (priority-queue (max)), with each zone index and its invalid count
 
-Eviction will:
+Cleaning will:
 
 * while above low water mark
   * pop zone from pq

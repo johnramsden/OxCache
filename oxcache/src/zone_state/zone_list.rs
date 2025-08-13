@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self};
 
 type ZoneIndex = nvme::types::Zone;
+type ZonePriority = usize;
 
 #[derive(Debug, Clone)]
 pub struct Zone {
@@ -41,7 +42,6 @@ impl ZoneList {
                 chunks_available: (0..chunks_per_zone).rev().collect()
             })) // (key, value)
             .collect();
-
         ZoneList {
             free_zones: avail_zones,
             open_zones: VecDeque::with_capacity(max_active_resources),
