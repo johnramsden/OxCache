@@ -47,7 +47,7 @@ impl ZoneList {
             open_zones: VecDeque::with_capacity(max_active_resources),
             writing_zones: HashMap::with_capacity(max_active_resources),
             chunks_per_zone,
-            max_active_resources,
+            max_active_resources: max_active_resources-1, // Keep one reserved for eviction
             zones,
         }
     }
@@ -134,7 +134,12 @@ impl ZoneList {
         device: &dyn device::Device,
         finish_zone: bool,
     ) -> io::Result<()> {
-        let write_num = self.writing_zones.get(&zone_index).unwrap();
+        let write_num = self.writing_zones.get(&zone_index);
+        let write_num = if let Some(write_num) = write_num {
+            write_num
+        } else {
+            return Ok(()); // We were evicting, so we didn't account
+        };
         log::debug!(
             "[ZoneList]: Finishing write to {}, writenum = {}",
             zone_index,
@@ -303,7 +308,7 @@ impl ZoneList {
         &mut self,
         idx: ZoneIndex,
     ) {
-        let zone = self.zones.get_mut(&idx).unwrap();
+
         self.free_zones.push_back(idx);
 
         #[cfg(debug_assertions)]

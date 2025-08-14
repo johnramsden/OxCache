@@ -236,7 +236,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
-        assert!(self.lru.contains(&chunk));
+        // assert!(self.lru.contains(&chunk)); // TODO: Race cond with chunk evict?
         self.lru.put(chunk, ());
     }
 

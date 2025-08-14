@@ -199,7 +199,7 @@ impl Zoned {
         let mut zone_list = mtx.lock().unwrap();
 
         let active_zones = get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap();
-        log::debug!("active zones: {}", active_zones);
+        // log::debug!("active zones: {}", active_zones);
         // assert!(zone_list.get_open_zones() == active_zones, "{} vs {}", zone_list.get_open_zones(), active_zones);
         assert!(active_zones <= self.config.max_active_resources as usize);
 
@@ -433,7 +433,7 @@ impl Device for Zoned {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
-                    log::trace!("[append] Failed to get free zone: {}", err);
+                    // log::trace!("[append] Failed to get free zone: {}", err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -505,7 +505,7 @@ impl Device for Zoned {
                             let this = self;
                             move |payloads: Vec<(CacheKey, bytes::Bytes)>| {
                                 async move {
-                                    // 1) Reset the zone so the write pointer returns to the start.
+                                    // Reset the zone so the write pointer returns to the start.
                                     {
                                         let (zone_mtx, _) = &*this.zones;
                                         let mut zones = zone_mtx.lock().unwrap();
@@ -513,23 +513,27 @@ impl Device for Zoned {
                                         zones.reset_zone_with_capacity(zone, remaining, this)?;
                                     }
 
-                                    if payloads.is_empty() {
-                                        return Ok(vec![]);
-                                    }
-
-                                    // TODO: Need to adjust writing zones, and confirm we can promote to active (limit not exceeded)
-
-                                    // Append bufferred data
-                                    let mut new_locs = Vec::with_capacity(payloads.len());
-                                    for (key, data) in payloads {
-                                        let loc = this.chunked_append(data, zone)?;
-                                        new_locs.push((key, loc));
-                                    }
+                                    let payloads_empty = payloads.is_empty();
+                                    let new_locs = if !payloads_empty {
+                                        // Append bufferred data
+                                        let mut new_locs = Vec::with_capacity(payloads.len());
+                                        for (key, data) in payloads {
+                                            let loc = this.chunked_append(data, zone)?;
+                                            new_locs.push((key, loc));
+                                        }
+                                        new_locs
+                                    } else {
+                                        vec![]
+                                    };
 
                                     {
-                                        let (zone_mtx, _) = &*this.zones;
+                                        let (zone_mtx, cv) = &*this.zones;
                                         let mut zones = zone_mtx.lock().unwrap();
                                         zones.return_zone(zone);
+                                        if !payloads_empty {
+                                            this.close_zone(zone)?;
+                                        }
+                                        cv.notify_all();
                                     }
 
                                     Ok(new_locs) // Vec<(Chunk, ChunkLocation)>
