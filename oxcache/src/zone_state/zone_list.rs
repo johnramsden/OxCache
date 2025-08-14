@@ -285,6 +285,31 @@ impl ZoneList {
         Ok(())
     }
 
+    pub fn reset_zone_with_capacity(
+        &mut self,
+        idx: ZoneIndex,
+        remaining: Chunk,
+        device: &dyn device::Device
+    ) -> std::io::Result<()> {
+        let zone = self.zones.get_mut(&idx).unwrap();
+        zone.chunks_available = (self.chunks_per_zone-remaining..self.chunks_per_zone).rev().collect();
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
+        device.reset_zone(idx)
+    }
+    pub fn return_zone(
+        &mut self,
+        idx: ZoneIndex,
+    ) {
+        let zone = self.zones.get_mut(&idx).unwrap();
+        self.free_zones.push_back(idx);
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+    }
+
     pub fn get_num_available_chunks(&self) -> Chunk {
         // Total available chunks in open zones
         let open_zone_chunks: Chunk = self

@@ -223,7 +223,7 @@ impl ChunkEvictionPolicy {
             nr_zones,
             nr_chunks_per_zone,
             lru: LruCache::unbounded(),
-            pq: ZonePriorityQueue::new(nr_zones, nr_chunks_per_zone, clean_high_water, clean_low_water)
+            pq: ZonePriorityQueue::new(nr_zones, clean_high_water, clean_low_water)
         }
     }
 }

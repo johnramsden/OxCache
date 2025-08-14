@@ -25,5 +25,8 @@ Eviction/Invalidation will:
 
 * while above low water mark
   * pop zone from pq
-  * buffer valid chunks
-  * write valids to disk, update map
+  * For each zone:
+    * buffer valid chunks
+    * reset zone
+    * write valids to disk
+    * update map

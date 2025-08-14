@@ -13,6 +13,7 @@ use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::metrics::{MetricType, METRICS};
 use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
+use crate::cache::bucket::Chunk as CacheKey;
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -238,6 +239,7 @@ impl Zoned {
 
         Ok(())
     }
+
 }
 
 impl Zoned {
@@ -466,20 +468,77 @@ impl Device for Zoned {
         log::debug!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
-            EvictTarget::Chunk(mut chunk_locations, mut clean_locations) => {
+            EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
-                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
-                
+                log::trace!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
 
-                // Update pq
-                let (zone_mtx, _) = &*self.zones;
-                let mut zones = zone_mtx.lock().unwrap();
-                log::debug!("[evict:Chunk] Cleaning zones {:?}", clean_locations);
+                // Cleaning
+                for zone in clean_locations {
+
+                    RUNTIME.block_on(cache.clean_zone_and_update_map(
+                        zone,
+                        {
+                            // Reads all chunks in zone and returns buffer [(Chunk, Bytes)]
+                            let this = self;
+                            move |items: Vec<(CacheKey, Arc<ChunkLocation>)>| {
+                                async move {
+                                    // Increasing chunk index, might not be neccesary
+                                    let mut items = items;
+                                    items.sort_by_key(|(_, loc)| loc.index);
+
+                                    let mut out = Vec::with_capacity(items.len());
+                                    for (key, loc) in items {
+                                        let bytes = this.read((*loc).clone())?; // one full chunk
+                                        out.push((key, bytes));
+                                    }
+                                    Ok(out)
+                                }
+                            }
+                        },
+                        {
+                            // Writer callback, reset then rewrite valid chunks
+                            let this = self;
+                            move |payloads: Vec<(CacheKey, bytes::Bytes)>| {
+                                async move {
+                                    // 1) Reset the zone so the write pointer returns to the start.
+                                    {
+                                        let (zone_mtx, _) = &*this.zones;
+                                        let mut zones = zone_mtx.lock().unwrap();
+                                        let remaining = this.config.chunks_per_zone - payloads.len() as u64;
+                                        zones.reset_zone_with_capacity(zone, remaining, this)?;
+                                    }
+
+                                    if payloads.is_empty() {
+                                        return Ok(vec![]);
+                                    }
+
+                                    // TODO: Need to adjust writing zones, and confirm we can promote to active (limit not exceeded)
+
+                                    // Append bufferred data
+                                    let mut new_locs = Vec::with_capacity(payloads.len());
+                                    for (key, data) in payloads {
+                                        let loc = this.chunked_append(data, zone)?;
+                                        new_locs.push((key, loc));
+                                    }
+
+                                    {
+                                        let (zone_mtx, _) = &*this.zones;
+                                        let mut zones = zone_mtx.lock().unwrap();
+                                        zones.return_zone(zone);
+                                    }
+
+                                    Ok(new_locs) // Vec<(Chunk, ChunkLocation)>
+                                }
+                            }
+                        },
+                    ))?;
+                    log::trace!("[evict:Chunk] Cleaned zone {}", zone);
+                }
 
                 Ok(())
             }

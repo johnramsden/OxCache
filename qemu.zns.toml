@@ -16,10 +16,10 @@ remote_artificial_delay_microsec = 40632
 
 [eviction]
 eviction_policy = "chunk"
-high_water_evict = 10 # Number remaining from end, evicts if reaches here
-low_water_evict = 50  # Evict until below mark
-high_water_clean = 5 # Number remaining from end, cleans if reaches here (only used with chunk)
-low_water_clean = 25  # Clean until below mark (only used with chunk)
+high_water_evict = 100 # Number remaining from end, evicts if reaches here
+low_water_evict = 150  # Evict until below mark
+high_water_clean = 40 # Number of invalids when we begin cleaning
+low_water_clean = 20  # Clean until below mark (only used with chunk)
 eviction_interval = 1  # Evict every 1s
 
 [metrics]

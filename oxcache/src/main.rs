@@ -238,15 +238,12 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
             return Err("high_water_clean must be set".into());
         } else { high_water_clean.unwrap() };
 
-        if low_water_clean < high_water_clean {
-            return Err("low_water_clean must be greater than high_water_clean".into());
+        if low_water_clean > high_water_clean {
+            return Err("low_water_clean must be less than high_water_clean".into());
         }
 
-        if high_water_clean > high_water_evict {
-            return Err("high_water_clean must be less than or equal to than high_water_evict".into());
-        }
-        if low_water_clean > low_water_evict {
-            return Err("low_water_clean must be less than or equal to than low_water_evict".into());
+        if high_water_clean > low_water_evict {
+            return Err("high_water_clean must be less than or equal to low_water_evict".into());
         }
     }
 
