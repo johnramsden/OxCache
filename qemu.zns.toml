@@ -1,4 +1,4 @@
-log_level = "trace"
+log_level = "info"
 
 [server]
 socket = "/tmp/oxcache.sock"

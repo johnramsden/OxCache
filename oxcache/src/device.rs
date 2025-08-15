@@ -465,17 +465,25 @@ impl Device for Zoned {
     }
 
     fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
-        log::debug!("Current device usage is at: {}", self.get_use_percentage());
+        log::info!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
             EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
-                log::trace!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
+                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
+
+                {
+                    let (zone_mtx, _) = &*self.zones;
+                    let mut zones = zone_mtx.lock().unwrap();
+                    for c in chunk_locations {
+                        zones.return_chunk_location(&c, false);
+                    }
+                }
 
                 // Cleaning
                 for zone in clean_locations {
@@ -541,7 +549,7 @@ impl Device for Zoned {
                             }
                         },
                     ))?;
-                    log::trace!("[evict:Chunk] Cleaned zone {}", zone);
+                    log::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
 
                 Ok(())
@@ -799,7 +807,7 @@ impl Device for BlockInterface {
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 for c in chunk_locations {
-                    state.active_zones.return_chunk_location(&c);
+                    state.active_zones.return_chunk_location(&c, true);
                 }
 
                 Ok(())

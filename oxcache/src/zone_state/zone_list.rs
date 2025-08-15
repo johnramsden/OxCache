@@ -211,7 +211,7 @@ impl ZoneList {
     }
 
     // Used to return chunks after chunk eviction
-    pub fn return_chunk_location(&mut self, chunk: &ChunkLocation) {
+    pub fn return_chunk_location(&mut self, chunk: &ChunkLocation, return_zone: bool) {
         {
             let zone = self.zones.get_mut(&chunk.zone).unwrap();
 
@@ -228,7 +228,7 @@ impl ZoneList {
 
             // If len == 1, it was empty, must be returned to free zones, otherwise it already was
             // Goes in free to avoid exceeding max_active_resources
-            if zone.chunks_available.len() == 1 {
+            if zone.chunks_available.len() == 1 && return_zone {
                 self.free_zones.push_back(chunk.zone);
             }
             log::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
@@ -352,10 +352,16 @@ impl ZoneList {
                 "Free and Open zone have overlapping elements"
             );
 
-            // no dupes
-            assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
+            if set_free.len() != self.free_zones.len() {
+                println!("free_zones: {:?}", self.free_zones);
+                println!("zones: {:?}", self.zones);
+                // no dupes
+                assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
+            }
 
-            assert_eq!(set_open.len(), self.open_zones.len(), "Free list has duplicate elements");
+
+
+            assert_eq!(set_open.len(), self.open_zones.len(), "Open list has duplicate elements");
         }
     }
 }
