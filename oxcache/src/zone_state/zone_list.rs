@@ -358,9 +358,7 @@ impl ZoneList {
                 // no dupes
                 assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
             }
-
-
-
+            
             assert_eq!(set_open.len(), self.open_zones.len(), "Open list has duplicate elements");
         }
     }

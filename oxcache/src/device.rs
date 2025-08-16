@@ -487,6 +487,13 @@ impl Device for Zoned {
 
                 // Cleaning
                 for zone in clean_locations {
+                    let zs = nvme::info::get_zone_state(self.nvme_config.fd, self.nvme_config.nsid, zone).unwrap();
+                    if zs == ZoneState::Full || zs == ZoneState::Closed {
+                        log::trace!("Correct state for eviction of {}: {:?}", zone, zs);
+                    } else {
+                        log::trace!("Incorrect state for eviction of {}: {:?}", zone, zs);
+                        panic!("Incorrect state for eviction");
+                    }
 
                     RUNTIME.block_on(cache.clean_zone_and_update_map(
                         zone,
