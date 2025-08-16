@@ -35,8 +35,8 @@ const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nr_queries = 10000;
-    let nr_uuids = 100;
+    let nr_queries = 100000;
+    let nr_uuids = 1000;
     let queries: Arc<Mutex<Vec<GetRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let args = Cli::parse();
     let counter = Arc::new(AtomicUsize::new(0));
