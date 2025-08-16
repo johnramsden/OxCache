@@ -83,7 +83,13 @@ impl ZoneList {
             // Open a new zone
             let res = self.free_zones.pop_front().unwrap();
             log::debug!("[ZoneList]: Opening zone {}", res);
-            self.zones.get_mut(&res)
+            let z = self.zones.get_mut(&res);
+            z.as_ref().inspect(
+                |z| {
+                    debug_assert!(z.chunks_available.len() == self.chunks_per_zone as usize);
+                }
+            );
+            z
         } else {
             // Grab an existing zone
             let res = self.open_zones.pop_front().unwrap();
@@ -194,6 +200,7 @@ impl ZoneList {
         } else {
             self.open_zones.pop_front()
         };
+
         let zone_index = zone.unwrap();
         let mut zone = self.zones.get_mut(&zone_index).unwrap();
         let chunk = zone.chunks_available.pop().unwrap();
@@ -353,9 +360,9 @@ impl ZoneList {
             );
 
             // no dupes
-            assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
+            assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements. Dump:\n{:#?}", self.free_zones);
 
-            assert_eq!(set_open.len(), self.open_zones.len(), "Free list has duplicate elements");
+            assert_eq!(set_open.len(), self.open_zones.len(), "Free list has duplicate elements. Dump:\n{:#?}", self.open_zones);
         }
     }
 }

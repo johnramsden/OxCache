@@ -426,7 +426,7 @@ impl Zoned {
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-
+        log::debug!("appending");
         let sz = data.len() as u64;
 
         let zone_index: Zone = loop {
@@ -453,6 +453,8 @@ impl Device for Zoned {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
+        log::debug!("reading {:?}", location);
+
         let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
         let slba = self.config.get_address_at(location.zone, location.index);
         log::trace!("Read slba = {} for {:?}", slba, location);
@@ -466,6 +468,7 @@ impl Device for Zoned {
 
     fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
         log::debug!("Current device usage is at: {}", self.get_use_percentage());
+        log::debug!("Eviction requested at locations {:#?}", locations);
 
         match locations {
             EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
@@ -541,7 +544,7 @@ impl Device for Zoned {
                             }
                         },
                     ))?;
-                    log::trace!("[evict:Chunk] Cleaned zone {}", zone);
+                    log::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
 
                 Ok(())
@@ -810,10 +813,7 @@ impl Device for BlockInterface {
                     return Ok(());
                 }
                 log::debug!("[evict:Zone] Evicting zones {:?}", locations);
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                rt.block_on(cache.remove_zones(&locations))?;
+                RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations, self)?;

@@ -30,6 +30,7 @@ use crate::metrics::{init_metrics_exporter, MetricType, METRICS};
 
 pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime")

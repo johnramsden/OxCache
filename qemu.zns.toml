@@ -1,11 +1,11 @@
-log_level = "trace"
+log_level = "debug"
 
 [server]
 socket = "/tmp/oxcache.sock"
 disk = "/dev/nvme0n1"
-writer_threads = 14
-reader_threads = 14
-chunk_size = 67108864
+writer_threads = 3
+reader_threads = 3
+chunk_size = 67108864 # 64MB
 block_zone_capacity = 1129316352
 max_write_size = 131072
 
@@ -16,10 +16,11 @@ remote_artificial_delay_microsec = 40632
 
 [eviction]
 eviction_policy = "chunk"
-high_water_evict = 100 # Number remaining from end, evicts if reaches here
-low_water_evict = 150  # Evict until below mark
-high_water_clean = 40 # Number of invalids when we begin cleaning
-low_water_clean = 20  # Clean until below mark (only used with chunk)
+# These numbers are in chunks
+high_water_evict = 10 # Number remaining from end, evicts if reaches here
+low_water_evict = 15  # Evict until below mark
+high_water_clean = 4 # Number of invalids when we begin cleaning
+low_water_clean = 2  # Clean until below mark (only used with chunk)
 eviction_interval = 1  # Evict every 1s
 
 [metrics]

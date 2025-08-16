@@ -2,6 +2,7 @@ use bincode::error::DecodeError;
 use bytes::Bytes;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
+use log::debug;
 use nvme::types::Byte;
 use oxcache::request;
 use oxcache::request::{GetRequest, Request};
@@ -129,7 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 format!("[t.{}] Received error {} from client", c, s),
                             ));
                         }
-                        request::GetResponse::Response(_) => {}
+                        request::GetResponse::Response(_) => {
+                            println!("[t.{}] Client got response", c);
+                        }
                     }
                 }
             }

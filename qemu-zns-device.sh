@@ -30,9 +30,9 @@ fi
 sector_size=4096
 zone_size=128
 zone_capacity=0
-disk_size=32
-max_open=14
-max_active=14
+disk_size=1 # Gigabyte
+max_open=3
+max_active=3
 zasl=5
 img=""
 hostdir=""
@@ -70,12 +70,14 @@ fi
 sudo qemu-img resize "$img" 32G
 
 # Make the raw disk images
-znsimg=/var/lib/qemu/images/zns.raw
+# znsimg=/var/lib/qemu/images/zns.raw
+znsimg=/mnt/zns.raw
 sudo mkdir -p "$(dirname ${znsimg})"
 sudo touch ${znsimg}
 sudo truncate -s "${disk_size}"G ${znsimg}
 
-ssdimg=/var/lib/qemu/images/ssd.raw
+# ssdimg=/var/lib/qemu/images/ssd.raw
+ssdimg=/mnt/ssd.raw
 sudo mkdir -p "$(dirname ${ssdimg})"
 sudo touch ${ssdimg}
 sudo truncate -s "${disk_size}"G ${ssdimg}

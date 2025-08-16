@@ -239,6 +239,9 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     fn get_evict_targets(&mut self) -> Self::Target {
         let lru_len = self.lru.len() as Chunk;
         let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
+
+        // Returns which chunks need to be invalidated 
+
         let high_water_mark = nr_chunks - self.high_water;
         if lru_len < high_water_mark {
             return vec![];
@@ -246,6 +249,8 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
         let low_water_mark = nr_chunks - self.low_water;
         let cap = lru_len - low_water_mark;
+
+        dbg!(low_water_mark);
 
         let mut targets = Vec::with_capacity(cap as usize);
         while self.lru.len() as Chunk >= low_water_mark {
@@ -255,13 +260,15 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
             // Adjust pq
             self.pq.modify_priority(target_zone, 1);
-            log::trace!("Increased priority for zone {}", target_zone);
+            log::debug!("Increased priority for zone {}", target_zone);
         }
 
         targets
     }
 
+    // Returns the targets that need to be cleaned
     fn get_clean_targets(&mut self) -> Self::CleanTarget {
+        log::debug!("Getting clean targets");
         self.pq.remove_if_thresh_met()
     }
 }

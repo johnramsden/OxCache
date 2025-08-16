@@ -318,7 +318,7 @@ pub fn report_zones(
 
 /// Returns the number of zones for the given NVMe device and namespace.
 pub fn get_active_zones(fd: RawFd, nsid: u32) -> Result<usize, NVMeError> {
-    match report_zones(fd, nsid, 0, 256, 0) {
+    match report_zones(fd, nsid, 0, 8, 0) {
         Ok((_nz, zd)) => {
             let mut cnt = 0;
             for z in zd {

@@ -67,6 +67,8 @@ impl Cache {
             // Bucket read locked -- no one can write to map
             let bucket_guard = self.bm.read().await;
 
+            dbg!(&bucket_guard.zone_to_entry);
+
             if let Some(state) = bucket_guard.buckets.get(&key) {
                 let state = Arc::clone(state);
                 drop(bucket_guard);
@@ -134,6 +136,8 @@ impl Cache {
                 let write_result = writer().await;
                 match write_result {
                     Err(e) => {
+                        panic!("Error");
+                        
                         // extract notify and drop chunk_loc_guard BEFORE acquiring buckets.write()
                         let notify = match &*chunk_loc_guard {
                             ChunkState::Waiting(n) => Some(n.clone()),
@@ -152,10 +156,14 @@ impl Cache {
                     }
                     Ok(location) => {
                         *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
-                        drop(chunk_loc_guard);
 
                         let mut reverse_mapping_guard = self.bm.write().await;
                         reverse_mapping_guard.zone_to_entry[location.as_index()] = Some(key);
+
+                        log::debug!("reverse: {:#?}", reverse_mapping_guard.zone_to_entry);
+
+                        drop(chunk_loc_guard);
+
                     }
                 }
 
@@ -169,6 +177,8 @@ impl Cache {
     /// Internal use: won't remove them from the map if they don't
     /// exist in the reverse mapping
     pub async fn remove_zones(&self, zone_indices: &[Zone]) -> tokio::io::Result<()> {
+        log::debug!("Remove zones called: zones {:#?} removed", zone_indices);
+
         let mut map_guard = self.bm.write().await;
 
         // Loop over zones
@@ -190,6 +200,7 @@ impl Cache {
                 let entry = match map_guard.buckets.remove(&chunk) {
                     Some(v) => v,
                     None => {
+                        panic!("Couldn't find entry while removing zones: {:?}", chunk);
                         return Err(io::Error::new(
                             io::ErrorKind::NotFound,
                             format!("Couldn't find entry while removing zones: {:?}", chunk),
@@ -200,11 +211,15 @@ impl Cache {
                 let _ = entry.write().await;
             }
 
+            log::debug!("Remove zones, map guard mod before {:#?}", map_guard.zone_to_entry);            
+
             // Now safe to mutate reverse_mapping
             map_guard
                 .zone_to_entry
                 .slice_mut(zone_slice)
                 .map_inplace(|v| *v = None);
+
+            log::debug!("Remove zones, map guard mod after {:#?}", map_guard.zone_to_entry);
         }
 
         Ok(())
@@ -224,7 +239,10 @@ impl Cache {
     {
         use ndarray::s;
 
+        log::debug!("Clean zone and update map called");
+
         // Collect items and corresponding notifiers
+        // 
         let (items, notifies) = {
             // TODO: Can we deadlock here?
             let mut bm = self.bm.write().await;
@@ -232,6 +250,7 @@ impl Cache {
             let mut out = Vec::new();
             let mut notifies = Vec::new();
 
+            // Invalid chunks should have been removed before
             for opt_key in bm.zone_to_entry.slice(zone_slice).iter() {
                 // Collect only if Some
                 if let Some(key) = opt_key.clone() {
@@ -245,6 +264,8 @@ impl Cache {
                         ChunkState::Ready(loc) => Arc::clone(loc),
                         ChunkState::Waiting(_) => {
                             // TODO: Shouldnt occur since zone was full
+                            // Actually this could happen?
+                            panic!("Waitinf but should have been ready");
                             return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
                         }
                     };
@@ -270,6 +291,7 @@ impl Cache {
             Err(e) => {
                 // TODO: Should we bother? Probably still fatal
                 // rollback
+                panic!("{}", e);
                 for (_, old_loc, entry) in &items {
                     let mut st = entry.write().await;
                     *st = ChunkState::Ready(Arc::clone(old_loc));
@@ -321,6 +343,9 @@ impl Cache {
 
 
     pub async fn remove_entry(&self, chunk: &ChunkLocation) -> tokio::io::Result<()> {
+        log::debug!("Remove entry called: removing {:#?}", chunk);
+
+
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
         let mut bucket_guard = self.bm.write().await;
@@ -341,6 +366,8 @@ impl Cache {
     }
 
     pub async fn remove_entries(&self, chunks: &[ChunkLocation]) -> tokio::io::Result<()> {
+        log::debug!("Remove entries called: removing {:#?}", chunks);
+        
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
         let mut bucket_guard = self.bm.write().await;
@@ -351,7 +378,11 @@ impl Cache {
                     bucket_guard.zone_to_entry[chunk.as_index()].take();
                     id
                 }
-                None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
+                None => {
+                    // This is panicking
+                    panic!("Couldn't find chunk {:?} in {:#?}", chunk, bucket_guard);
+                    return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk"))
+                },
             };
 
             bucket_guard
@@ -417,6 +448,7 @@ impl Cache {
                         // This is the condition where you could be left with something in the waiting state
                         Err(e)
                     }
+
                     Ok(location) => {
                         *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
                         let mut reverse_mapping_guard = self.bm.write().await;

@@ -4,6 +4,7 @@ pub(crate) type ZoneIndex = nvme::types::Zone;
 use nvme::types::{Chunk, Zone};
 type ZonePriority = Chunk;
 
+#[derive(Debug)]
 pub struct ZonePriorityQueue {
     invalid_count: ZonePriority,
     invalid_queue: PriorityQueue<ZoneIndex, ZonePriority>, // max-heap by priority
@@ -41,7 +42,8 @@ impl ZonePriorityQueue {
     // If above high watermark, clean until strictly below low watermark
     pub fn remove_if_thresh_met(&mut self) -> Vec<ZoneIndex> {
         let mut zones = Vec::new();
-        log::trace!("[evict:Chunk] Cleaning zones, invalid={}", self.invalid_count);
+        log::debug!("[evict:Chunk] Cleaning zones, invalid={}", self.invalid_count);
+        log::debug!("[evict:Chunk] State: {:?}", self);
         if self.invalid_count < self.high_water_thresh {
             return zones;
         }
