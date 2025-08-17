@@ -1,3 +1,4 @@
+use std::fs;
 use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::{EvictTarget, EvictorMessage};
@@ -131,6 +132,8 @@ pub fn get_device(
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
 ) -> io::Result<Arc<dyn Device>> {
+    let device = fs::canonicalize(device)?;
+    let device = device.to_str().unwrap();
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
         Ok(Arc::new(Zoned::new(
@@ -433,7 +436,7 @@ impl Device for Zoned {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
-                    // log::trace!("[append] Failed to get free zone: {}", err);
+                    log::trace!("[append] Failed to get free zone: {}", err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -760,7 +763,7 @@ impl Device for BlockInterface {
             match state.active_zones.remove_chunk_location() {
                 Ok(location) => break location,
                 Err(_) => {
-                    log::error!(
+                    log::trace!(
                         "[append] Failed to allocate chunk: no available space in active zones"
                     );
                 }
