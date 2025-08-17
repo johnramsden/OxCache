@@ -49,6 +49,8 @@ pub struct ServerEvictionConfig {
     pub eviction_type: String,
     pub high_water_evict: u64,
     pub low_water_evict: u64,
+    pub high_water_clean: Option<u64>,
+    pub low_water_clean: Option<u64>,
     pub eviction_interval: u64,
 }
 
@@ -146,6 +148,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.config.eviction.low_water_evict,
             self.device.get_num_zones(),
             self.device.get_chunks_per_zone(),
+            self.config.eviction.high_water_clean,
+            self.config.eviction.low_water_clean,
         )?));
 
         let evictor = Evictor::start(

@@ -1,5 +1,7 @@
+use std::io::ErrorKind;
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
+use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru::LruCache;
 use nvme::types::{Chunk, Zone};
@@ -9,6 +11,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use crate::zone_state::zone_priority_queue;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -18,7 +21,7 @@ pub enum EvictionPolicyWrapper {
 
 #[derive(Debug)]
 pub enum EvictTarget {
-    Chunk(Vec<ChunkLocation>),
+    Chunk(Vec<ChunkLocation>, Vec<ZoneIndex>),
     Zone(Vec<Zone>),
 }
 
@@ -29,15 +32,24 @@ impl EvictionPolicyWrapper {
         low_water: Zone,
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
+        clean_high_water: Option<Chunk>,
+        clean_low_water: Option<Chunk>,
     ) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
             "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
-            "chunk" => Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(
-                high_water,
-                low_water,
-                nr_zones,
-                nr_chunks_per_zone,
-            ))),
+            "chunk" => {
+                if clean_high_water.is_none() || clean_low_water.is_none() {
+                    return Err(std::io::Error::new(ErrorKind::InvalidInput, "Chunk eviction must have clean_high_water and clean_low_water"));
+                }
+                Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(
+                    high_water,
+                    low_water,
+                    clean_high_water.unwrap(),
+                    clean_low_water.unwrap(),
+                    nr_zones,
+                    nr_chunks_per_zone,
+                )))
+            },
             "promotional" => Ok(EvictionPolicyWrapper::Promotional(
                 PromotionalEvictionPolicy::new(high_water, low_water, nr_zones, nr_chunks_per_zone),
             )),
@@ -69,17 +81,24 @@ impl EvictionPolicyWrapper {
             EvictionPolicyWrapper::Promotional(promotional) => {
                 EvictTarget::Zone(promotional.get_evict_targets())
             }
-            EvictionPolicyWrapper::Chunk(c) => EvictTarget::Chunk(c.get_evict_targets()),
+            EvictionPolicyWrapper::Chunk(c) => {
+                let et = c.get_evict_targets();
+                let ct = c.get_clean_targets();
+                EvictTarget::Chunk(et, ct)
+            },
         }
     }
 }
 
 pub trait EvictionPolicy: Send + Sync {
     type Target: Clone + Send + Sync + 'static;
+    type CleanTarget: Clone + Send + Sync + 'static;
 
     fn write_update(&mut self, chunk: ChunkLocation);
     fn read_update(&mut self, chunk: ChunkLocation);
     fn get_evict_targets(&mut self) -> Self::Target;
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget;
 }
 
 pub struct DummyEvictionPolicy {}
@@ -92,6 +111,7 @@ impl DummyEvictionPolicy {
 
 impl EvictionPolicy for DummyEvictionPolicy {
     type Target = Vec<Zone>;
+    type CleanTarget = ();
     fn write_update(&mut self, _chunk: ChunkLocation) {}
 
     fn read_update(&mut self, _chunk: ChunkLocation) {}
@@ -99,6 +119,8 @@ impl EvictionPolicy for DummyEvictionPolicy {
     fn get_evict_targets(&mut self) -> Self::Target {
         vec![]
     }
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
 }
 
 pub struct PromotionalEvictionPolicy {
@@ -131,6 +153,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     /// Promotional LRU
     /// Performs LRU based on full zones
     type Target = Vec<Zone>;
+    type CleanTarget = ();
 
     fn write_update(&mut self, chunk: ChunkLocation) {
         assert!(!self.lru.contains(&chunk.zone));
@@ -158,10 +181,6 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         }
 
         let low_water_mark = self.nr_zones - self.low_water;
-        if lru_len < low_water_mark {
-            return vec![];
-        }
-
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
@@ -172,6 +191,8 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
 
         targets
     }
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
 }
 
 pub struct ChunkEvictionPolicy {
@@ -180,12 +201,15 @@ pub struct ChunkEvictionPolicy {
     nr_zones: Zone,
     nr_chunks_per_zone: Chunk,
     lru: LruCache<ChunkLocation, ()>,
+    pq: ZonePriorityQueue
 }
 
 impl ChunkEvictionPolicy {
     pub fn new(
         high_water: Chunk,
         low_water: Chunk,
+        clean_high_water: Chunk,
+        clean_low_water: Chunk,
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
     ) -> Self {
@@ -195,18 +219,20 @@ impl ChunkEvictionPolicy {
             nr_zones,
             nr_chunks_per_zone,
             lru: LruCache::unbounded(),
+            pq: ZonePriorityQueue::new(nr_zones, clean_high_water, clean_low_water)
         }
     }
 }
 
 impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
+    type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
         self.lru.put(chunk, ());
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
-        assert!(self.lru.contains(&chunk));
+        // assert!(self.lru.contains(&chunk)); // TODO: Race cond with chunk evict?
         self.lru.put(chunk, ());
     }
 
@@ -219,18 +245,24 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         }
 
         let low_water_mark = nr_chunks - self.low_water;
-        if lru_len < low_water_mark {
-            return vec![];
-        }
-
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
-        while lru_len >= low_water_mark {
-            targets.push(self.lru.pop_lru().unwrap().0)
+        while self.lru.len() as Chunk >= low_water_mark {
+            let targ = self.lru.pop_lru().unwrap().0;
+            let target_zone = targ.zone;
+            targets.push(targ);
+
+            // Adjust pq
+            self.pq.modify_priority(target_zone, 1);
+            log::trace!("Increased priority for zone {}", target_zone);
         }
 
         targets
+    }
+
+    fn get_clean_targets(&mut self) -> Self::CleanTarget {
+        self.pq.remove_if_thresh_met()
     }
 }
 
@@ -361,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_chunk_update_ordering() {
-        let mut policy = ChunkEvictionPolicy::new(1, 3, 2, 2);
+        let mut policy = ChunkEvictionPolicy::new(1, 3, 0, 0, 2, 2);
 
         // zone=[_,_,_,_], lru=()
         let c = ChunkLocation::new(1, 0);
@@ -481,5 +513,24 @@ mod tests {
         assert_eq!(expect, et, "Expected = {:?}, but got {:?}", expect, et);
 
         compare_order(&mut policy.lru, &VecDeque::from(vec![]));
+    }
+
+    #[test]
+    fn check_chunk_priority_queue() {
+        // 8 zones, 1 chunks per zone. Should evict at 3 inserted
+        let mut policy = ChunkEvictionPolicy::new(
+            2, 6, 1, 4, 4, 2);
+
+        for z in 0..3 {
+            for i in 0..2 {
+                policy.write_update(ChunkLocation::new(z, i));
+            }
+        }
+
+        let got = policy.get_evict_targets().len();
+        assert_eq!(5, got, "Expected 5, but got {}", got);
+
+        let got = policy.get_clean_targets().len();
+        assert_eq!(0, got, "Expected 0, but got {}", got);
     }
 }

@@ -1,3 +1,4 @@
+use std::fs;
 use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::{EvictTarget, EvictorMessage};
@@ -12,6 +13,8 @@ use std::io::{self, ErrorKind};
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::metrics::{MetricType, METRICS};
+use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
+use crate::cache::bucket::Chunk as CacheKey;
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -129,6 +132,8 @@ pub fn get_device(
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
 ) -> io::Result<Arc<dyn Device>> {
+    let device = fs::canonicalize(device)?;
+    let device = device.to_str().unwrap();
     let is_zoned = is_zoned_device(device)?;
     if is_zoned {
         Ok(Arc::new(Zoned::new(
@@ -197,7 +202,7 @@ impl Zoned {
         let mut zone_list = mtx.lock().unwrap();
 
         let active_zones = get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap();
-        log::debug!("active zones: {}", active_zones);
+        // log::debug!("active zones: {}", active_zones);
         // assert!(zone_list.get_open_zones() == active_zones, "{} vs {}", zone_list.get_open_zones(), active_zones);
         assert!(active_zones <= self.config.max_active_resources as usize);
 
@@ -237,6 +242,7 @@ impl Zoned {
 
         Ok(())
     }
+
 }
 
 impl Zoned {
@@ -423,7 +429,6 @@ impl Zoned {
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-        log::debug!("Appending");
 
         let sz = data.len() as u64;
 
@@ -431,7 +436,7 @@ impl Device for Zoned {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
-                    log::error!("[append] Failed to get free zone: {}", err);
+                    log::trace!("[append] Failed to get free zone: {}", err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -453,7 +458,7 @@ impl Device for Zoned {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
         let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
         let slba = self.config.get_address_at(location.zone, location.index);
-        log::debug!("Read slba = {} for {:?}", slba, location);
+        log::trace!("Read slba = {} for {:?}", slba, location);
 
         let start = std::time::Instant::now();
         self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
@@ -462,63 +467,101 @@ impl Device for Zoned {
         Ok(Bytes::from(data))
     }
 
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
-        log::debug!("Current device usage is at: {}", self.get_use_percentage());
+    fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
+        log::info!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
-            EvictTarget::Chunk(mut chunk_locations) => {
-                // TODO: Check that the units match
+            EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
+                if chunk_locations.is_empty() {
+                    return Ok(());
+                }
+                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
-                // Check all zones are the same, this isn't a
-                // restriction but it makes implementation
-                // easier. This can be changed later
-                assert!(
-                    chunk_locations
-                        .iter()
-                        .all(|loc| loc.zone == chunk_locations[0].zone)
-                );
-                let zone_to_evict = chunk_locations[0].zone;
+                // Remove from map (invalidation)
+                RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
 
-                // TODO: Does this need to be aligned?
-                let mut read_buf = vec![
-                    0_u8;
-                    (self.config.zone_cap * self.nvme_config.logical_block_size)
-                        as usize
-                ];
-                self.read_into_buffer(
-                    self.max_write_size,
-                    self.config.get_starting_lba(zone_to_evict),
-                    &mut read_buf,
-                    &self.nvme_config,
-                )?;
-                let zones_to_reset = [chunk_locations[0].zone];
+                {
+                    let (zone_mtx, _) = &*self.zones;
+                    let mut zones = zone_mtx.lock().unwrap();
+                    for c in chunk_locations {
+                        zones.return_chunk_location(&c, false);
+                    }
+                }
 
-                chunk_locations.sort_by(|cl1, cl2| cl1.index.cmp(&cl2.index));
+                // Cleaning
+                for zone in clean_locations {
+                    let zs = nvme::info::get_zone_state(self.nvme_config.fd, self.nvme_config.nsid, zone).unwrap();
+                    if zs == ZoneState::Full || zs == ZoneState::Closed {
+                        log::trace!("Correct state for eviction of {}: {:?}", zone, zs);
+                    } else {
+                        log::trace!("Incorrect state for eviction of {}: {:?}", zone, zs);
+                        panic!("Incorrect state for eviction");
+                    }
 
-                let mut to_keep: Vec<ChunkLocation> = Vec::new();
-                // Iterates through the chunks to discard, skipping
-                // them and adding the chunks between instead.
-                chunk_locations.iter().fold(0, |prev, cur| {
-                    to_keep.extend(
-                        (prev..cur.index)
-                            .map(|chunk_idx| ChunkLocation::new(zone_to_evict, chunk_idx)),
-                    );
-                    cur.index + 1
-                });
+                    RUNTIME.block_on(cache.clean_zone_and_update_map(
+                        zone,
+                        {
+                            // Reads all chunks in zone and returns buffer [(Chunk, Bytes)]
+                            let this = self;
+                            move |items: Vec<(CacheKey, Arc<ChunkLocation>)>| {
+                                async move {
+                                    // Increasing chunk index, might not be neccesary
+                                    let mut items = items;
+                                    items.sort_by_key(|(_, loc)| loc.index);
 
-                RUNTIME.block_on(cache.remove_zones_and_update_entries(
-                    &zones_to_reset,
-                    &to_keep,
-                    || Ok(self.compact_zone(zone_to_evict, &to_keep, &mut read_buf)?),
-                ))?;
+                                    let mut out = Vec::with_capacity(items.len());
+                                    for (key, loc) in items {
+                                        let bytes = this.read((*loc).clone())?; // one full chunk
+                                        out.push((key, bytes));
+                                    }
+                                    Ok(out)
+                                }
+                            }
+                        },
+                        {
+                            // Writer callback, reset then rewrite valid chunks
+                            let this = self;
+                            move |payloads: Vec<(CacheKey, bytes::Bytes)>| {
+                                async move {
+                                    // Reset the zone so the write pointer returns to the start.
+                                    {
+                                        let (zone_mtx, _) = &*this.zones;
+                                        let mut zones = zone_mtx.lock().unwrap();
+                                        let remaining = this.config.chunks_per_zone - payloads.len() as u64;
+                                        zones.reset_zone_with_capacity(zone, remaining, this)?;
+                                    }
 
-                let (zone_mtx, _) = &*self.zones;
-                let mut zones = zone_mtx.lock().unwrap();
-                // TODO: reset zones for device
-                zones.reset_zone_with_capacity(
-                    zone_to_evict,
-                    self.get_chunks_per_zone() - to_keep.len() as Chunk,
-                );
+                                    let payloads_empty = payloads.is_empty();
+                                    let new_locs = if !payloads_empty {
+                                        // Append bufferred data
+                                        let mut new_locs = Vec::with_capacity(payloads.len());
+                                        for (key, data) in payloads {
+                                            let loc = this.chunked_append(data, zone)?;
+                                            new_locs.push((key, loc));
+                                        }
+                                        new_locs
+                                    } else {
+                                        vec![]
+                                    };
+
+                                    {
+                                        let (zone_mtx, cv) = &*this.zones;
+                                        let mut zones = zone_mtx.lock().unwrap();
+                                        zones.return_zone(zone);
+                                        if !payloads_empty {
+                                            this.close_zone(zone)?;
+                                        }
+                                        cv.notify_all();
+                                    }
+
+                                    Ok(new_locs) // Vec<(Chunk, ChunkLocation)>
+                                }
+                            }
+                        },
+                    ))?;
+                    log::debug!("[evict:Chunk] Cleaned zone {}", zone);
+                }
+
                 Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
@@ -527,6 +570,8 @@ impl Device for Zoned {
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict, self)?;
+
+                log::debug!("Zones evicted: {:?}", zones_to_evict);
 
                 Ok(())
             }
@@ -710,7 +755,6 @@ impl BlockInterface {
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-        log::debug!("Appending");
         let sz = data.len() as u64;
         let mtx = self.state.clone();
 
@@ -719,7 +763,7 @@ impl Device for BlockInterface {
             match state.active_zones.remove_chunk_location() {
                 Ok(location) => break location,
                 Err(_) => {
-                    log::error!(
+                    log::trace!(
                         "[append] Failed to allocate chunk: no available space in active zones"
                     );
                 }
@@ -761,21 +805,22 @@ impl Device for BlockInterface {
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
         match locations {
-            EvictTarget::Chunk(chunk_locations) => {
-                // TODO: Check units
+            EvictTarget::Chunk(chunk_locations, _) => {
 
                 if chunk_locations.is_empty() {
                     log::debug!("[evict:Chunk] No zones to evict");
                     return Ok(());
                 }
-                log::debug!("[evict:Chunk] Evicting zones {:?}", chunk_locations);
+                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
                 let state_mtx = Arc::clone(&self.state);
-                let _state = state_mtx.lock().unwrap();
-                // Need to change the block interface bookkeeping so
-                // that it can keep track of the list of empty chunks
-                todo!();
+                let mut state = state_mtx.lock().unwrap();
+                for c in chunk_locations {
+                    state.active_zones.return_chunk_location(&c, true);
+                }
+
+                Ok(())
             }
             EvictTarget::Zone(locations) => {
                 if locations.is_empty() {

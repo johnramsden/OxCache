@@ -8,11 +8,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self};
 
 type ZoneIndex = nvme::types::Zone;
+type ZonePriority = usize;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Zone {
     pub index: ZoneIndex,
-    pub chunks_available: Chunk,
+    pub chunks_available: Vec<Chunk>,
 }
 
 #[derive(Debug)]
@@ -23,8 +24,9 @@ pub enum ZoneObtainFailure {
 
 #[derive(Debug)]
 pub struct ZoneList {
-    pub free_zones: VecDeque<Zone>, // Unopened zones with full capacity
-    pub open_zones: VecDeque<Zone>, // Opened zones
+    pub zones: HashMap<ZoneIndex, Zone>, // Zones referenced by {free,open}_zones
+    pub free_zones: VecDeque<ZoneIndex>, // Unopened zones with full capacity
+    pub open_zones: VecDeque<ZoneIndex>, // Opened zones
     pub writing_zones: HashMap<ZoneIndex, u32>, // Count of currently writing threads
     pub chunks_per_zone: Chunk,
     pub max_active_resources: usize,
@@ -33,19 +35,20 @@ pub struct ZoneList {
 impl ZoneList {
     pub fn new(num_zones: ZoneIndex, chunks_per_zone: Chunk, max_active_resources: usize) -> Self {
         // List of all zones, initially all are "free"
-        let avail_zones = (0..num_zones)
-            .map(|index| Zone {
-                index,
-                chunks_available: chunks_per_zone,
-            })
+        let avail_zones = (0..num_zones).collect();
+        let zones = (0..num_zones)
+            .map(|item| (item, Zone {
+                index: item,
+                chunks_available: (0..chunks_per_zone).rev().collect()
+            })) // (key, value)
             .collect();
-
         ZoneList {
             free_zones: avail_zones,
             open_zones: VecDeque::with_capacity(max_active_resources),
             writing_zones: HashMap::with_capacity(max_active_resources),
             chunks_per_zone,
-            max_active_resources,
+            max_active_resources: max_active_resources-1, // Keep one reserved for eviction
+            zones,
         }
     }
 
@@ -56,6 +59,7 @@ impl ZoneList {
             return Err(EvictNow);
         }
 
+        // Open first if possible
         let can_open_more_zones =
             self.get_open_zones() < self.max_active_resources && self.free_zones.len() > 0;
 
@@ -76,42 +80,51 @@ impl ZoneList {
         }
 
         let zone = if can_open_more_zones {
-            let res = self.free_zones.pop_front();
-            log::debug!("[ZoneList]: Opening zone {}", res.as_ref().unwrap().index);
-            res
+            // Open a new zone
+            let res = self.free_zones.pop_front().unwrap();
+            log::debug!("[ZoneList]: Opening zone {}", res);
+            self.zones.get_mut(&res)
         } else {
-            let res = self.open_zones.pop_front();
+            // Grab an existing zone
+            let res = self.open_zones.pop_front().unwrap();
+            let res = self.zones.get_mut(&res);
             log::debug!(
-                "[ZoneList]: Using existing zone {} with {} chunks",
+                "[ZoneList]: Using existing zone {} with {:?} chunks",
                 res.as_ref().unwrap().index,
                 res.as_ref().unwrap().chunks_available
             );
             res
         };
-        let mut zone = zone.unwrap();
 
-        if zone.chunks_available <= 0 {
+        let mut zone = zone.unwrap();
+        let zone_index = zone.index;
+
+        if zone.chunks_available.len() <= 0 {
             panic!("[ZoneList]: Checked subtraction failed: {:?}", self);
         }
 
-        zone.chunks_available -= 1;
-        if zone.chunks_available >= 1 {
-            log::debug!("[ZoneList]: Returning zone back to use: {}", zone.index);
-            self.open_zones.push_back(zone);
+        zone.chunks_available.pop();
+        if zone.chunks_available.len() >= 1 {
+            log::debug!("[ZoneList]: Returning zone back to use: {}", zone_index);
+            self.open_zones.push_back(zone_index);
         } else {
-            log::debug!("[ZoneList]: Not returning zone back to use: {}", zone.index);
+            log::debug!("[ZoneList]: Not returning zone back to use: {}", zone_index);
         }
 
         self.writing_zones
-            .entry(zone.index)
+            .entry(zone_index)
             .and_modify(|v| *v += 1)
             .or_insert(1);
         log::debug!(
             "[ZoneList]: Now {} threads are writing into zone {}",
-            self.writing_zones.get(&zone.index).unwrap(),
-            zone.index
+            self.writing_zones.get(&zone_index).unwrap(),
+            zone_index
         );
-        Ok(zone.index)
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
+        Ok(zone_index)
     }
 
     // Zoned implementations should call this once they are finished with appending.
@@ -121,7 +134,12 @@ impl ZoneList {
         device: &dyn device::Device,
         finish_zone: bool,
     ) -> io::Result<()> {
-        let write_num = self.writing_zones.get(&zone_index).unwrap();
+        let write_num = self.writing_zones.get(&zone_index);
+        let write_num = if let Some(write_num) = write_num {
+            write_num
+        } else {
+            return Ok(()); // We were evicting, so we didn't account
+        };
         log::debug!(
             "[ZoneList]: Finishing write to {}, writenum = {}",
             zone_index,
@@ -176,17 +194,48 @@ impl ZoneList {
         } else {
             self.open_zones.pop_front()
         };
-        let mut zone = zone.unwrap();
-        zone.chunks_available -= 1;
-        if zone.chunks_available >= 1 {
-            self.open_zones.push_back(zone);
+        let zone_index = zone.unwrap();
+        let mut zone = self.zones.get_mut(&zone_index).unwrap();
+        let chunk = zone.chunks_available.pop().unwrap();
+        if zone.chunks_available.len() >= 1 {
+            self.open_zones.push_back(zone_index);
         }
 
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
         Ok(ChunkLocation {
-            zone: zone.index,
-            // + 1 since we subtracted by 1 earlier
-            index: (self.chunks_per_zone - (zone.chunks_available + 1)) as u64,
+            zone: zone_index,
+            index: chunk,
         })
+    }
+
+    // Used to return chunks after chunk eviction
+    pub fn return_chunk_location(&mut self, chunk: &ChunkLocation, return_zone: bool) {
+        {
+            let zone = self.zones.get_mut(&chunk.zone).unwrap();
+
+            assert!(
+                !zone.chunks_available.contains(&chunk.index),
+                "Zone {} should not contain chunk {} we are trying to return",
+                chunk.zone, chunk.index
+            );
+
+            log::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+
+            // Return it
+            zone.chunks_available.push(chunk.index);
+
+            // If len == 1, it was empty, must be returned to free zones, otherwise it already was
+            // Goes in free to avoid exceeding max_active_resources
+            if zone.chunks_available.len() == 1 && return_zone {
+                self.free_zones.push_back(chunk.zone);
+            }
+            log::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
+        }
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
     }
 
     // Check if all zones are full
@@ -197,14 +246,9 @@ impl ZoneList {
     // Gets the number of open zones by counting the unique
     // zones listed in open_zones and writing_zones
     pub fn get_open_zones(&self) -> usize {
-        // TODO: This is slow, O(n)
-
-        // I don't think it's super slow because there will be at most
-        // 2 * max_active_resources zones.
         let open_zone_list = self
             .open_zones
             .iter()
-            .map(|zone| &zone.index)
             .collect::<HashSet<&ZoneIndex>>();
 
         self.writing_zones
@@ -223,15 +267,13 @@ impl ZoneList {
     ) -> std::io::Result<()> {
         debug_assert!(!self.writing_zones.contains_key(&idx));
 
-        debug_assert!({
-            let mut zone_indices = self.open_zones.iter().map(|zone| zone.index);
-            !zone_indices.any(|zidx| zidx == idx)
-        });
+        let zone = self.zones.get_mut(&idx).unwrap();
+        zone.chunks_available = (0..self.chunks_per_zone).rev().collect();
 
-        self.free_zones.push_back(Zone {
-            index: idx,
-            chunks_available: self.chunks_per_zone,
-        });
+        self.free_zones.push_back(idx);
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
 
         device.reset_zone(idx)
     }
@@ -248,18 +290,77 @@ impl ZoneList {
         Ok(())
     }
 
-    pub fn reset_zone_with_capacity(&mut self, idx: ZoneIndex, remaining: Chunk) {
-        self.free_zones.push_back(Zone {
-            index: idx,
-            chunks_available: remaining,
-        });
+    pub fn reset_zone_with_capacity(
+        &mut self,
+        idx: ZoneIndex,
+        remaining: Chunk,
+        device: &dyn device::Device
+    ) -> std::io::Result<()> {
+        let zone = self.zones.get_mut(&idx).unwrap();
+        zone.chunks_available = (self.chunks_per_zone-remaining..self.chunks_per_zone).rev().collect();
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
+        device.reset_zone(idx)
+    }
+    pub fn return_zone(
+        &mut self,
+        idx: ZoneIndex,
+    ) {
+
+        self.free_zones.push_back(idx);
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
     }
 
     pub fn get_num_available_chunks(&self) -> Chunk {
-        self.open_zones
+        // Total available chunks in open zones
+        let open_zone_chunks: Chunk = self
+            .open_zones
             .iter()
-            .fold(0, |avail, zone| avail + zone.chunks_available)
-            + (self.free_zones.len() as ZoneIndex * self.chunks_per_zone)
+            .map(|zone_index| {
+                // Look up the Zone struct for this zone index
+                let zone = self.zones.get(zone_index).unwrap();
+
+                // Count how many chunks are still available in this zone
+                zone.chunks_available.len() as Chunk
+            })
+            .sum();
+
+        // Total available chunks in completely free zones
+        let free_zone_chunks: Chunk =
+            (self.free_zones.len() as Chunk) * self.chunks_per_zone;
+
+        // Grand total
+        open_zone_chunks + free_zone_chunks
+    }
+
+    fn check_invariants(&self) {
+        // TODO: Add more checks
+
+        // free_zones & open are unique and dont share elems
+        {
+
+            let set_free: HashSet<_> = self.free_zones.iter().collect();
+            let set_open: HashSet<_> = self.open_zones.iter().collect();
+
+            // Assert no overlap
+            assert!(
+                set_free.is_disjoint(&set_open),
+                "Free and Open zone have overlapping elements"
+            );
+
+            if set_free.len() != self.free_zones.len() {
+                println!("free_zones: {:?}", self.free_zones);
+                println!("zones: {:?}", self.zones);
+                // no dupes
+                assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
+            }
+            
+            assert_eq!(set_open.len(), self.open_zones.len(), "Open list has duplicate elements");
+        }
     }
 }
 
