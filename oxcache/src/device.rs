@@ -12,7 +12,6 @@ use std::io::{self, ErrorKind};
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::metrics::{MetricType, METRICS};
-use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use crate::cache::bucket::Chunk as CacheKey;
 
 pub struct Zoned {
@@ -168,6 +167,7 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
 }
 
 impl Zoned {
+    #[allow(dead_code)]
     fn compact_zone(
         &self,
         zone_to_compact: Zone,
@@ -433,7 +433,7 @@ impl Device for Zoned {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
-                    // log::trace!("[append] Failed to get free zone: {}", err);
+                    log::trace!("[append] Failed to get free zone: {}", err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -468,7 +468,7 @@ impl Device for Zoned {
         log::debug!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
-            EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
+            EvictTarget::Chunk(chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }

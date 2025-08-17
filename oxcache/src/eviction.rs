@@ -11,7 +11,6 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use crate::zone_state::zone_priority_queue;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),

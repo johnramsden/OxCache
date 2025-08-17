@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self};
 
 type ZoneIndex = nvme::types::Zone;
+#[allow(dead_code)]
 type ZonePriority = usize;
 
 #[derive(Debug, Clone)]
@@ -96,7 +97,7 @@ impl ZoneList {
             res
         };
 
-        let mut zone = zone.unwrap();
+        let zone = zone.unwrap();
         let zone_index = zone.index;
 
         if zone.chunks_available.len() <= 0 {
@@ -195,7 +196,7 @@ impl ZoneList {
             self.open_zones.pop_front()
         };
         let zone_index = zone.unwrap();
-        let mut zone = self.zones.get_mut(&zone_index).unwrap();
+        let zone = self.zones.get_mut(&zone_index).unwrap();
         let chunk = zone.chunks_available.pop().unwrap();
         if zone.chunks_available.len() >= 1 {
             self.open_zones.push_back(zone_index);

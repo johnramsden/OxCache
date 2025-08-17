@@ -1,9 +1,9 @@
 use axum::{routing::get, Router};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use metrics::{counter, gauge, histogram};
+use metrics::{counter, histogram};
 use once_cell::sync::Lazy;
 
 pub static METRICS: Lazy<MetricsRecorder> = Lazy::new(|| {
@@ -57,6 +57,7 @@ impl MetricsRecorder {
             MetricType::MsLatency => {
                 value.as_secs_f64() * MILLISECONDS
             },
+            #[allow(unreachable_patterns)]
             _ => {
                 log::warn!("Unknown metric type");
                 return;

@@ -1,7 +1,7 @@
 use priority_queue::PriorityQueue;
 
 pub(crate) type ZoneIndex = nvme::types::Zone;
-use nvme::types::{Chunk, Zone};
+use nvme::types::{Chunk};
 type ZonePriority = Chunk;
 
 pub struct ZonePriorityQueue {

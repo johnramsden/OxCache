@@ -2,7 +2,6 @@ use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
 use ndarray::{Array2, ArrayBase, s};
 use nvme::types::{self, Zone};
 use std::io::ErrorKind;
-use std::iter::zip;
 use std::sync::Arc;
 use std::{collections::HashMap, io};
 use bytes::Bytes;
@@ -227,7 +226,7 @@ impl Cache {
         // Collect items and corresponding notifiers
         let (items, notifies) = {
             // TODO: Can we deadlock here?
-            let mut bm = self.bm.write().await;
+            let bm = self.bm.write().await;
             let zone_slice = s![zone as usize, ..];
             let mut out = Vec::new();
             let mut notifies = Vec::new();
