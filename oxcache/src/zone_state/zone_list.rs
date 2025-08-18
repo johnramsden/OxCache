@@ -23,6 +23,8 @@ pub enum ZoneObtainFailure {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+/// For block devices, ignore the writing state. Don't need to keep
+/// track of writing zones
 pub enum ZoneStateDbg {
     Closed, Open, Writing, Finished
 }
@@ -30,6 +32,9 @@ pub enum ZoneStateDbg {
 #[derive(Debug)]
 pub struct ZoneDbg {
     pub state: ZoneStateDbg,
+    /// A bit strange, but for block devices with chunk eviction, this
+    /// effectively functions as a counter for the number of chunks
+    /// remaining.
     pub chunk_ptr: Chunk,
 }
 
@@ -197,6 +202,7 @@ impl ZoneList {
         let write_num = if let Some(write_num) = write_num {
             write_num
         } else {
+            // Is this really okay?
             return Ok(()); // We were evicting, so we didn't account
         };
         log::debug!(
@@ -268,7 +274,7 @@ impl ZoneList {
             #[cfg(debug_assertions)]
             {
                 assert_eq!(self.state_tracker[z.unwrap() as usize].state, ZoneStateDbg::Closed);
-                self.state_tracker[z.unwrap() as usize].state = ZoneStateDbg::Writing;
+                self.state_tracker[z.unwrap() as usize].state = ZoneStateDbg::Open;
             };
             z
         } else {
@@ -276,8 +282,7 @@ impl ZoneList {
             #[cfg(debug_assertions)]
             {
                 assert!(
-                    self.state_tracker[z.unwrap() as usize].state == ZoneStateDbg::Open ||
-                    self.state_tracker[z.unwrap() as usize].state == ZoneStateDbg::Writing);
+                    self.state_tracker[z.unwrap() as usize].state == ZoneStateDbg::Open);
             }
             z
         };
@@ -307,27 +312,28 @@ impl ZoneList {
 
     // Used to return chunks after chunk eviction
     pub fn return_chunk_location(&mut self, chunk: &ChunkLocation, return_zone: bool) {
-        {
-            let zone = self.zones.get_mut(&chunk.zone).unwrap();
+        #[cfg(debug_assertions)]
+        self.check_invariants();
 
-            assert!(
-                !zone.chunks_available.contains(&chunk.index),
-                "Zone {} should not contain chunk {} we are trying to return",
-                chunk.zone, chunk.index
-            );
+        let zone = self.zones.get_mut(&chunk.zone).unwrap();
 
-            log::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+        assert!(
+            !zone.chunks_available.contains(&chunk.index),
+            "Zone {} should not contain chunk {} we are trying to return",
+            chunk.zone, chunk.index
+        );
 
-            // Return it
-            zone.chunks_available.push(chunk.index);
+        log::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
 
-            // If len == 1, it was empty, must be returned to free zones, otherwise it already was
-            // Goes in free to avoid exceeding max_active_resources
-            if zone.chunks_available.len() == 1 && return_zone {
-                self.free_zones.push_back(chunk.zone);
-            }
-            log::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
+        // Return it
+        zone.chunks_available.push(chunk.index);
+
+        // If len == 1, it was empty, must be returned to free zones, otherwise it already was
+        // Goes in free to avoid exceeding max_active_resources
+        if zone.chunks_available.len() == 1 && return_zone {
+            self.free_zones.push_back(chunk.zone);
         }
+        log::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
 
         #[cfg(debug_assertions)]
         self.check_invariants();
