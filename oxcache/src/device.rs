@@ -156,7 +156,7 @@ pub fn get_device(
 fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> {
     let (resp_tx, resp_rx) = flume::bounded(1);
     if let Err(e) = eviction_channel.send(EvictorMessage { sender: resp_tx }) {
-        log::error!("[append] Failed to send eviction message: {}", e);
+        tracing::error!("[append] Failed to send eviction message: {}", e);
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "Failed to send eviction message",
@@ -164,7 +164,7 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
     };
 
     if let Err(e) = resp_rx.recv() {
-        log::error!("[append] Failed to receive eviction message: {}", e);
+        tracing::error!("[append] Failed to receive eviction message: {}", e);
     }
 
     Ok(())
@@ -259,7 +259,7 @@ impl Zoned {
 
         match nvme::info::zns_get_info(&nvme_config) {
             Ok(mut config) => {
-                log::debug!("ZNSConfig: {:?}", config);
+                tracing::debug!("ZNSConfig: {:?}", config);
 
                 let chunk_size_in_logical_blocks: LogicalBlock =
                     nvme_config.byte_address_to_lba(chunk_size);
@@ -299,7 +299,7 @@ impl Zoned {
         // Get chunk index
         let chunk_ind = rel_lba / self.config.chunk_size_in_lbas;
 
-        log::debug!(
+        tracing::debug!(
             "zone_index={}, zone_start_lba={}, rel_lba={}, chunk_size={}, chunk_ind={}",
             zone_index,
             zone_start_lba,
@@ -312,12 +312,12 @@ impl Zoned {
     }
 
     fn chunked_append(&self, data: Bytes, zone_index: Zone) -> io::Result<ChunkLocation> {
-        log::debug!("Chunk appending to zone {}", zone_index);
+        tracing::debug!("Chunk appending to zone {}", zone_index);
 
         let total_sz = data.len() as Byte;
         let write_sz = total_sz.min(self.max_write_size);
 
-        log::debug!(
+        tracing::debug!(
             "[Device]: Total size = {}, Write size = {}, max_write_size = {}",
             total_sz,
             write_sz,
@@ -411,7 +411,7 @@ impl Zoned {
 
         let finish_zone = cl.index + 1 == self.config.chunks_per_zone;
 
-        log::debug!(
+        tracing::debug!(
             "[Device]: Finished writing {}. Finish zone: {} with comparison {} == {} ",
             zone_index,
             finish_zone,
@@ -436,7 +436,7 @@ impl Device for Zoned {
             match self.get_free_zone() {
                 Ok(res) => break res,
                 Err(err) => {
-                    log::trace!("[append] Failed to get free zone: {}", err);
+                    tracing::trace!("[append] Failed to get free zone: {}", err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -458,7 +458,7 @@ impl Device for Zoned {
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
         let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
         let slba = self.config.get_address_at(location.zone, location.index);
-        log::trace!("Read slba = {} for {:?}", slba, location);
+        tracing::trace!("Read slba = {} for {:?}", slba, location);
 
         let start = std::time::Instant::now();
         self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
@@ -468,14 +468,14 @@ impl Device for Zoned {
     }
 
     fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
-        log::info!("Current device usage is at: {}", self.get_use_percentage());
+        tracing::info!("Current device usage is at: {}", self.get_use_percentage());
 
         match locations {
             EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
-                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
+                tracing::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
@@ -492,9 +492,9 @@ impl Device for Zoned {
                 for zone in clean_locations {
                     let zs = nvme::info::get_zone_state(self.nvme_config.fd, self.nvme_config.nsid, zone).unwrap();
                     if zs == ZoneState::Full || zs == ZoneState::Closed {
-                        log::trace!("Correct state for eviction of {}: {:?}", zone, zs);
+                        tracing::trace!("Correct state for eviction of {}: {:?}", zone, zs);
                     } else {
-                        log::trace!("Incorrect state for eviction of {}: {:?}", zone, zs);
+                        tracing::trace!("Incorrect state for eviction of {}: {:?}", zone, zs);
                         panic!("Incorrect state for eviction");
                     }
 
@@ -559,7 +559,7 @@ impl Device for Zoned {
                             }
                         },
                     ))?;
-                    log::debug!("[evict:Chunk] Cleaned zone {}", zone);
+                    tracing::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
 
                 Ok(())
@@ -571,7 +571,7 @@ impl Device for Zoned {
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict, self)?;
 
-                log::debug!("Zones evicted: {:?}", zones_to_evict);
+                tracing::debug!("Zones evicted: {:?}", zones_to_evict);
 
                 Ok(())
             }
@@ -763,7 +763,7 @@ impl Device for BlockInterface {
             match state.active_zones.remove_chunk_location() {
                 Ok(location) => break location,
                 Err(_) => {
-                    log::trace!(
+                    tracing::trace!(
                         "[append] Failed to allocate chunk: no available space in active zones"
                     );
                 }
@@ -808,10 +808,10 @@ impl Device for BlockInterface {
             EvictTarget::Chunk(chunk_locations, _) => {
 
                 if chunk_locations.is_empty() {
-                    log::debug!("[evict:Chunk] No zones to evict");
+                    tracing::debug!("[evict:Chunk] No zones to evict");
                     return Ok(());
                 }
-                log::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
+                tracing::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
                 let state_mtx = Arc::clone(&self.state);
@@ -824,10 +824,10 @@ impl Device for BlockInterface {
             }
             EvictTarget::Zone(locations) => {
                 if locations.is_empty() {
-                    log::debug!("[evict:Zone] No zones to evict");
+                    tracing::debug!("[evict:Zone] No zones to evict");
                     return Ok(());
                 }
-                log::debug!("[evict:Zone] Evicting zones {:?}", locations);
+                tracing::debug!("[evict:Zone] Evicting zones {:?}", locations);
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()?;

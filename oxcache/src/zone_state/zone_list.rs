@@ -82,13 +82,13 @@ impl ZoneList {
         let zone = if can_open_more_zones {
             // Open a new zone
             let res = self.free_zones.pop_front().unwrap();
-            log::debug!("[ZoneList]: Opening zone {}", res);
+            tracing::debug!("[ZoneList]: Opening zone {}", res);
             self.zones.get_mut(&res)
         } else {
             // Grab an existing zone
             let res = self.open_zones.pop_front().unwrap();
             let res = self.zones.get_mut(&res);
-            log::debug!(
+            tracing::debug!(
                 "[ZoneList]: Using existing zone {} with {:?} chunks",
                 res.as_ref().unwrap().index,
                 res.as_ref().unwrap().chunks_available
@@ -105,17 +105,17 @@ impl ZoneList {
 
         zone.chunks_available.pop();
         if zone.chunks_available.len() >= 1 {
-            log::debug!("[ZoneList]: Returning zone back to use: {}", zone_index);
+            tracing::debug!("[ZoneList]: Returning zone back to use: {}", zone_index);
             self.open_zones.push_back(zone_index);
         } else {
-            log::debug!("[ZoneList]: Not returning zone back to use: {}", zone_index);
+            tracing::debug!("[ZoneList]: Not returning zone back to use: {}", zone_index);
         }
 
         self.writing_zones
             .entry(zone_index)
             .and_modify(|v| *v += 1)
             .or_insert(1);
-        log::debug!(
+        tracing::debug!(
             "[ZoneList]: Now {} threads are writing into zone {}",
             self.writing_zones.get(&zone_index).unwrap(),
             zone_index
@@ -140,13 +140,13 @@ impl ZoneList {
         } else {
             return Ok(()); // We were evicting, so we didn't account
         };
-        log::debug!(
+        tracing::debug!(
             "[ZoneList]: Finishing write to {}, writenum = {}",
             zone_index,
             write_num
         );
         if write_num - 1 == 0 {
-            log::debug!(
+            tracing::debug!(
                 "[ZoneList]: Removing {} from writing zones, finish = {:?}",
                 zone_index,
                 finish_zone
@@ -165,13 +165,13 @@ impl ZoneList {
                 if res.is_err() {
                     panic!("{:?}", res);
                 }
-                log::debug!("[ZoneList]: Finishing {}", zone_index);
+                tracing::debug!("[ZoneList]: Finishing {}", zone_index);
                 res
             } else {
                 Ok(())
             }
         } else {
-            log::debug!("[ZoneList]: Decrementing {}", zone_index);
+            tracing::debug!("[ZoneList]: Decrementing {}", zone_index);
             self.writing_zones.insert(zone_index, write_num - 1);
             Ok(())
         }
@@ -221,7 +221,7 @@ impl ZoneList {
                 chunk.zone, chunk.index
             );
 
-            log::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+            tracing::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
 
             // Return it
             zone.chunks_available.push(chunk.index);
@@ -231,7 +231,7 @@ impl ZoneList {
             if zone.chunks_available.len() == 1 && return_zone {
                 self.free_zones.push_back(chunk.zone);
             }
-            log::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
+            tracing::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
         }
 
         #[cfg(debug_assertions)]

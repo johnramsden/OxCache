@@ -41,7 +41,7 @@ impl Reader {
     }
 
     fn run(self) {
-        log::debug!("Reader {} started", self.id);
+        tracing::debug!("Reader {} started", self.id);
         while let Ok(msg) = self.receiver.recv() {
             // println!("Reader {} processing: {:?}", self.id, msg);
             let start = std::time::Instant::now();
@@ -55,13 +55,13 @@ impl Reader {
             let resp = ReadResponse { data: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {
-                log::error!(
+                tracing::error!(
                     "Failed to send response from writer: {}",
                     snd.err().unwrap()
                 );
             }
         }
-        log::debug!("Reader {} exiting", self.id);
+        tracing::debug!("Reader {} exiting", self.id);
     }
 }
 
@@ -109,11 +109,11 @@ impl ReaderPool {
             if let Err(e) = handle.join() {
                 // A panic occurred — e is a Box<dyn Any + Send + 'static>
                 if let Some(msg) = e.downcast_ref::<&str>() {
-                    log::error!("Reader thread panicked with message: {}", msg);
+                    tracing::error!("Reader thread panicked with message: {}", msg);
                 } else if let Some(msg) = e.downcast_ref::<String>() {
-                    log::error!("Reader thread panicked with message: {}", msg);
+                    tracing::error!("Reader thread panicked with message: {}", msg);
                 } else {
-                    log::error!("Reader thread panicked with unknown payload.");
+                    tracing::error!("Reader thread panicked with unknown payload.");
                 }
             }
         }

@@ -2,13 +2,26 @@ use axum::{routing::get, Router};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
+use tracing::{event, info, Level};
 use metrics::{counter, gauge, histogram};
 use once_cell::sync::Lazy;
+
+use tracing_appender::rolling;
+use tracing_appender::non_blocking;
+use tracing_subscriber::fmt;
 
 pub static METRICS: Lazy<MetricsRecorder> = Lazy::new(|| {
     MetricsRecorder::new()
 });
+
+pub struct HitRatio {
+    hits: usize,
+    misses: usize,
+}
+
+pub struct MetricState {
+    hit_ratio: HitRatio,
+}
 
 pub fn init_metrics_exporter(addr: SocketAddr) {
     let builder = PrometheusBuilder::new();
@@ -20,7 +33,7 @@ pub fn init_metrics_exporter(addr: SocketAddr) {
             recorder_handle.render()
         }));
 
-        log::info!("Serving metrics at http://{}/metrics", addr);
+        tracing::info!("Serving metrics at http://{}/metrics", addr);
 
         axum::Server::bind(&addr)
             .serve(app.into_make_service())
@@ -32,6 +45,7 @@ pub fn init_metrics_exporter(addr: SocketAddr) {
 pub struct MetricsRecorder {
     run_id: String,
     prefix: String,
+    metric_state: MetricState
 }
 
 pub enum MetricType {
@@ -48,6 +62,9 @@ impl MetricsRecorder {
         Self {
             run_id: since_epoch.as_secs().to_string(),
             prefix: String::from("oxcache"),
+            metric_state: MetricState {
+                hit_ratio: HitRatio { hits: 0, misses: 0 },
+            }
         }
     }
     pub fn update_metric_histogram_latency(&self, name: &str, value: Duration, metric_type: MetricType) {
@@ -58,11 +75,12 @@ impl MetricsRecorder {
                 value.as_secs_f64() * MILLISECONDS
             },
             _ => {
-                log::warn!("Unknown metric type");
+                tracing::warn!("Unknown metric type");
                 return;
             },
         };
         h.record(v);
+        event!(target: "metrics", Level::INFO, name = name, value=v);
     }
 
     pub fn update_metric_counter(&self, name: &str, value: u64) {

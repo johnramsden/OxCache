@@ -19,7 +19,8 @@ eviction_policy = "chunk"
 high_water_evict = 50 # Number remaining from end, evicts if reaches here
 low_water_evict = 100  # Evict until below mark
 high_water_clean = 40 # Number remaining from end, cleans if reaches here (only used with chunk)
-low_water_clean = 50  # Clean until below mark (only used with chunk)
+low_water_clean = 20  # Clean until below mark (only used with chunk)
 eviction_interval = 1  # Evict every 1s
 
 [metrics]
+file_metrics_directory = "./logs"

@@ -21,3 +21,4 @@ low_water_evict = 25  # Evict until below mark
 eviction_interval = 1  # Evict every 1s
 
 [metrics]
+file_metrics_directory = "./logs"

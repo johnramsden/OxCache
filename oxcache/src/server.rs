@@ -3,7 +3,7 @@ use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
-use log::debug;
+use tracing::debug;
 use nvme::types::Byte;
 use std::error::Error;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -136,7 +136,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         }
 
         let listener = UnixListener::bind(socket_path)?;
-        log::info!("Listening on socket: {}", self.config.socket);
+        tracing::info!("Listening on socket: {}", self.config.socket);
 
         if let Some(addr) = self.config.metrics.metrics_exporter_addr {
             init_metrics_exporter(addr);
@@ -180,7 +180,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 tokio::signal::ctrl_c()
                     .await
                     .expect("Failed to listen for ctrl_c");
-                log::info!("Ctrl+C received, shutting down...");
+                tracing::info!("Ctrl+C received, shutting down...");
                 shutdown_signal.notify_waiters();
             }
         });
@@ -192,14 +192,14 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         loop {
             tokio::select! {
                 _ = shutdown.notified() => {
-                    log::debug!("Shutting down accept loop.");
+                    tracing::debug!("Shutting down accept loop.");
                     break;
                 }
 
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, addr)) => {
-                            log::debug!("Accepted connection: {:?}", addr);
+                            tracing::debug!("Accepted connection: {:?}", addr);
 
                             tokio::spawn({
                                 let remote = Arc::clone(&self.remote);
@@ -209,12 +209,12 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let chunk_size = self.config.chunk_size;
                                 async move {
                                     if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache, chunk_size).await {
-                                        log::error!("Connection error: {}", e);
+                                        tracing::error!("Connection error: {}", e);
                                     }
                             }});
                         },
                         Err(e) => {
-                            log::error!("Accept failed: {}", e);
+                            tracing::error!("Accept failed: {}", e);
                         }
                     }
                 }
@@ -410,13 +410,13 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                         ).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("cache.get_or_insert_with failed: {}", e)))?;
                     }
                     request::Request::Close => {
-                        log::debug!("Received close request");
+                        tracing::debug!("Received close request");
                         break;
                     }
                 }
             }
             Err(e) => {
-                log::error!("Error receiving data: {:?}", e);
+                tracing::error!("Error receiving data: {:?}", e);
                 break;
             }
         }

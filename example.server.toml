@@ -23,3 +23,4 @@ eviction_interval = 1  # Evict every 1s
 [metrics]
 ip_addr = "127.0.0.1"
 port = 9000
+file_metrics_directory = "./logs"
