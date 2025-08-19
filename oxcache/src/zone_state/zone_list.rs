@@ -224,7 +224,7 @@ impl ZoneList {
 
         if self.is_full() {
             // Need to evict
-            log::debug!("Full, need to evict now");
+            tracing::debug!("Full, need to evict now");
             return Err(EvictNow);
         }
 
@@ -421,7 +421,7 @@ impl ZoneList {
             chunk.zone, chunk.index
         );
 
-        log::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
 
         // Return it
         zone.chunks_available.push(chunk.index);
