@@ -89,7 +89,7 @@ for file in "$directory"/*.bin; do
         "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
     fi
 
-    sudo ./target/debug/oxcache --config="$configfile" \
+    ./target/debug/oxcache --config="$configfile" \
       --max-zones="${n_zones}" \
       --chunk-size="$chunk_size" \
       --eviction-policy="$eviction" \
@@ -102,7 +102,7 @@ for file in "$directory"/*.bin; do
 
     sleep 5s
 
-    sudo ./target/debug/evaluationclient \
+    ./target/debug/evaluationclient \
       --data-file="$file" \
       --socket /tmp/oxcache.sock \
       --num-clients="$threads" \
