@@ -131,6 +131,7 @@ pub fn get_device(
     block_zone_capacity: Byte,
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
+    max_zones: Option<u64>,
 ) -> io::Result<Arc<dyn Device>> {
     let device = fs::canonicalize(device)?;
     let device = device.to_str().unwrap();
@@ -141,6 +142,7 @@ pub fn get_device(
             chunk_size,
             eviction_channel,
             max_write_size,
+            max_zones,
         )?))
     } else {
         Ok(Arc::new(BlockInterface::new(
@@ -149,6 +151,7 @@ pub fn get_device(
             block_zone_capacity,
             eviction_channel,
             max_write_size,
+            max_zones,
         )?))
     }
 }
@@ -251,6 +254,7 @@ impl Zoned {
         chunk_size: Byte,
         eviction_channel: Sender<EvictorMessage>,
         max_write_size: Byte,
+        max_zones: Option<u64>,
     ) -> io::Result<Self> {
         let nvme_config = match nvme::info::nvme_get_info(device) {
             Ok(config) => config,
@@ -267,14 +271,31 @@ impl Zoned {
                 config.chunk_size_in_lbas = chunk_size_in_logical_blocks;
                 config.chunk_size_in_bytes = chunk_size;
                 let num_zones: Zone = config.num_zones;
+                
+                // Apply max_zones restriction if specified
+                let restricted_num_zones = if let Some(max_zones) = max_zones {
+                    if max_zones > num_zones {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("max_zones ({}) cannot be larger than the maximum number of zones available on the device ({})", max_zones, num_zones)
+                        ));
+                    }
+                    max_zones
+                } else {
+                    num_zones
+                };
+                
                 let zone_list = ZoneList::new(
-                    num_zones,
+                    restricted_num_zones,
                     config.chunks_per_zone,
                     config.max_active_resources as usize,
                 );
 
                 let zone_append_lock: Vec<Mutex<()>> =
-                    (0..num_zones).map(|_| Mutex::new(())).collect();
+                    (0..restricted_num_zones).map(|_| Mutex::new(())).collect();
+
+                // Update config to reflect the restricted number of zones
+                config.num_zones = restricted_num_zones;
 
                 Ok(Self {
                     nvme_config,
@@ -470,7 +491,6 @@ impl Device for Zoned {
 
     fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
         let usage = self.get_use_percentage();
-        tracing::info!("Current device usage is at: {}", usage);
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
         match locations {
@@ -670,6 +690,7 @@ impl BlockInterface {
         block_zone_capacity: Byte,
         eviction_channel: Sender<EvictorMessage>,
         max_write_size: Byte,
+        max_zones: Option<u64>,
     ) -> io::Result<Self> {
         let nvme_config = match nvme_get_info(device) {
             Ok(config) => config,
@@ -685,6 +706,20 @@ impl BlockInterface {
 
         // Num_zones
         let num_zones = nvme_config.total_size_in_bytes / block_zone_capacity;
+        
+        // Apply max_zones restriction if specified
+        let restricted_num_zones = if let Some(max_zones) = max_zones {
+            if max_zones > num_zones {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("max_zones ({}) cannot be larger than the maximum number of zones available on the device ({})", max_zones, num_zones)
+                ));
+            }
+            max_zones
+        } else {
+            num_zones
+        };
+        
         // Chunks per zone
         let chunks_per_zone = block_zone_capacity / chunk_size;
 
@@ -693,14 +728,14 @@ impl BlockInterface {
         Ok(Self {
             nvme_config,
             state: Arc::new(Mutex::new(BlockDeviceState::new(
-                num_zones,
+                restricted_num_zones,
                 chunks_per_zone,
                 chunk_size,
             ))),
             chunk_size_in_bytes: chunk_size,
             chunk_size_in_lbas,
             chunks_per_zone,
-            num_zones,
+            num_zones: restricted_num_zones,
             eviction_channel,
             max_write_size,
         })
@@ -815,7 +850,6 @@ impl Device for BlockInterface {
             EvictTarget::Chunk(chunk_locations, _) => {
 
                 if chunk_locations.is_empty() {
-                    tracing::debug!("[evict:Chunk] No zones to evict");
                     return Ok(());
                 }
                 tracing::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
@@ -831,7 +865,6 @@ impl Device for BlockInterface {
             }
             EvictTarget::Zone(locations) => {
                 if locations.is_empty() {
-                    tracing::debug!("[evict:Zone] No zones to evict");
                     return Ok(());
                 }
                 tracing::debug!("[evict:Zone] Evicting zones {:?}", locations);

@@ -8,6 +8,7 @@ reader_threads = 14
 chunk_size = 67108864
 block_zone_capacity = 134217728
 max_write_size = 131072
+#max_zones = 100
 
 [remote]
 remote_type = "emulated" # emulated | S3

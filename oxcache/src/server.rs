@@ -70,6 +70,7 @@ pub struct ServerConfig {
     pub chunk_size: Byte,
     pub block_zone_capacity: Byte,
     pub max_write_size: Byte,
+    pub max_zones: Option<u64>,
     pub metrics: ServerMetricsConfig,
 }
 
@@ -109,6 +110,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             config.block_zone_capacity,
             evict_tx,
             config.max_write_size,
+            config.max_zones,
         )?;
 
         device.reset()?;

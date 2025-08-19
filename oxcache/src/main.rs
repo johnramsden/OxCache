@@ -73,6 +73,9 @@ pub struct CliArgs {
     #[arg(long)]
     pub metrics_port: Option<u16>,
 
+    #[arg(long)]
+    pub max_zones: Option<u64>,
+
     /// Logging level: error, warn, info, debug, trace. Overrides config if set.
     #[arg(long)]
     pub log_level: Option<String>,
@@ -91,6 +94,7 @@ pub struct ParsedServerConfig {
     pub chunk_size: Option<Byte>,
     pub max_write_size: Option<Byte>,
     pub block_zone_capacity: Option<Byte>,
+    pub max_zones: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,6 +272,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .block_zone_capacity
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
+
+    let max_zones = cli
+        .max_zones
+        .or_else(|| config.as_ref()?.server.max_zones);
     
     // Metrics
 
@@ -319,6 +327,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         chunk_size,
         block_zone_capacity,
         max_write_size,
+        max_zones,
         metrics: ServerMetricsConfig {
             metrics_exporter_addr 
         }
