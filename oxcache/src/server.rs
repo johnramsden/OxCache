@@ -3,8 +3,10 @@ use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
+use tracing::debug;
 use nvme::types::Byte;
 use std::error::Error;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
@@ -23,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::metrics::{init_metrics_exporter, MetricType, METRICS};
+use crate::metrics::{init_metrics_exporter, HitType, MetricType, METRICS};
 // Global tokio runtime
 // pub static RUNTIME: Lazy<Runtime> =
 // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
@@ -68,6 +70,7 @@ pub struct ServerConfig {
     pub chunk_size: Byte,
     pub block_zone_capacity: Byte,
     pub max_write_size: Byte,
+    pub max_zones: Option<u64>,
     pub metrics: ServerMetricsConfig,
 }
 
@@ -77,6 +80,24 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
     remote: Arc<T>,
     device: Arc<dyn Device>,
     evict_rx: Receiver<EvictorMessage>,
+}
+
+fn validate_read_response(buf: &[u8], key: &str, offset: Byte, size: Byte) {
+    // Hash using DefaultHasher (64-bit hash)
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let key_hash = hasher.finish(); // 8bytes
+
+    // Check the buffer
+    let mut buffer = [0u8; 8];
+    buffer.copy_from_slice(&buf[0..8]);
+    debug_assert_eq!(u64::from_be_bytes(buffer), key_hash);
+
+    buffer.copy_from_slice(&buf[8..16]);
+    debug_assert_eq!(u64::from_be_bytes(buffer), offset);
+
+    buffer.copy_from_slice(&buf[16..24]);
+    debug_assert_eq!(u64::from_be_bytes(buffer), size);
 }
 
 impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
@@ -89,6 +110,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             config.block_zone_capacity,
             evict_tx,
             config.max_write_size,
+            config.max_zones,
         )?;
 
         device.reset()?;
@@ -116,7 +138,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         }
 
         let listener = UnixListener::bind(socket_path)?;
-        log::info!("Listening on socket: {}", self.config.socket);
+        tracing::info!("Listening on socket: {}", self.config.socket);
 
         if let Some(addr) = self.config.metrics.metrics_exporter_addr {
             init_metrics_exporter(addr);
@@ -160,7 +182,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 tokio::signal::ctrl_c()
                     .await
                     .expect("Failed to listen for ctrl_c");
-                log::info!("Ctrl+C received, shutting down...");
+                tracing::info!("Ctrl+C received, shutting down...");
                 shutdown_signal.notify_waiters();
             }
         });
@@ -172,14 +194,14 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         loop {
             tokio::select! {
                 _ = shutdown.notified() => {
-                    log::debug!("Shutting down accept loop.");
+                    tracing::debug!("Shutting down accept loop.");
                     break;
                 }
 
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, addr)) => {
-                            log::debug!("Accepted connection: {:?}", addr);
+                            tracing::debug!("Accepted connection: {:?}", addr);
 
                             tokio::spawn({
                                 let remote = Arc::clone(&self.remote);
@@ -189,12 +211,12 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                                 let chunk_size = self.config.chunk_size;
                                 async move {
                                     if let Err(e) = handle_connection(stream, writerpool, readerpool, remote, cache, chunk_size).await {
-                                        log::error!("Connection error: {}", e);
+                                        tracing::error!("Connection error: {}", e);
                                     }
                             }});
                         },
                         Err(e) => {
-                            log::error!("Accept failed: {}", e);
+                            tracing::error!("Accept failed: {}", e);
                         }
                     }
                 }
@@ -269,6 +291,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                         // println!("Received get request: {:?}", req);
                         let chunk: Chunk = req.into();
+                        let chunk_clone = chunk.clone();
 
                         cache.get_or_insert_with(
                             chunk.clone(),
@@ -278,6 +301,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let start = Arc::clone(&start);
                                 // let chunk = chunk.clone();
                                 |location| async move {
+                                    let chunk = chunk.clone();
                                     // println!("HIT {:?}", chunk);
                                     let location = location.as_ref().clone();
 
@@ -303,6 +327,9 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         }
                                     };
 
+                                    // Validate read response
+                                    validate_read_response(&read_response, &chunk.uuid, chunk.offset, chunk.size);
+
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(read_response.clone()),
                                         bincode::config::standard()
@@ -316,11 +343,12 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_metric_counter("hit", 1);
+                                    METRICS.update_hitratio(HitType::Hit);
                                     Ok(())
                                 }
                             },
                             {
-                                let chunk = chunk.clone();
+                                let chunk = chunk_clone.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);
                                 let writer_pool = Arc::clone(&writer_pool);
@@ -379,19 +407,20 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     METRICS.update_metric_counter("miss", 1);
                                     METRICS.update_metric_histogram_latency("get_miss_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                    METRICS.update_hitratio(HitType::Miss);
                                     Ok(write_response)
                                 }
                             },
                         ).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("cache.get_or_insert_with failed: {}", e)))?;
                     }
                     request::Request::Close => {
-                        log::debug!("Received close request");
+                        tracing::debug!("Received close request");
                         break;
                     }
                 }
             }
             Err(e) => {
-                log::error!("Error receiving data: {:?}", e);
+                tracing::error!("Error receiving data: {:?}", e);
                 break;
             }
         }

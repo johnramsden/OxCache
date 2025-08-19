@@ -1,5 +1,4 @@
 use clap::Parser;
-use log::LevelFilter;
 use nvme::types::Byte;
 use oxcache;
 use oxcache::remote;
@@ -8,6 +7,10 @@ use serde::Deserialize;
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::process::exit;
+use std::sync::OnceLock;
+use tracing::{event, Level};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_appender::{non_blocking, rolling};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -70,9 +73,16 @@ pub struct CliArgs {
     #[arg(long)]
     pub metrics_port: Option<u16>,
 
+    #[arg(long)]
+    pub max_zones: Option<u64>,
+
     /// Logging level: error, warn, info, debug, trace. Overrides config if set.
     #[arg(long)]
     pub log_level: Option<String>,
+
+    /// Directory to store metrics log files
+    #[arg(long)]
+    pub file_metrics_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +94,7 @@ pub struct ParsedServerConfig {
     pub chunk_size: Option<Byte>,
     pub max_write_size: Option<Byte>,
     pub block_zone_capacity: Option<Byte>,
+    pub max_zones: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +118,7 @@ pub struct ParsedEvictionConfig {
 pub struct ParsedMetricsConfig {
     pub ip_addr: Option<String>,
     pub port: Option<u16>,
+    pub file_metrics_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,7 +199,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
 
     if remote_type != "emulated" && remote_artificial_delay_microsec.is_some() {
         // Warn if artificial delay is set for non-emulated remote types
-        log::warn!(
+        tracing::warn!(
             "remote_artificial_delay_microsec has no effect if remote_type is not `emulated`"
         );
     }
@@ -260,6 +272,10 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .block_zone_capacity
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
+
+    let max_zones = cli
+        .max_zones
+        .or_else(|| config.as_ref()?.server.max_zones);
     
     // Metrics
 
@@ -311,6 +327,7 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         chunk_size,
         block_zone_capacity,
         max_write_size,
+        max_zones,
         metrics: ServerMetricsConfig {
             metrics_exporter_addr 
         }
@@ -334,16 +351,22 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or_else(|| app_config.as_ref().and_then(|c| c.log_level.clone()))
         .unwrap_or_else(|| "info".to_string());
-    init_logging(&log_level);
+    
+    let file_metrics_directory = cli
+        .file_metrics_directory
+        .clone()
+        .or_else(|| app_config.as_ref().and_then(|c| c.metrics.file_metrics_directory.clone()));
+    
+    init_logging(&log_level, file_metrics_directory.as_deref());
 
     let config = load_config(&cli)?;
 
     // console_subscriber::init(); // -- To use tokio-console
 
-    log::debug!("Config: {:?}", config);
+    tracing::debug!("Config: {:?}", config);
     let remote = remote::validated_type(config.remote.remote_type.as_str());
     let remote = remote.unwrap_or_else(|err| {
-        log::error!("Error: {}", err);
+        tracing::error!("Error: {}", err);
         exit(1);
     });
 
@@ -370,24 +393,71 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Initialize global logging with a given level string. If the logger is already initialized,
-/// subsequent calls will be ignored. Supported levels (case-insensitive) are
-/// "error", "warn", "info", "debug" and "trace". Any other value defaults to "info".
-fn init_logging(level: &str) {
-    // Parse the provided level string into a LevelFilter
-    let level_filter = match level.to_lowercase().as_str() {
-        "error" => LevelFilter::Error,
-        "warn" => LevelFilter::Warn,
-        "info" => LevelFilter::Info,
-        "debug" => LevelFilter::Debug,
-        "trace" => LevelFilter::Trace,
-        _ => LevelFilter::Info,
+// Keep the background writer alive for the program lifetime
+static METRICS_GUARD: OnceLock<non_blocking::WorkerGuard> = OnceLock::new();
+
+pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
+    let directive = match level.to_lowercase().as_str() {
+        "error" => "error",
+        "warn"  => "warn",
+        "info"  => "info",
+        "debug" => "debug",
+        "trace" => "trace",
+        _       => "info",
     };
-    let mut builder = env_logger::Builder::new();
-    builder.filter_level(level_filter);
-    // Attempt to initialize the logger. If it has already been initialized
-    // (for example, by another library), silently ignore the error.
-    let _ = builder.try_init();
+
+    if let Some(metrics_dir) = metrics_directory {
+        // Regular logs, no metrics
+        let stdout_layer = fmt::layer()
+            .with_writer(std::io::stdout)
+            .with_target(true)
+            .with_level(true)
+            .compact()
+            .with_filter(EnvFilter::new(format!("{},metrics=off", directive)));
+
+        // Metrics in log dir
+        let date = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S").to_string();
+        let filename = format!("metrics-{}.json", date);
+        let metrics_file = rolling::never(metrics_dir, filename);
+        let (metrics_nb, guard) = non_blocking(metrics_file);
+        let _ = METRICS_GUARD.set(guard);
+
+        // JSON formatting for metrics
+        let json_fmt = fmt::format()
+            .with_level(false)
+            .with_target(false)
+            .with_source_location(false)
+            .with_thread_ids(false)
+            .with_thread_names(false)
+            .with_file(false)
+            .with_line_number(false)
+            .json();
+
+        // Setup metrics
+        let metrics_layer = fmt::layer()
+            .with_writer(metrics_nb)
+            .event_format(json_fmt)
+            .with_ansi(false)
+            .with_filter(EnvFilter::new("metrics=info"));
+
+        // Register layers
+        let _ = tracing_subscriber::registry()
+            .with(stdout_layer)
+            .with(metrics_layer)
+            .try_init();
+    } else {
+        // Only logs, no metrics (metrics go nowhere)
+        let stdout_layer = fmt::layer()
+            .with_writer(std::io::stdout)
+            .with_target(true)
+            .with_level(true)
+            .compact()
+            .with_filter(EnvFilter::new(format!("{},metrics=off", directive)));
+
+        let _ = tracing_subscriber::registry()
+            .with(stdout_layer)
+            .try_init();
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

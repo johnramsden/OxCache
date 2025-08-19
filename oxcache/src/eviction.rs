@@ -255,7 +255,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
             // Adjust pq
             self.pq.modify_priority(target_zone, 1);
-            log::trace!("Increased priority for zone {}", target_zone);
+            tracing::trace!("Increased priority for zone {}", target_zone);
         }
 
         targets
@@ -296,15 +296,15 @@ impl Evictor {
             while !shutdown_clone.load(Ordering::Relaxed) {
                 let sender = match evict_rx.recv_timeout(evict_interval) {
                     Ok(s) => {
-                        log::debug!("Received immediate eviction request");
+                        tracing::debug!("Received immediate eviction request");
                         Some(s.sender)
                     }
                     Err(flume::RecvTimeoutError::Timeout) => {
-                        log::debug!("Timer eviction");
+                        tracing::debug!("Timer eviction");
                         None
                     }
                     Err(flume::RecvTimeoutError::Disconnected) => {
-                        log::debug!("Disconnected");
+                        tracing::debug!("Disconnected");
                         break;
                     }
                 };
@@ -316,24 +316,24 @@ impl Evictor {
 
                 let result = match device_clone.evict(targets, cache_clone.clone()) {
                     Err(e) => {
-                        log::error!("Error evicting: {}", e);
+                        tracing::error!("Error evicting: {}", e);
                         Err(e.to_string())
                     }
                     Ok(_) => Ok(()),
                 };
 
                 if let Some(sender) = sender {
-                    log::debug!("Sending eviction response to sender: {:?}", result);
+                    tracing::debug!("Sending eviction response to sender: {:?}", result);
                     sender.send(result.clone()).unwrap();
                 }
 
                 evict_rx.drain().into_iter().for_each(|recv| {
-                    log::debug!("Sending eviction response to drained sender: {:?}", result);
+                    tracing::debug!("Sending eviction response to drained sender: {:?}", result);
                     recv.sender.send(result.clone()).unwrap();
                 })
             }
 
-            log::debug!("Evictor thread exiting");
+            tracing::debug!("Evictor thread exiting");
         });
 
         Ok(Self {
@@ -349,15 +349,15 @@ impl Evictor {
             if let Err(e) = handle.join() {
                 // A panic occurred — e is a Box<dyn Any + Send + 'static>
                 if let Some(msg) = e.downcast_ref::<&str>() {
-                    log::error!("Evictor thread panicked with message: {}", msg);
+                    tracing::error!("Evictor thread panicked with message: {}", msg);
                 } else if let Some(msg) = e.downcast_ref::<String>() {
-                    log::error!("Evictor thread panicked with message: {}", msg);
+                    tracing::error!("Evictor thread panicked with message: {}", msg);
                 } else {
-                    log::error!("Evictor thread panicked with unknown payload.");
+                    tracing::error!("Evictor thread panicked with unknown payload.");
                 }
             }
         } else {
-            log::error!("Evictor thread was already stopped or never started.");
+            tracing::error!("Evictor thread was already stopped or never started.");
         }
     }
 }

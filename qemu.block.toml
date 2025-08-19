@@ -2,12 +2,13 @@ log_level = "trace"
 
 [server]
 socket = "/tmp/oxcache.sock"
-disk = "/dev/nvme1n1"
+disk = "/dev/disk/by-id/nvme-QEMU_NVMe_Ctrl_deadbaaf"
 writer_threads = 14
 reader_threads = 14
 chunk_size = 67108864
 block_zone_capacity = 134217728
 max_write_size = 131072
+#max_zones = 100
 
 [remote]
 remote_type = "emulated" # emulated | S3
@@ -19,7 +20,8 @@ eviction_policy = "chunk"
 high_water_evict = 50 # Number remaining from end, evicts if reaches here
 low_water_evict = 100  # Evict until below mark
 high_water_clean = 40 # Number remaining from end, cleans if reaches here (only used with chunk)
-low_water_clean = 50  # Clean until below mark (only used with chunk)
+low_water_clean = 20  # Clean until below mark (only used with chunk)
 eviction_interval = 1  # Evict every 1s
 
 [metrics]
+file_metrics_directory = "./logs"

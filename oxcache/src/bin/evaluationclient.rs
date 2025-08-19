@@ -26,11 +26,16 @@ struct Cli {
 
     #[arg(long)]
     data_file: String,
+
+    #[arg(long)]
+    query_size: u64,
 }
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{self, BufReader};
+
+const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 
 fn read_queries(path: &str) -> io::Result<Vec<i32>> {
     let file = File::open(path)?;
@@ -59,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..nr_queries {
             queries.push(GetRequest {
                 key: query_inputs.pop().unwrap().to_string(),
-                size: 8192,
+                size: args.query_size,
                 offset: 0,
             });
         }
@@ -82,8 +87,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("[t.{}] Client connected to {}", c, sock);
 
             let (read_half, write_half) = split(stream);
-            let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-            let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+
+            let codec = LengthDelimitedCodec::builder()
+                .max_frame_length(MAX_FRAME_LENGTH)
+                .new_codec();
+
+            let mut reader = FramedRead::new(read_half, codec.clone());
+            let mut writer = FramedWrite::new(write_half, codec);
 
             loop {
                 let query_num = counter.fetch_add(1, Ordering::Relaxed) + 1;
