@@ -224,6 +224,7 @@ impl Cache {
     {
         use ndarray::s;
 
+        // Reset the existing entries
         // Collect items and corresponding notifiers
         let (items, notifies) = {
             // TODO: Can we deadlock here?
@@ -260,6 +261,7 @@ impl Cache {
             (out, notifies)
         };
 
+        // Read the valid chunks from the zone
         // Buffer all chunks
         let read_input: Vec<_> = items
             .iter()

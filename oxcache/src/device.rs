@@ -524,7 +524,7 @@ impl Device for Zoned {
                     RUNTIME.block_on(cache.clean_zone_and_update_map(
                         zone,
                         {
-                            // Reads all chunks in zone and returns buffer [(Chunk, Bytes)]
+                            // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
                             let this = self;
                             move |items: Vec<(CacheKey, Arc<ChunkLocation>)>| {
                                 async move {
@@ -554,11 +554,13 @@ impl Device for Zoned {
                                         zones.reset_zone_with_capacity(zone, remaining, this)?;
                                     }
 
+                                    // When every chunk is invalid
                                     let payloads_empty = payloads.is_empty();
                                     let new_locs = if !payloads_empty {
                                         // Append bufferred data
                                         let mut new_locs = Vec::with_capacity(payloads.len());
                                         for (key, data) in payloads {
+                                            // Too many active zones because this also takes a zone
                                             let loc = this.chunked_append(data, zone)?;
                                             new_locs.push((key, loc));
                                         }
@@ -567,6 +569,7 @@ impl Device for Zoned {
                                         vec![]
                                     };
 
+                                    // Update zone list by returning zones
                                     {
                                         let (zone_mtx, cv) = &*this.zones;
                                         let mut zones = zone_mtx.lock().unwrap();
