@@ -408,23 +408,26 @@ pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
 
         // Metrics in log dir
         let date = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S").to_string();
-        let filename = format!("metrics-{}.log", date);
+        let filename = format!("metrics-{}.json", date);
         let metrics_file = rolling::never(metrics_dir, filename);
         let (metrics_nb, guard) = non_blocking(metrics_file);
         let _ = METRICS_GUARD.set(guard);
 
-        // No Formatting on metrics
-        let plain_fmt = fmt::format()
-            .without_time()
+        // JSON formatting for metrics
+        let json_fmt = fmt::format()
             .with_level(false)
             .with_target(false)
             .with_source_location(false)
-            .compact();
+            .with_thread_ids(false)
+            .with_thread_names(false)
+            .with_file(false)
+            .with_line_number(false)
+            .json();
 
         // Setup metrics
         let metrics_layer = fmt::layer()
             .with_writer(metrics_nb)
-            .event_format(plain_fmt)
+            .event_format(json_fmt)
             .with_ansi(false)
             .with_filter(EnvFilter::new("metrics=info"));
 

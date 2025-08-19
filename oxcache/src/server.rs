@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::metrics::{init_metrics_exporter, MetricType, METRICS};
+use crate::metrics::{init_metrics_exporter, HitType, MetricType, METRICS};
 // Global tokio runtime
 // pub static RUNTIME: Lazy<Runtime> =
 // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
@@ -341,6 +341,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_metric_counter("hit", 1);
+                                    METRICS.update_hitratio(HitType::Hit);
                                     Ok(())
                                 }
                             },
@@ -404,6 +405,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     METRICS.update_metric_counter("miss", 1);
                                     METRICS.update_metric_histogram_latency("get_miss_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                    METRICS.update_hitratio(HitType::Miss);
                                     Ok(write_response)
                                 }
                             },
