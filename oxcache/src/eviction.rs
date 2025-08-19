@@ -156,7 +156,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     type CleanTarget = ();
 
     fn write_update(&mut self, chunk: ChunkLocation) {
-        assert!(!self.lru.contains(&chunk.zone));
+        // assert!(!self.lru.contains(&chunk.zone)); // We cannot assert this because we allow out of order writes
 
         // We only want to put it in the LRU once the zone is full
         if chunk.index == self.nr_chunks_per_zone - 1 {
