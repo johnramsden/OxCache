@@ -441,8 +441,7 @@ impl Device for Zoned {
             };
             trigger_eviction(self.eviction_channel.clone())?;
         };
-        // Note: this performs a copy every time because we need to
-        // pass in a mutable vector to libnvme
+
         assert_eq!(
             data.as_ptr() as u64 % self.nvme_config.logical_block_size,
             0
@@ -452,6 +451,7 @@ impl Device for Zoned {
         let res = self.chunked_append(data, zone_index);
         METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
         METRICS.update_metric_counter("written_bytes_total", sz);
+        METRICS.update_metric_counter("bytes_total", sz);
         res
     }
 
@@ -464,11 +464,14 @@ impl Device for Zoned {
         self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
         METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
+        METRICS.update_metric_counter("bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 
     fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
-        tracing::info!("Current device usage is at: {}", self.get_use_percentage());
+        let usage = self.get_use_percentage();
+        tracing::info!("Current device usage is at: {}", usage);
+        METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
         match locations {
             EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
@@ -783,6 +786,7 @@ impl Device for BlockInterface {
         self.chunked_append(data, write_addr)?;
         METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
         METRICS.update_metric_counter("written_bytes_total", sz);
+        METRICS.update_metric_counter("bytes_total", sz);
         Ok(chunk_location)
     }
 
@@ -800,10 +804,13 @@ impl Device for BlockInterface {
         )?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
         METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
+        METRICS.update_metric_counter("bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 
     fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
+        let usage = self.get_use_percentage();
+        METRICS.update_metric_gauge("usage_percentage", usage as f64);
         match locations {
             EvictTarget::Chunk(chunk_locations, _) => {
 
