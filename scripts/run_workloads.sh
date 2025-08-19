@@ -19,12 +19,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 usage() {
-    printf "Usage: %s WORKLOAD_DIR NR_THREADS CONFIGFILE\n" "$(basename "$0")"
+    printf "Usage: %s WORKLOAD_DIR NR_THREADS CONFIGFILE DEVICE\n" "$(basename "$0")"
     exit 1
 }
 
 # Check that exactly 4 positional arguments remain
-if [ "$#" -ne 3 ]; then
+if [ "$#" -ne 4 ]; then
     echo "Illegal number of parameters $#, should be 3"
     usage
 fi
@@ -32,11 +32,13 @@ fi
 directory="$1"
 threads="$2"
 configfile="$3"
+device="$4"
 
 echo "Workload Directory: $directory"
 echo "Threads: $threads"
 echo "Logging to: ./logs"
 echo "Configfile: $configfile"
+echo "Device: $device"
 
 ret=0
 
@@ -93,7 +95,8 @@ for file in "$directory"/*.bin; do
       --eviction-policy="$eviction" \
       --high-water-evict="$evict_high" \
       --low-water-evict="$evict_low" \
-      --log-level=info &>> "$runfile.server" &
+      --log-level=info \
+      --remote-artificial-delay_microsec="$latency" &>> "$runfile.server" &
     SERVER_PID=$!
 
     sleep 5s
