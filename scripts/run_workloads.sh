@@ -84,7 +84,7 @@ for file in "$directory"/*.bin; do
     # shellcheck disable=SC2024
     echo "Running $runfile"
 
-    if [ "$device" = "/dev/nvme1n1p1" ]; then
+    if [ "$device" = "/dev/nvme1n1" ]; then
         echo "Pre-conditioning SSD"
         "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
     fi
@@ -96,7 +96,8 @@ for file in "$directory"/*.bin; do
       --high-water-evict="$evict_high" \
       --low-water-evict="$evict_low" \
       --log-level=info \
-      --remote-artificial-delay_microsec="$latency" &>> "$runfile.server" &
+      --remote-artificial-delay_microsec="$latency" \
+      --disk="$device" &>> "$runfile.server" &
     SERVER_PID=$!
 
     sleep 5s
