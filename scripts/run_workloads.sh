@@ -96,7 +96,7 @@ for file in "$directory"/*.bin; do
       --high-water-evict="$evict_high" \
       --low-water-evict="$evict_low" \
       --log-level=info \
-      --remote-artificial-delay_microsec="$latency" \
+      --remote-artificial-delay-microsec="$latency" \
       --disk="$device" &>> "$runfile.server" &
     SERVER_PID=$!
 
