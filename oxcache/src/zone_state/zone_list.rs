@@ -22,20 +22,155 @@ pub enum ZoneObtainFailure {
     Wait,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// For block devices, ignore the writing state. Don't need to keep
 /// track of writing zones
 pub enum ZoneStateDbg {
-    Closed, Open, Writing, Finished
+    Empty,
+    ExplicitOpen,
+    ImplicitOpen,
+    Closed,
+    Full
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ZoneDbg {
     pub state: ZoneStateDbg,
     /// A bit strange, but for block devices with chunk eviction, this
     /// effectively functions as a counter for the number of chunks
     /// remaining.
     pub chunk_ptr: Chunk,
+    pub num_writers: usize,
+}
+
+impl ZoneDbg {
+    pub fn new() -> Self {
+        Self {
+            state: ZoneStateDbg::Empty,
+            chunk_ptr: 0,
+            num_writers: 0
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ZoneStateTracker {
+    pub state: Vec<ZoneDbg>,
+    pub max_chunks: usize,
+    pub mar: usize,
+    pub mor: usize
+}
+
+impl ZoneStateTracker {
+    pub fn new(num_zones: usize, max_chunks: usize, mar: usize, mor: usize) -> Self {
+        Self {
+            state: vec![ZoneDbg::new(); num_zones],
+            max_chunks,
+            mar, mor
+        }
+    }
+
+    pub fn open_zone(&mut self, zone_index: ZoneIndex) {
+        self.assert_zone_state(zone_index,
+            &[ZoneStateDbg::Empty, ZoneStateDbg::Closed, ZoneStateDbg::ImplicitOpen]);
+        self.check_zone_count();
+        self.state[zone_index as usize].state = ZoneStateDbg::ExplicitOpen;
+        self.check_zone_count();
+    }
+
+    pub fn close_zone(&mut self, zone_index: ZoneIndex) {
+        self.assert_zone_state(zone_index,
+            &[ZoneStateDbg::ImplicitOpen, ZoneStateDbg::ExplicitOpen]);
+        self.check_zone_count();
+        self.state[zone_index as usize].state = ZoneStateDbg::Closed;
+        self.check_zone_count();
+    }
+
+    pub fn reset_zone(&mut self, zone_index: ZoneIndex) {
+        self.check_zone_count();
+        self.state[zone_index as usize].state = ZoneStateDbg::Empty;
+        self.check_zone_count();
+    }
+
+    pub fn finish_zone(&mut self, zone_index: ZoneIndex) {
+        self.assert_zone_state(zone_index,
+            &[ZoneStateDbg::ImplicitOpen, ZoneStateDbg::ExplicitOpen, ZoneStateDbg::Closed]);
+        self.check_zone_count();
+        self.state[zone_index as usize].state = ZoneStateDbg::Empty;
+        self.check_zone_count();
+    }
+
+    pub fn write_zone(&mut self, zone_index: ZoneIndex) {
+        self.assert_zone_state(zone_index,
+            &[ZoneStateDbg::ImplicitOpen,
+                ZoneStateDbg::ExplicitOpen,
+                ZoneStateDbg::Closed,
+                ZoneStateDbg::Empty]);
+        self.check_zone_count();
+
+
+        self.state[zone_index as usize].chunk_ptr += 1;
+        self.state[zone_index as usize].state = match self.state[zone_index as usize].state {
+            ZoneStateDbg::Empty => ZoneStateDbg::ImplicitOpen,
+            ZoneStateDbg::ExplicitOpen => ZoneStateDbg::ExplicitOpen,
+            ZoneStateDbg::ImplicitOpen => ZoneStateDbg::ImplicitOpen,
+            ZoneStateDbg::Closed => ZoneStateDbg::ImplicitOpen,
+            ZoneStateDbg::Full => panic!("Error state"),
+        };
+
+        self.state[zone_index as usize].num_writers += 1;
+
+        self.state[zone_index as usize].state = ZoneStateDbg::Empty;
+        self.check_zone_count();
+    }
+
+    pub fn finish_write_zone(&mut self, zone_index: ZoneIndex) {
+        self.assert_zone_state(zone_index,
+            &[ZoneStateDbg::ImplicitOpen,
+                ZoneStateDbg::ExplicitOpen,
+                ZoneStateDbg::Closed,
+                ZoneStateDbg::Empty]);
+        self.check_zone_count();
+
+        if self.state[zone_index as usize].num_writers == 0 {
+            assert!(false);
+        }
+        self.state[zone_index as usize].num_writers -= 1;
+
+        if self.state[zone_index as usize].chunk_ptr >= self.max_chunks as Chunk {
+            self.state[zone_index as usize].state = ZoneStateDbg::Full;
+        }
+    }
+
+    fn assert_zone_state(&self, zone_index: ZoneIndex, states: &[ZoneStateDbg]) {
+        assert!(states.iter().any(
+            |state| self.state[zone_index as usize].state == *state
+        ))
+    }
+
+    fn check_zone_count(&self) {
+        assert!(self.open_zone_count() <= self.mor);
+        assert!(self.active_zone_count() <= self.mar);
+    }
+
+    fn open_zone_count(&self) -> usize {
+        self.state.iter()
+            .filter(|zone| {
+                zone.state == ZoneStateDbg::ImplicitOpen ||
+                    zone.state == ZoneStateDbg::ExplicitOpen
+            })
+            .count()
+    }
+
+    fn active_zone_count(&self) -> usize {
+        self.state.iter()
+            .filter(|zone| {
+                zone.state == ZoneStateDbg::ImplicitOpen ||
+                    zone.state == ZoneStateDbg::ExplicitOpen ||
+                    zone.state == ZoneStateDbg::Closed
+            })
+            .count()
+    }
 }
 
 #[derive(Debug)]
@@ -48,7 +183,7 @@ pub struct ZoneList {
     pub max_active_resources: usize,
 
     #[cfg(debug_assertions)]
-    pub state_tracker: Vec<ZoneDbg>,
+    pub state_tracker: ZoneStateTracker,
 }
 
 impl ZoneList {
@@ -67,16 +202,6 @@ impl ZoneList {
             })) // (key, value)
             .collect();
 
-        // Debug list
-        let state_tracker = (0..num_zones)
-            .map(|_| {
-                ZoneDbg {
-                    state: ZoneStateDbg::Closed,
-                    chunk_ptr: 0,
-                }
-            })
-            .collect();
-
         ZoneList {
             free_zones: avail_zones,
             open_zones: VecDeque::with_capacity(max_active_resources),
@@ -84,7 +209,11 @@ impl ZoneList {
             chunks_per_zone,
             max_active_resources: max_active_resources-1, // Keep one reserved for eviction
             zones,
-            state_tracker,
+            state_tracker: ZoneStateTracker::new(
+                num_zones as usize,
+                chunks_per_zone as usize,
+                max_active_resources,
+                max_active_resources),
         }
     }
 
@@ -92,7 +221,7 @@ impl ZoneList {
     pub fn remove(&mut self) -> Result<ZoneIndex, ZoneObtainFailure> {
         #[cfg(debug_assertions)]
         self.check_invariants();
-        
+
         if self.is_full() {
             // Need to evict
             log::debug!("Full, need to evict now");
@@ -124,22 +253,13 @@ impl ZoneList {
             let res = self.free_zones.pop_front().unwrap();
             log::debug!("[ZoneList]: Opening zone {}", res);
 
-            #[cfg(debug_assertions)]
-            {
-                assert_eq!(self.state_tracker[res as usize].state, ZoneStateDbg::Closed);
-                self.state_tracker[res as usize].state = ZoneStateDbg::Writing;
-            }
+            // #[cfg(debug_assertions)]
+            // self.state_tracker.open_zone(res);
 
             self.zones.get_mut(&res)
         } else {
             // Grab an existing zone
             let res = self.open_zones.pop_front().unwrap();
-
-            #[cfg(debug_assertions)]
-            assert!(
-                self.state_tracker[res as usize].state == ZoneStateDbg::Open ||
-                self.state_tracker[res as usize].state == ZoneStateDbg::Writing
-            );
 
             let res = self.zones.get_mut(&res);
             log::debug!(
@@ -158,12 +278,6 @@ impl ZoneList {
         }
 
         zone.chunks_available.pop();
-        #[cfg(debug_assertions)]
-        {
-            assert_eq!(self.state_tracker[zone.index as usize].state, ZoneStateDbg::Open);
-            self.state_tracker[zone.index as usize].chunk_ptr += 1;
-            assert_eq!(self.chunks_per_zone - (zone.chunks_available.len() as u64), self.state_tracker[zone.index as usize].chunk_ptr);
-        }
 
         if zone.chunks_available.len() >= 1 {
             log::debug!("[ZoneList]: Returning zone back to use: {}", zone_index);
@@ -182,6 +296,9 @@ impl ZoneList {
             zone_index
         );
 
+        // #[cfg(debug_assertions)]
+        // self.state_tracker.write_zone(res);
+
         #[cfg(debug_assertions)]
         self.check_invariants();
 
@@ -195,14 +312,14 @@ impl ZoneList {
         device: &dyn device::Device,
         finish_zone: bool,
     ) -> io::Result<()> {
-        #[cfg(debug_assertions)]
-        assert_eq!(self.state_tracker[zone_index as usize].state, ZoneStateDbg::Writing);
+        // #[cfg(debug_assertions)]
+        // self.state_tracker.finish_write_zone(zone_index);
 
         let write_num = self.writing_zones.get(&zone_index);
         let write_num = if let Some(write_num) = write_num {
             write_num
         } else {
-            // Is this really okay?
+            // We will probably want to account for this in the state tracker somehow
             return Ok(()); // We were evicting, so we didn't account
         };
         log::debug!(
@@ -218,11 +335,6 @@ impl ZoneList {
             );
             self.writing_zones.remove(&zone_index);
 
-            #[cfg(debug_assertions)]
-            {
-                self.state_tracker[zone_index as usize].state = ZoneStateDbg::Open;
-            }
-
             if finish_zone {
                 let res = device.finish_zone(zone_index);
                 let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
@@ -236,12 +348,6 @@ impl ZoneList {
                     panic!("{:?}", res);
                 }
                 log::debug!("[ZoneList]: Finishing {}", zone_index);
-
-                #[cfg(debug_assertions)]
-                {
-                    self.state_tracker[zone_index as usize].state = ZoneStateDbg::Closed;
-                    self.check_invariants();
-                }
 
                 res
             } else {
@@ -271,35 +377,25 @@ impl ZoneList {
 
         let zone = if can_open_more_zones {
             let z = self.free_zones.pop_front();
-            #[cfg(debug_assertions)]
-            {
-                assert_eq!(self.state_tracker[z.unwrap() as usize].state, ZoneStateDbg::Closed);
-                self.state_tracker[z.unwrap() as usize].state = ZoneStateDbg::Open;
-            };
+
+            // #[cfg(debug_assertions)]
+            // self.state_tracker.open_zone(zone_index);
+
             z
         } else {
             let z = self.open_zones.pop_front();
-            #[cfg(debug_assertions)]
-            {
-                assert!(
-                    self.state_tracker[z.unwrap() as usize].state == ZoneStateDbg::Open);
-            }
             z
         };
         let zone_index = zone.unwrap();
         let mut zone = self.zones.get_mut(&zone_index).unwrap();
         let chunk = zone.chunks_available.pop().unwrap();
 
-        #[cfg(debug_assertions)]
-        {
-            assert_eq!(self.state_tracker[zone.index as usize].state, ZoneStateDbg::Open);
-            self.state_tracker[zone.index as usize].chunk_ptr += 1;
-            assert_eq!(self.chunks_per_zone - (zone.chunks_available.len() as u64), self.state_tracker[zone.index as usize].chunk_ptr);
-        }
-        
         if zone.chunks_available.len() >= 1 {
             self.open_zones.push_back(zone_index);
         }
+
+        // #[cfg(debug_assertions)]
+        // self.state_tracker.write_zone(zone_index);
 
         #[cfg(debug_assertions)]
         self.check_invariants();
@@ -314,6 +410,9 @@ impl ZoneList {
     pub fn return_chunk_location(&mut self, chunk: &ChunkLocation, return_zone: bool) {
         #[cfg(debug_assertions)]
         self.check_invariants();
+
+        // #[cfg(debug_assertions)]
+        // self.state_tracker.finish_write_zone(chunk.zone);
 
         let zone = self.zones.get_mut(&chunk.zone).unwrap();
 
@@ -369,12 +468,10 @@ impl ZoneList {
         debug_assert!(!self.writing_zones.contains_key(&idx));
 
         #[cfg(debug_assertions)]
-        {
-            self.check_invariants();
-            assert_eq!(self.state_tracker[idx as usize].state, ZoneStateDbg::Finished);
-            self.state_tracker[idx as usize].state = ZoneStateDbg::Closed;
-            self.state_tracker[idx as usize].chunk_ptr = 0;
-        }
+        self.check_invariants();
+
+        // #[cfg(debug_assertions)]
+        // self.state_tracker.reset_zone(idx);
 
         let zone = self.zones.get_mut(&idx).unwrap();
         zone.chunks_available = (0..self.chunks_per_zone).rev().collect();
@@ -405,15 +502,9 @@ impl ZoneList {
         remaining: Chunk,
         device: &dyn device::Device
     ) -> std::io::Result<()> {
+        // I think we need to add a special method here for the state tracker
 
-        #[cfg(debug_assertions)]
-        {
-            self.check_invariants();
-            assert_eq!(self.state_tracker[idx as usize].state, ZoneStateDbg::Finished);
-            self.state_tracker[idx as usize].state = ZoneStateDbg::Open;
-            self.state_tracker[idx as usize].chunk_ptr = self.chunks_per_zone-remaining;
-        }
-        
+
         let zone = self.zones.get_mut(&idx).unwrap();
         zone.chunks_available = (self.chunks_per_zone-remaining..self.chunks_per_zone).rev().collect();
 
@@ -428,12 +519,9 @@ impl ZoneList {
         &mut self,
         idx: ZoneIndex,
     ) {
-        #[cfg(debug_assertions)]
-        {
-            self.check_invariants();
-            self.state_tracker[idx as usize].state = ZoneStateDbg::Closed;
-            self.state_tracker[idx as usize].chunk_ptr = 0;
-        }
+        // TODO: this doesn't map to any state transitions
+        // #[cfg(debug_assertions)]
+        // self.state_tracker.reset_zone(idx);
 
         self.free_zones.push_back(idx);
 
@@ -484,46 +572,46 @@ impl ZoneList {
                 // no dupes
                 assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
             }
-            
+
             assert_eq!(set_open.len(), self.open_zones.len(), "Open list has duplicate elements");
 
-            for zone in &self.open_zones {
-                assert!(
-                    self.state_tracker[*zone as usize].state == ZoneStateDbg::Open ||
-                    self.state_tracker[*zone as usize].state == ZoneStateDbg::Writing);
-            }
+            // for zone in &self.open_zones {
+            //     assert!(
+            //         self.state_tracker[*zone as usize].state == ZoneStateDbg::Open ||
+            //         self.state_tracker[*zone as usize].state == ZoneStateDbg::Writing);
+            // }
 
-            for zone in &self.free_zones {
-                assert!(self.state_tracker[*zone as usize].state == ZoneStateDbg::Closed);
-            }
+            // for zone in &self.free_zones {
+            //     assert!(self.state_tracker[*zone as usize].state == ZoneStateDbg::Closed);
+            // }
 
-            for zone in &self.writing_zones {
-                assert!(self.state_tracker[*zone.0 as usize].state == ZoneStateDbg::Writing);
-                assert!(!set_free.contains(zone.0));
-                assert!(*zone.1 > 0);
-            }
+            // for zone in &self.writing_zones {
+            //     assert!(self.state_tracker[*zone.0 as usize].state == ZoneStateDbg::Writing);
+            //     assert!(!set_free.contains(zone.0));
+            //     assert!(*zone.1 > 0);
+            // }
 
-            let n_writing = self.state_tracker.iter().fold(0, |acc, zone|{
-                match zone.state {
-                    ZoneStateDbg::Closed => {
-                        assert_eq!(zone.chunk_ptr, 0);
-                        acc
-                    },
-                    ZoneStateDbg::Open => {
-                        assert!(zone.chunk_ptr > 0 && zone.chunk_ptr < self.chunks_per_zone);
-                        acc + 1
-                    },
-                    ZoneStateDbg::Writing => {
-                        acc + 1
-                    },
-                    ZoneStateDbg::Finished => {
-                        assert_eq!(zone.chunk_ptr, self.chunks_per_zone as u64);
-                        acc
-                    },
-                }
-            });
+            // let n_writing = self.state_tracker.iter().fold(0, |acc, zone|{
+            //     match zone.state {
+            //         ZoneStateDbg::Closed => {
+            //             assert_eq!(zone.chunk_ptr, 0);
+            //             acc
+            //         },
+            //         ZoneStateDbg::Open => {
+            //             assert!(zone.chunk_ptr > 0 && zone.chunk_ptr < self.chunks_per_zone);
+            //             acc + 1
+            //         },
+            //         ZoneStateDbg::Writing => {
+            //             acc + 1
+            //         },
+            //         ZoneStateDbg::Finished => {
+            //             assert_eq!(zone.chunk_ptr, self.chunks_per_zone as u64);
+            //             acc
+            //         },
+            //     }
+            // });
 
-            assert!(n_writing < self.max_active_resources);
+            // assert!(n_writing < self.max_active_resources);
         }
     }
 }
