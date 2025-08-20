@@ -1,10 +1,8 @@
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
 use ndarray::{Array2, ArrayBase, s};
 use nvme::types::{self, Zone};
-use std::cell::RefCell;
 use std::io::ErrorKind;
 use std::iter::zip;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::{collections::HashMap, io};
 use bytes::Bytes;
@@ -235,37 +233,32 @@ impl Cache {
             let mut out = Vec::new();
             let mut notifies = Vec::new();
 
-            let len = bm.zone_to_entry.slice(zone_slice).len();
             // Iterate through the entire list of chunks in the zone
-            for i in 0..len {
-                // Remove the key from the zone_to_entry slice
-                let key_entry = match bm.zone_to_entry.slice_mut(zone_slice)[i].take() {
-                    Some(entry) => entry,
-                    None => continue,
-                };
+            for opt_key in bm.zone_to_entry.slice(zone_slice).iter() {
+                // Collect only if Some
+                if let Some(key) = opt_key.clone() {
+                    let entry = bm
+                        .buckets
+                        .get(&key)
+                        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
+                        .clone();
+                    let mut st = entry.write().await;
+                    let old_loc = match &*st {
+                        ChunkState::Ready(loc) => Arc::clone(loc),
+                        ChunkState::Waiting(_) => {
+                            // TODO: Shouldnt occur since zone was full
+                            return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
+                        }
+                    };
 
-                let entry = bm.buckets
-                    .get(&key_entry)
-                    .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
-                    .clone();
-
-                let mut st = entry.write().await;
-                let old_loc = match &*st {
-                    ChunkState::Ready(loc) => Arc::clone(loc),
-                    ChunkState::Waiting(_) => {
-                        // TODO: Shouldnt occur since zone was full
-                        return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
-                    }
-                };
-
-                let notify = Arc::new(Notify::new());
-                // Update state to waiting
-                *st = ChunkState::Waiting(Arc::clone(&notify));
-                drop(st);
-                out.push((key_entry, old_loc, entry));
-                notifies.push(notify);
+                    let notify = Arc::new(Notify::new());
+                    // Update state to waiting
+                    *st = ChunkState::Waiting(Arc::clone(&notify));
+                    drop(st);
+                    out.push((key, old_loc, entry));
+                    notifies.push(notify);
+                }
             }
-
             (out, notifies)
         };
 
