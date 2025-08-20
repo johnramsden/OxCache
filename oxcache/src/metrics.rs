@@ -2,15 +2,12 @@ use axum::{Router, routing::get};
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use once_cell::sync::Lazy;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{Level, event, info};
+use tracing::{Level, event};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing_appender::non_blocking;
-use tracing_appender::rolling;
-use tracing_subscriber::fmt;
 
 pub static METRICS: Lazy<MetricsRecorder> = Lazy::new(|| MetricsRecorder::new());
 
@@ -104,6 +101,7 @@ impl MetricsRecorder {
         let h = histogram!(format!("{}_{}", self.prefix, name.to_string()), "run_id" => id.clone());
         let v = match metric_type {
             MetricType::MsLatency => value.as_secs_f64() * MILLISECONDS,
+            #[allow(unreachable_patterns)]
             _ => {
                 tracing::warn!("Unknown metric type");
                 return;

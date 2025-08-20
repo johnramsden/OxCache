@@ -9,7 +9,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
-use tracing::debug;
 
 use crate::cache::bucket::Chunk;
 use crate::metrics::{HitType, METRICS, MetricType, init_metrics_exporter};

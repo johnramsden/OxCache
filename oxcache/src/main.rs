@@ -10,7 +10,6 @@ use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::process::exit;
 use std::sync::OnceLock;
-use tracing::{Level, event};
 use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 

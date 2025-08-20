@@ -6,7 +6,6 @@ use crate::metrics::{METRICS, MetricType};
 use crate::server::RUNTIME;
 use crate::writerpool::{WriteRequest, WriterPool};
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
-use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use bytes::Bytes;
 use flume::Sender;
 use futures::future::join_all;
@@ -182,6 +181,7 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
 }
 
 impl Zoned {
+    #[allow(dead_code)]
     fn compact_zone(
         &self,
         zone_to_compact: Zone,

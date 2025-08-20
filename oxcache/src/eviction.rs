@@ -1,7 +1,6 @@
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
 use crate::writerpool::WriterPool;
-use crate::zone_state::zone_priority_queue;
 use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru::LruCache;
