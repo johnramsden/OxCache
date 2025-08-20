@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod device;
 pub mod eviction;
+mod metrics;
 pub mod readerpool;
 pub mod remote;
 pub mod request;
@@ -8,4 +9,3 @@ pub mod server;
 pub mod util;
 pub mod writerpool;
 pub mod zone_state;
-mod metrics;

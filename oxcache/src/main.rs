@@ -2,15 +2,17 @@ use clap::Parser;
 use nvme::types::Byte;
 use oxcache;
 use oxcache::remote;
-use oxcache::server::{RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerRemoteConfig, ServerMetricsConfig};
+use oxcache::server::{
+    RUNTIME, Server, ServerConfig, ServerEvictionConfig, ServerMetricsConfig, ServerRemoteConfig,
+};
 use serde::Deserialize;
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::process::exit;
 use std::sync::OnceLock;
-use tracing::{event, Level};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing::{Level, event};
 use tracing_appender::{non_blocking, rolling};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -66,10 +68,10 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub remote_artificial_delay_microsec: Option<usize>,
-    
+
     #[arg(long)]
     pub metrics_ip_addr: Option<String>,
-    
+
     #[arg(long)]
     pub metrics_port: Option<u16>,
 
@@ -244,11 +246,15 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
     if eviction_policy.to_lowercase() == "chunk" {
         let low_water_clean = if low_water_clean.is_none() {
             return Err("low_water_clean must be set".into());
-        } else { low_water_clean.unwrap() };
+        } else {
+            low_water_clean.unwrap()
+        };
 
         let high_water_clean = if high_water_clean.is_none() {
             return Err("high_water_clean must be set".into());
-        } else { high_water_clean.unwrap() };
+        } else {
+            high_water_clean.unwrap()
+        };
 
         if low_water_clean > high_water_clean {
             return Err("low_water_clean must be less than high_water_clean".into());
@@ -273,10 +279,8 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
 
-    let max_zones = cli
-        .max_zones
-        .or_else(|| config.as_ref()?.server.max_zones);
-    
+    let max_zones = cli.max_zones.or_else(|| config.as_ref()?.server.max_zones);
+
     // Metrics
 
     let metrics_port = cli
@@ -288,16 +292,18 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         .clone()
         .or_else(|| config.as_ref()?.metrics.ip_addr.clone());
 
-    if metrics_port.is_none() && metrics_ip.is_some() || metrics_port.is_some() && metrics_ip.is_none() {
+    if metrics_port.is_none() && metrics_ip.is_some()
+        || metrics_port.is_some() && metrics_ip.is_none()
+    {
         return Err("Missing metrics ip or port, both must be set or neither".into());
     }
-    
+
     let metrics_exporter_addr = if metrics_port.is_some() {
         let ip = match metrics_ip.unwrap().parse::<IpAddr>() {
             Ok(ip) => ip,
             Err(e) => {
                 return Err(format!("Invalid metrics ip address {:?}", e).into());
-            }       
+            }
         };
         Some(SocketAddr::new(ip, metrics_port.unwrap()))
     } else {
@@ -329,8 +335,8 @@ fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Error>
         max_write_size,
         max_zones,
         metrics: ServerMetricsConfig {
-            metrics_exporter_addr 
-        }
+            metrics_exporter_addr,
+        },
     })
 }
 
@@ -351,12 +357,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or_else(|| app_config.as_ref().and_then(|c| c.log_level.clone()))
         .unwrap_or_else(|| "info".to_string());
-    
-    let file_metrics_directory = cli
-        .file_metrics_directory
-        .clone()
-        .or_else(|| app_config.as_ref().and_then(|c| c.metrics.file_metrics_directory.clone()));
-    
+
+    let file_metrics_directory = cli.file_metrics_directory.clone().or_else(|| {
+        app_config
+            .as_ref()
+            .and_then(|c| c.metrics.file_metrics_directory.clone())
+    });
+
     init_logging(&log_level, file_metrics_directory.as_deref());
 
     let config = load_config(&cli)?;
@@ -399,11 +406,11 @@ static METRICS_GUARD: OnceLock<non_blocking::WorkerGuard> = OnceLock::new();
 pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
     let directive = match level.to_lowercase().as_str() {
         "error" => "error",
-        "warn"  => "warn",
-        "info"  => "info",
+        "warn" => "warn",
+        "info" => "info",
         "debug" => "debug",
         "trace" => "trace",
-        _       => "info",
+        _ => "info",
     };
 
     if let Some(metrics_dir) = metrics_directory {
@@ -454,9 +461,7 @@ pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
             .compact()
             .with_filter(EnvFilter::new(format!("{},metrics=off", directive)));
 
-        let _ = tracing_subscriber::registry()
-            .with(stdout_layer)
-            .try_init();
+        let _ = tracing_subscriber::registry().with(stdout_layer).try_init();
     }
 }
 

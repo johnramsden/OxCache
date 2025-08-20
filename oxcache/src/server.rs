@@ -3,15 +3,16 @@ use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
-use tracing::debug;
 use nvme::types::Byte;
 use std::error::Error;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
+use tracing::debug;
 
 use crate::cache::bucket::Chunk;
+use crate::metrics::{HitType, METRICS, MetricType, init_metrics_exporter};
 use crate::remote::RemoteBackend;
 use crate::{device, request};
 use bincode;
@@ -25,7 +26,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::metrics::{init_metrics_exporter, HitType, MetricType, METRICS};
 // Global tokio runtime
 // pub static RUNTIME: Lazy<Runtime> =
 // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
@@ -171,7 +171,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&self.cache),
             Duration::from_secs(self.config.eviction.eviction_interval),
             self.evict_rx.clone(),
-            writerpool.clone()
+            writerpool.clone(),
         )?;
 
         // Shutdown signal
@@ -426,7 +426,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                 break;
             }
         }
-        METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_histogram_latency(
+            "get_total_latency_ms",
+            start.elapsed(),
+            MetricType::MsLatency,
+        );
     }
     Ok(())
 }

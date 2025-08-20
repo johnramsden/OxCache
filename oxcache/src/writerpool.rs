@@ -1,3 +1,4 @@
+use crate::metrics::{METRICS, MetricType};
 use crate::{
     cache::{self},
     device,
@@ -7,7 +8,6 @@ use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use crate::metrics::{MetricType, METRICS};
 
 #[derive(Debug)]
 pub struct WriteResponse {
@@ -55,8 +55,12 @@ impl Writer {
                 let mut policy = mtx.lock().unwrap();
                 policy.write_update(loc.clone());
             });
-            METRICS.update_metric_histogram_latency("device_write_latency_ms", start.elapsed(), MetricType::MsLatency);
-            
+            METRICS.update_metric_histogram_latency(
+                "device_write_latency_ms",
+                start.elapsed(),
+                MetricType::MsLatency,
+            );
+
             let resp = WriteResponse { location: result };
             let snd = msg.responder.send(resp);
             if snd.is_err() {

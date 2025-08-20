@@ -231,7 +231,9 @@ pub fn get_zone_capacity(fd: RawFd, nsid: u32) -> Result<LogicalBlock, NVMeError
 
 /// Returns the zone capacity for the given NVMe device and namespace.
 pub fn get_zone_state(fd: RawFd, nsid: u32, zone: Zone) -> Result<ZoneState, NVMeError> {
-    Ok(report_zones_all(fd, nsid)?.1[zone as usize].zone_state.clone())
+    Ok(report_zones_all(fd, nsid)?.1[zone as usize]
+        .zone_state
+        .clone())
 }
 
 /// Returns a report of all zones for the given NVMe device and namespace.

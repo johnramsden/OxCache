@@ -1,10 +1,12 @@
-use std::{fs, io};
 use crate::cache::Cache;
+use crate::cache::bucket::Chunk as CacheKey;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::{EvictTarget, EvictorMessage};
+use crate::metrics::{METRICS, MetricType};
 use crate::server::RUNTIME;
 use crate::writerpool::{WriteRequest, WriterPool};
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
+use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use bytes::Bytes;
 use flume::Sender;
 use futures::future::join_all;
@@ -14,9 +16,7 @@ use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Z
 use std::io::ErrorKind;
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use crate::metrics::{MetricType, METRICS};
-use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
-use crate::cache::bucket::Chunk as CacheKey;
+use std::{fs, io};
 
 pub struct Zoned {
     nvme_config: NVMeConfig,
@@ -66,7 +66,12 @@ pub trait Device: Send + Sync {
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation>;
 
     /// This is expected to remove elements from the cache as well
-    fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()>;
+    fn evict(
+        self: Arc<Self>,
+        locations: EvictTarget,
+        cache: Arc<Cache>,
+        writer_pool: Arc<WriterPool>,
+    ) -> io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
@@ -248,7 +253,6 @@ impl Zoned {
 
         Ok(())
     }
-
 }
 
 impl Zoned {
@@ -274,20 +278,23 @@ impl Zoned {
                 config.chunk_size_in_lbas = chunk_size_in_logical_blocks;
                 config.chunk_size_in_bytes = chunk_size;
                 let num_zones: Zone = config.num_zones;
-                
+
                 // Apply max_zones restriction if specified
                 let restricted_num_zones = if let Some(max_zones) = max_zones {
                     if max_zones > num_zones {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            format!("max_zones ({}) cannot be larger than the maximum number of zones available on the device ({})", max_zones, num_zones)
+                            format!(
+                                "max_zones ({}) cannot be larger than the maximum number of zones available on the device ({})",
+                                max_zones, num_zones
+                            ),
                         ));
                     }
                     max_zones
                 } else {
                     num_zones
                 };
-                
+
                 let zone_list = ZoneList::new(
                     restricted_num_zones,
                     config.chunks_per_zone,
@@ -453,7 +460,6 @@ impl Zoned {
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-
         let sz = data.len() as u64;
 
         let zone_index: Zone = loop {
@@ -473,7 +479,11 @@ impl Device for Zoned {
 
         let start = std::time::Instant::now();
         let res = self.chunked_append(data, zone_index);
-        METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_histogram_latency(
+            "disk_write_latency_ms",
+            start.elapsed(),
+            MetricType::MsLatency,
+        );
         METRICS.update_metric_counter("written_bytes_total", sz);
         METRICS.update_metric_counter("bytes_total", sz);
         res
@@ -486,13 +496,22 @@ impl Device for Zoned {
 
         let start = std::time::Instant::now();
         self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
-        METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_histogram_latency(
+            "disk_read_latency_ms",
+            start.elapsed(),
+            MetricType::MsLatency,
+        );
         METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
         METRICS.update_metric_counter("bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 
-    fn evict(self: Arc<Self>, locations: EvictTarget,  cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()> {
+    fn evict(
+        self: Arc<Self>,
+        locations: EvictTarget,
+        cache: Arc<Cache>,
+        writer_pool: Arc<WriterPool>,
+    ) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
@@ -514,9 +533,8 @@ impl Device for Zoned {
                     let cache_clone = cache.clone();
                     let self_clone = self_clone.clone();
                     let writer_pool = writer_pool.clone();
-                    tokio::spawn(
-                        async move {
-                            cache_clone.clean_zone_and_update_map(
+                    tokio::spawn(async move {
+                        cache_clone.clean_zone_and_update_map(
                                 zone.clone(),
                                 // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
                                 // which is the list of chunks that need to be written back
@@ -583,11 +601,11 @@ impl Device for Zoned {
                                     }
                                 },
                             ).await
-                            // Interesting, the compiler will throw an error if I don't await here.
-                            // The async move moves the value and declares that this block returns a Future
-                            // If we don't await it, the Future is referencing a local value. So we await it
-                            // to store it in the state of the Future. I think that's what's happening here
-                        });
+                        // Interesting, the compiler will throw an error if I don't await here.
+                        // The async move moves the value and declares that this block returns a Future
+                        // If we don't await it, the Future is referencing a local value. So we await it
+                        // to store it in the state of the Future. I think that's what's happening here
+                    });
 
                     tracing::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
@@ -713,20 +731,23 @@ impl BlockInterface {
 
         // Num_zones
         let num_zones = nvme_config.total_size_in_bytes / block_zone_capacity;
-        
+
         // Apply max_zones restriction if specified
         let restricted_num_zones = if let Some(max_zones) = max_zones {
             if max_zones > num_zones {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("max_zones ({}) cannot be larger than the maximum number of zones available on the device ({})", max_zones, num_zones)
+                    format!(
+                        "max_zones ({}) cannot be larger than the maximum number of zones available on the device ({})",
+                        max_zones, num_zones
+                    ),
                 ));
             }
             max_zones
         } else {
             num_zones
         };
-        
+
         // Chunks per zone
         let chunks_per_zone = block_zone_capacity / chunk_size;
 
@@ -826,7 +847,11 @@ impl Device for BlockInterface {
 
         let start = std::time::Instant::now();
         self.chunked_append(data, write_addr)?;
-        METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_histogram_latency(
+            "disk_write_latency_ms",
+            start.elapsed(),
+            MetricType::MsLatency,
+        );
         METRICS.update_metric_counter("written_bytes_total", sz);
         METRICS.update_metric_counter("bytes_total", sz);
         Ok(chunk_location)
@@ -844,18 +869,26 @@ impl Device for BlockInterface {
             &mut data,
             &self.nvme_config,
         )?;
-        METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_histogram_latency(
+            "disk_read_latency_ms",
+            start.elapsed(),
+            MetricType::MsLatency,
+        );
         METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
         METRICS.update_metric_counter("bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 
-    fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>) -> io::Result<()> {
+    fn evict(
+        self: Arc<Self>,
+        locations: EvictTarget,
+        cache: Arc<Cache>,
+        _writer_pool: Arc<WriterPool>,
+    ) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
         match locations {
             EvictTarget::Chunk(chunk_locations, _) => {
-
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
