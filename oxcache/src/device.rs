@@ -1,15 +1,17 @@
-use std::fs;
+use std::{fs, io};
 use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::{EvictTarget, EvictorMessage};
 use crate::server::RUNTIME;
+use crate::writerpool::{WriteRequest, WriterPool};
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use bytes::Bytes;
 use flume::Sender;
+use futures::future::join_all;
 use nvme::info::{get_active_zones, get_lba_at, is_zoned_device, nvme_get_info, report_zones_all};
 use nvme::ops::{close_zone, finish_zone, reset_zone, zns_append};
 use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Zone, ZoneState};
-use std::io::{self, ErrorKind};
+use std::io::ErrorKind;
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use crate::metrics::{MetricType, METRICS};
@@ -19,6 +21,7 @@ use crate::cache::bucket::Chunk as CacheKey;
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
+    // Notification that the number of writers has decreased to below the MAR and zone opening/reset can be attempted
     zones: Arc<(Mutex<ZoneList>, Condvar)>,
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
@@ -63,7 +66,7 @@ pub trait Device: Send + Sync {
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation>;
 
     /// This is expected to remove elements from the cache as well
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()>;
+    fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
@@ -489,12 +492,12 @@ impl Device for Zoned {
         Ok(Bytes::from(data))
     }
 
-    fn evict(&self, locations: EvictTarget,  cache: Arc<Cache>) -> io::Result<()> {
+    fn evict(self: Arc<Self>, locations: EvictTarget,  cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
         match locations {
-            EvictTarget::Chunk(mut chunk_locations, clean_locations) => {
+            EvictTarget::Chunk(chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
@@ -503,88 +506,89 @@ impl Device for Zoned {
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
 
-                {
-                    let (zone_mtx, _) = &*self.zones;
-                    let mut zones = zone_mtx.lock().unwrap();
-                    for c in chunk_locations {
-                        zones.return_chunk_location(&c, false);
-                    }
-                }
-
                 // Cleaning
+                let self_clone = self.clone();
                 for zone in clean_locations {
-                    let zs = nvme::info::get_zone_state(self.nvme_config.fd, self.nvme_config.nsid, zone).unwrap();
-                    if zs == ZoneState::Full || zs == ZoneState::Closed {
-                        tracing::trace!("Correct state for eviction of {}: {:?}", zone, zs);
-                    } else {
-                        tracing::trace!("Incorrect state for eviction of {}: {:?}", zone, zs);
-                        panic!("Incorrect state for eviction");
-                    }
+                    // Spawn a task that asynchronously runs this function.
 
-                    RUNTIME.block_on(cache.clean_zone_and_update_map(
-                        zone,
-                        {
-                            // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
-                            let this = self;
-                            move |items: Vec<(CacheKey, Arc<ChunkLocation>)>| {
-                                async move {
-                                    // Increasing chunk index, might not be neccesary
-                                    let mut items = items;
-                                    items.sort_by_key(|(_, loc)| loc.index);
+                    let cache_clone = cache.clone();
+                    let self_clone = self_clone.clone();
+                    let writer_pool = writer_pool.clone();
+                    tokio::spawn(
+                        async move {
+                            cache_clone.clean_zone_and_update_map(
+                                zone.clone(),
+                                // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
+                                // which is the list of chunks that need to be written back
+                                {
+                                    let self_clone = self_clone.clone();
+                                    |items: Vec<(CacheKey, Arc<ChunkLocation>)>| {
+                                        async move {
+                                            // Increasing chunk index, might not be neccesary
+                                            let mut items = items;
+                                            items.sort_by_key(|(_, loc)| loc.index);
 
-                                    let mut out = Vec::with_capacity(items.len());
-                                    for (key, loc) in items {
-                                        let bytes = this.read((*loc).clone())?; // one full chunk
-                                        out.push((key, bytes));
-                                    }
-                                    Ok(out)
-                                }
-                            }
-                        },
-                        {
-                            // Writer callback, reset then rewrite valid chunks
-                            let this = self;
-                            move |payloads: Vec<(CacheKey, bytes::Bytes)>| {
-                                async move {
-                                    // Reset the zone so the write pointer returns to the start.
-                                    {
-                                        let (zone_mtx, _) = &*this.zones;
-                                        let mut zones = zone_mtx.lock().unwrap();
-                                        let remaining = this.config.chunks_per_zone - payloads.len() as u64;
-                                        zones.reset_zone_with_capacity(zone, remaining, this)?;
-                                    }
-
-                                    // When every chunk is invalid
-                                    let payloads_empty = payloads.is_empty();
-                                    let new_locs = if !payloads_empty {
-                                        // Append bufferred data
-                                        let mut new_locs = Vec::with_capacity(payloads.len());
-                                        for (key, data) in payloads {
-                                            // Too many active zones because this also takes a zone
-                                            let loc = this.chunked_append(data, zone)?;
-                                            new_locs.push((key, loc));
+                                            // Reads from location and returns the bytes
+                                            items.iter().map(|(key, loc)| {
+                                                Ok((key.clone(), self_clone.read((**loc).clone())?))
+                                            }).collect()
                                         }
-                                        new_locs
-                                    } else {
-                                        vec![]
-                                    };
-
-                                    // Update zone list by returning zones
-                                    {
-                                        let (zone_mtx, cv) = &*this.zones;
-                                        let mut zones = zone_mtx.lock().unwrap();
-                                        zones.return_zone(zone);
-                                        if !payloads_empty {
-                                            this.close_zone(zone)?;
-                                        }
-                                        cv.notify_all();
                                     }
+                                },
 
-                                    Ok(new_locs) // Vec<(Chunk, ChunkLocation)>
-                                }
-                            }
-                        },
-                    ))?;
+                                // After this point, the chunks that are invalid should have been removed, and the chunks that are valid should be in a waiting state.
+                                {
+                                    let writer_pool = writer_pool.clone();
+                                    let self_clone = self_clone;
+
+                                    // Writer callback
+                                    |payloads: Vec<(CacheKey, bytes::Bytes)>| {
+                                        async move {
+
+                                            { // Return zones back to the zone list and reset the zone
+                                                let (zone_mtx, cv) = &*self_clone.zones;
+                                                let mut zones = zone_mtx.lock().unwrap();
+                                                zones.reset_zone(zone, &*self_clone)?;
+                                                cv.notify_all();
+                                            } // Drop the mutex, so we don't have to put it in an await
+
+                                            // Queue valid chunks to be written back to, in the writer pool
+                                            let mut futures = Vec::with_capacity(payloads.len());
+                                            for (key, data) in payloads {
+                                                let writer_pool = writer_pool.clone();
+
+                                                // Generate a vector of futures that send the data and then get their location in the cache
+                                                let (tx, rx) = flume::bounded(1);
+                                                futures.push(async move {
+
+                                                    writer_pool.send(WriteRequest{
+                                                        data: data.clone(),
+                                                        responder: tx,
+                                                    }).await?;
+
+                                                    let location = rx.recv_async().await.map_err(|e| {
+                                                        io::Error::new(io::ErrorKind::Other,
+                                                            format!("failed to send write request: {}", e))
+                                                    }).and_then(|response| response.location)?;
+
+                                                    Ok::<(CacheKey, ChunkLocation), io::Error>((key.clone(), location))
+                                                });
+                                            }
+
+                                            // Await for the results all at the same time, so they can race
+                                            let write_results = join_all(futures).await.into_iter().collect::<Result<Vec<(CacheKey, ChunkLocation)>, io::Error>>()?;
+
+                                            Ok(write_results) // Vec<(Chunk, ChunkLocation)>
+                                        }
+                                    }
+                                },
+                            ).await
+                            // Interesting, the compiler will throw an error if I don't await here.
+                            // The async move moves the value and declares that this block returns a Future
+                            // If we don't await it, the Future is referencing a local value. So we await it
+                            // to store it in the state of the Future. I think that's what's happening here
+                        });
+
                     tracing::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
 
@@ -595,7 +599,7 @@ impl Device for Zoned {
 
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
-                zones.reset_zones(&zones_to_evict, self)?;
+                zones.reset_zones(&zones_to_evict, &*self)?;
 
                 tracing::debug!("Zones evicted: {:?}", zones_to_evict);
 
@@ -846,7 +850,7 @@ impl Device for BlockInterface {
         Ok(Bytes::from(data))
     }
 
-    fn evict(&self, locations: EvictTarget, cache: Arc<Cache>) -> io::Result<()> {
+    fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
         match locations {
@@ -861,7 +865,7 @@ impl Device for BlockInterface {
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 for c in chunk_locations {
-                    state.active_zones.return_chunk_location(&c, true);
+                    state.active_zones.return_chunk_location(&c);
                 }
 
                 Ok(())
@@ -877,7 +881,7 @@ impl Device for BlockInterface {
                 rt.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
-                state.active_zones.reset_zones(&locations, self)?;
+                state.active_zones.reset_zones(&locations, &*self)?;
                 Ok(())
             }
         }

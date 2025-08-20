@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
+use crate::writerpool::WriterPool;
 use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru::LruCache;
@@ -283,6 +284,7 @@ impl Evictor {
         cache: Arc<Cache>,
         evict_interval: Duration,
         evict_rx: Receiver<EvictorMessage>,
+        writer_pool: Arc<WriterPool>
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -314,7 +316,8 @@ impl Evictor {
 
                 drop(policy);
 
-                let result = match device_clone.evict(targets, cache_clone.clone()) {
+                let device_clone = device_clone.clone();
+                let result = match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
                     Err(e) => {
                         tracing::error!("Error evicting: {}", e);
                         Err(e.to_string())

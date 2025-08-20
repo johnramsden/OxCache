@@ -405,7 +405,7 @@ impl ZoneList {
     }
 
     // Used to return chunks after chunk eviction
-    pub fn return_chunk_location(&mut self, chunk: &ChunkLocation, return_zone: bool) {
+    pub fn return_chunk_location(&mut self, chunk: &ChunkLocation) {
         #[cfg(debug_assertions)]
         self.check_invariants();
 
@@ -428,7 +428,7 @@ impl ZoneList {
 
         // If len == 1, it was empty, must be returned to free zones, otherwise it already was
         // Goes in free to avoid exceeding max_active_resources
-        if zone.chunks_available.len() == 1 && return_zone {
+        if zone.chunks_available.len() == 1 {
             self.free_zones.push_back(chunk.zone);
         }
         tracing::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
@@ -493,39 +493,6 @@ impl ZoneList {
         }
 
         Ok(())
-    }
-
-    pub fn reset_zone_with_capacity(
-        &mut self,
-        idx: ZoneIndex,
-        remaining: Chunk,
-        device: &dyn device::Device
-    ) -> std::io::Result<()> {
-        // I think we need to add a special method here for the state tracker
-
-
-        let zone = self.zones.get_mut(&idx).unwrap();
-        zone.chunks_available = (self.chunks_per_zone-remaining..self.chunks_per_zone).rev().collect();
-
-        #[cfg(debug_assertions)]
-        self.check_invariants();
-
-        device.reset_zone(idx)
-    }
-
-    /// Returns a zone back to the free list
-    pub fn return_zone(
-        &mut self,
-        idx: ZoneIndex,
-    ) {
-        // TODO: this doesn't map to any state transitions
-        // #[cfg(debug_assertions)]
-        // self.state_tracker.reset_zone(idx);
-
-        self.free_zones.push_back(idx);
-
-        #[cfg(debug_assertions)]
-        self.check_invariants();
     }
 
     pub fn get_num_available_chunks(&self) -> Chunk {
@@ -621,10 +588,7 @@ mod zone_list_tests {
     use std::sync::Arc;
 
     use crate::{
-        cache::{Cache, bucket::ChunkLocation},
-        device::Device,
-        eviction::EvictTarget,
-        zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait},
+        cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, writerpool::WriterPool, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}
     };
     use bytes::Bytes;
     use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
@@ -649,7 +613,7 @@ mod zone_list_tests {
         }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(&self, _locations: EvictTarget, _cache: Arc<Cache>) -> std::io::Result<()> {
+        fn evict(self: Arc<Self>, _locations: EvictTarget, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>) -> std::io::Result<()> {
             Ok(())
         }
 
