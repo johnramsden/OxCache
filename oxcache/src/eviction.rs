@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_chunk_update_ordering() {
-        let mut policy = ChunkEvictionPolicy::new(1, 3, 0, 0, 2, 2);
+        let mut policy = ChunkEvictionPolicy::new(1, 3, 1, 0, 2, 2);
 
         // zone=[_,_,_,_], lru=()
         let c = ChunkLocation::new(1, 0);
@@ -519,7 +519,7 @@ mod tests {
     fn check_chunk_priority_queue() {
         // 8 zones, 1 chunks per zone. Should evict at 3 inserted
         let mut policy = ChunkEvictionPolicy::new(
-            2, 6, 1, 4, 4, 2);
+            2, 6, 4, 1, 4, 2);
 
         for z in 0..3 {
             for i in 0..2 {
@@ -531,6 +531,6 @@ mod tests {
         assert_eq!(5, got, "Expected 5, but got {}", got);
 
         let got = policy.get_clean_targets().len();
-        assert_eq!(0, got, "Expected 0, but got {}", got);
+        assert_eq!(3, got, "Expected 3, but got {}", got);
     }
 }
