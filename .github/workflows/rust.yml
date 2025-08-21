@@ -125,3 +125,6 @@ jobs:
     - name: Test
       run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && sudo env "HOME=/home/ubuntu" bash -c ". /home/ubuntu/.cargo/env && RUNNING_IN_GITHUB_ACTIONS=yes cargo test"'
 
+    # To SSH into actions
+#    - name: Setup tmate session
+#      uses: mxschmitt/action-tmate@v3
