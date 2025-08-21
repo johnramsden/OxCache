@@ -1,6 +1,6 @@
 use axum::{routing::get, Router};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{event, info, Level};
 use metrics::{counter, gauge, histogram};

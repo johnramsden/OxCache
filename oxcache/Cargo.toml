@@ -38,3 +38,6 @@ tracing-appender = "0.2.3"
 tracing = "0.1.41"
 chrono = "0.4.41"
 
+[[test]]
+  name = "integration_tests"
+  harness = false
