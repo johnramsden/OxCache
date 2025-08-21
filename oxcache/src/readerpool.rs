@@ -1,10 +1,10 @@
 use crate::eviction::EvictionPolicyWrapper;
+use crate::metrics::{METRICS, MetricType};
 use crate::{cache, device};
 use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use crate::metrics::{MetricType, METRICS};
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -46,7 +46,11 @@ impl Reader {
             // println!("Reader {} processing: {:?}", self.id, msg);
             let start = std::time::Instant::now();
             let result = self.device.read(msg.location.clone());
-            METRICS.update_metric_histogram_latency("device_read_latency_ms", start.elapsed(), MetricType::MsLatency);
+            METRICS.update_metric_histogram_latency(
+                "device_read_latency_ms",
+                start.elapsed(),
+                MetricType::MsLatency,
+            );
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);
                 let mut policy = mtx.lock().unwrap();

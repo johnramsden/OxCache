@@ -1,13 +1,12 @@
+use crate::cache::bucket::Chunk as CacheKey;
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
+use bytes::Bytes;
 use ndarray::{Array2, ArrayBase, s};
 use nvme::types::{self, Zone};
 use std::io::ErrorKind;
-use std::iter::zip;
 use std::sync::Arc;
 use std::{collections::HashMap, io};
-use bytes::Bytes;
 use tokio::sync::{Notify, RwLock};
-use crate::cache::bucket::Chunk as CacheKey;
 
 pub mod bucket;
 
@@ -228,7 +227,7 @@ impl Cache {
         // Collect items and corresponding notifiers
         let (items, notifies) = {
             // TODO: Can we deadlock here?
-            let mut bm = self.bm.write().await;
+            let bm = self.bm.write().await;
             let zone_slice = s![zone as usize, ..];
             let mut out = Vec::new();
             let mut notifies = Vec::new();
@@ -247,7 +246,10 @@ impl Cache {
                         ChunkState::Ready(loc) => Arc::clone(loc),
                         ChunkState::Waiting(_) => {
                             // TODO: Shouldnt occur since zone was full
-                            return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
+                            return Err(io::Error::new(
+                                ErrorKind::Other,
+                                "Encountered invalid waiting state during zone cleaning",
+                            ));
                         }
                     };
 
@@ -320,8 +322,6 @@ impl Cache {
         }
         Ok(())
     }
-
-
 
     pub async fn remove_entry(&self, chunk: &ChunkLocation) -> tokio::io::Result<()> {
         // to_relocate is a list of ChunkLocations that the caller wants to update

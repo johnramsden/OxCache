@@ -1,4 +1,3 @@
-use std::io::ErrorKind;
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
 use crate::writerpool::WriterPool;
@@ -6,13 +5,13 @@ use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru::LruCache;
 use nvme::types::{Chunk, Zone};
+use std::io::ErrorKind;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use crate::zone_state::zone_priority_queue;
 
 pub enum EvictionPolicyWrapper {
     Dummy(DummyEvictionPolicy),
@@ -40,7 +39,10 @@ impl EvictionPolicyWrapper {
             "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
             "chunk" => {
                 if clean_high_water.is_none() || clean_low_water.is_none() {
-                    return Err(std::io::Error::new(ErrorKind::InvalidInput, "Chunk eviction must have clean_high_water and clean_low_water"));
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "Chunk eviction must have clean_high_water and clean_low_water",
+                    ));
                 }
                 Ok(EvictionPolicyWrapper::Chunk(ChunkEvictionPolicy::new(
                     high_water,
@@ -50,7 +52,7 @@ impl EvictionPolicyWrapper {
                     nr_zones,
                     nr_chunks_per_zone,
                 )))
-            },
+            }
             "promotional" => Ok(EvictionPolicyWrapper::Promotional(
                 PromotionalEvictionPolicy::new(high_water, low_water, nr_zones, nr_chunks_per_zone),
             )),
@@ -86,7 +88,7 @@ impl EvictionPolicyWrapper {
                 let et = c.get_evict_targets();
                 let ct = c.get_clean_targets();
                 EvictTarget::Chunk(et, ct)
-            },
+            }
         }
     }
 }
@@ -121,7 +123,9 @@ impl EvictionPolicy for DummyEvictionPolicy {
         vec![]
     }
 
-    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
+    fn get_clean_targets(&mut self) -> Self::CleanTarget {
+        ()
+    }
 }
 
 pub struct PromotionalEvictionPolicy {
@@ -193,7 +197,9 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         targets
     }
 
-    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
+    fn get_clean_targets(&mut self) -> Self::CleanTarget {
+        ()
+    }
 }
 
 pub struct ChunkEvictionPolicy {
@@ -202,7 +208,7 @@ pub struct ChunkEvictionPolicy {
     nr_zones: Zone,
     nr_chunks_per_zone: Chunk,
     lru: LruCache<ChunkLocation, ()>,
-    pq: ZonePriorityQueue
+    pq: ZonePriorityQueue,
 }
 
 impl ChunkEvictionPolicy {
@@ -220,7 +226,7 @@ impl ChunkEvictionPolicy {
             nr_zones,
             nr_chunks_per_zone,
             lru: LruCache::unbounded(),
-            pq: ZonePriorityQueue::new(nr_zones, clean_high_water, clean_low_water)
+            pq: ZonePriorityQueue::new(nr_zones, clean_high_water, clean_low_water),
         }
     }
 }
@@ -284,7 +290,7 @@ impl Evictor {
         cache: Arc<Cache>,
         evict_interval: Duration,
         evict_rx: Receiver<EvictorMessage>,
-        writer_pool: Arc<WriterPool>
+        writer_pool: Arc<WriterPool>,
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -317,13 +323,14 @@ impl Evictor {
                 drop(policy);
 
                 let device_clone = device_clone.clone();
-                let result = match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
-                    Err(e) => {
-                        tracing::error!("Error evicting: {}", e);
-                        Err(e.to_string())
-                    }
-                    Ok(_) => Ok(()),
-                };
+                let result =
+                    match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
+                        Err(e) => {
+                            tracing::error!("Error evicting: {}", e);
+                            Err(e.to_string())
+                        }
+                        Ok(_) => Ok(()),
+                    };
 
                 if let Some(sender) = sender {
                     tracing::debug!("Sending eviction response to sender: {:?}", result);
@@ -521,8 +528,7 @@ mod tests {
     #[test]
     fn check_chunk_priority_queue() {
         // 8 zones, 1 chunks per zone. Should evict at 3 inserted
-        let mut policy = ChunkEvictionPolicy::new(
-            2, 6, 1, 4, 4, 2);
+        let mut policy = ChunkEvictionPolicy::new(2, 6, 1, 4, 4, 2);
 
         for z in 0..3 {
             for i in 0..2 {
