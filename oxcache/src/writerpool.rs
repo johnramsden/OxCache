@@ -20,18 +20,33 @@ pub struct WriteRequest {
     pub responder: Sender<WriteResponse>,
 }
 
+#[derive(Debug)]
+pub struct WriteRequestInternal {
+    pub data: Bytes,
+    pub responder: Sender<WriteResponse>,
+    pub update_lru: bool,
+}
+
+fn request_update_lru(req: WriteRequest) -> WriteRequestInternal {
+    WriteRequestInternal { data: req.data, responder: req.responder, update_lru: true }
+}
+
+fn request_no_update_lru(req: WriteRequest) -> WriteRequestInternal {
+    WriteRequestInternal { data: req.data, responder: req.responder, update_lru: false }
+}
+
 /// Represents an individual writer thread
 struct Writer {
     device: Arc<dyn device::Device>,
     id: usize,
-    receiver: Receiver<WriteRequest>,
+    receiver: Receiver<WriteRequestInternal>,
     eviction: Arc<Mutex<EvictionPolicyWrapper>>,
 }
 
 impl Writer {
     fn new(
         id: usize,
-        receiver: Receiver<WriteRequest>,
+        receiver: Receiver<WriteRequestInternal>,
         device: Arc<dyn device::Device>,
         eviction: &Arc<Mutex<EvictionPolicyWrapper>>,
     ) -> Self {
@@ -52,8 +67,11 @@ impl Writer {
 
             let result = self.device.append(msg.data).inspect(|loc| {
                 let mtx = Arc::clone(&self.eviction);
-                let mut policy = mtx.lock().unwrap();
-                policy.write_update(loc.clone());
+
+                if msg.update_lru {
+                    let mut policy = mtx.lock().unwrap();
+                    policy.write_update(loc.clone());
+                }
             });
             METRICS.update_metric_histogram_latency(
                 "device_write_latency_ms",
@@ -77,7 +95,7 @@ impl Writer {
 /// Pool of writer threads sharing a single receiver
 #[derive(Debug)]
 pub struct WriterPool {
-    sender: Sender<WriteRequest>,
+    sender: Sender<WriteRequestInternal>,
     handles: Vec<JoinHandle<()>>,
 }
 
@@ -88,7 +106,7 @@ impl WriterPool {
         device: Arc<dyn device::Device>,
         eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>,
     ) -> Self {
-        let (sender, receiver): (Sender<WriteRequest>, Receiver<WriteRequest>) = unbounded();
+        let (sender, receiver): (Sender<WriteRequestInternal>, Receiver<WriteRequestInternal>) = unbounded();
         let mut handles = Vec::with_capacity(num_writers);
 
         for id in 0..num_writers {
@@ -103,7 +121,16 @@ impl WriterPool {
 
     /// Send a message to the writer pool
     pub async fn send(&self, message: WriteRequest) -> std::io::Result<()> {
-        self.sender.send_async(message).await.map_err(|e| {
+        self.sender.send_async(request_update_lru(message)).await.map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("WriterPool::send_async failed: {}", e),
+            )
+        })
+    }
+
+    pub async fn send_no_update_lru(&self, message: WriteRequest) -> std::io::Result<()> {
+        self.sender.send_async(request_no_update_lru(message)).await.map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("WriterPool::send_async failed: {}", e),
