@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use crate::server::{ServerConfig, ServerEvictionConfig, ServerMetricsConfig, ServerRemoteConfig};
 
+
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 pub struct CliArgs {
@@ -47,6 +48,12 @@ pub struct CliArgs {
     pub low_water_evict: Option<u64>,
 
     #[arg(long)]
+    pub high_water_clean: Option<u64>,
+
+    #[arg(long)]
+    pub low_water_clean: Option<u64>,
+
+    #[arg(long)]
     pub block_zone_capacity: Option<Byte>,
 
     #[arg(long)]
@@ -61,9 +68,16 @@ pub struct CliArgs {
     #[arg(long)]
     pub metrics_port: Option<u16>,
 
+    #[arg(long)]
+    pub max_zones: Option<u64>,
+
     /// Logging level: error, warn, info, debug, trace. Overrides config if set.
     #[arg(long)]
     pub log_level: Option<String>,
+
+    /// Directory to store metrics log files
+    #[arg(long)]
+    pub file_metrics_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +89,7 @@ pub struct ParsedServerConfig {
     pub chunk_size: Option<Byte>,
     pub max_write_size: Option<Byte>,
     pub block_zone_capacity: Option<Byte>,
+    pub max_zones: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +104,8 @@ pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
     pub high_water_evict: Option<u64>,
     pub low_water_evict: Option<u64>,
+    pub high_water_clean: Option<u64>,
+    pub low_water_clean: Option<u64>,
     pub eviction_interval: Option<usize>,
 }
 
@@ -96,6 +113,7 @@ pub struct ParsedEvictionConfig {
 pub struct ParsedMetricsConfig {
     pub ip_addr: Option<String>,
     pub port: Option<u16>,
+    pub file_metrics_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,7 +194,7 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
 
     if remote_type != "emulated" && remote_artificial_delay_microsec.is_some() {
         // Warn if artificial delay is set for non-emulated remote types
-        log::warn!(
+        tracing::warn!(
             "remote_artificial_delay_microsec has no effect if remote_type is not `emulated`"
         );
     }
@@ -197,6 +215,16 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .clone()
         .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
         .ok_or("Missing low_water_evict")?;
+
+    let high_water_clean = cli
+        .high_water_clean
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.high_water_clean.clone());
+    let low_water_clean = cli
+        .low_water_clean
+        .clone()
+        .or_else(|| config.as_ref()?.eviction.low_water_clean.clone());
+
     let eviction_interval = cli
         .eviction_interval
         .clone()
@@ -205,6 +233,25 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
 
     if low_water_evict < high_water_evict {
         return Err("low_water_evict must be greater than high_water_evict".into());
+    }
+
+    // Check clean settings
+    if eviction_policy.to_lowercase() == "chunk" {
+        let low_water_clean = if low_water_clean.is_none() {
+            return Err("low_water_clean must be set".into());
+        } else { low_water_clean.unwrap() };
+
+        let high_water_clean = if high_water_clean.is_none() {
+            return Err("high_water_clean must be set".into());
+        } else { high_water_clean.unwrap() };
+
+        if low_water_clean > high_water_clean {
+            return Err("low_water_clean must be less than high_water_clean".into());
+        }
+
+        if high_water_clean > low_water_evict {
+            return Err("high_water_clean must be less than or equal to low_water_evict".into());
+        }
     }
 
     let chunk_size = cli
@@ -220,7 +267,11 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .block_zone_capacity
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
-    
+
+    let max_zones = cli
+        .max_zones
+        .or_else(|| config.as_ref()?.server.max_zones);
+
     // Metrics
 
     let metrics_port = cli
@@ -231,17 +282,17 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .metrics_ip_addr
         .clone()
         .or_else(|| config.as_ref()?.metrics.ip_addr.clone());
-    
+
     if metrics_port.is_none() && metrics_ip.is_some() || metrics_port.is_some() && metrics_ip.is_none() {
         return Err("Missing metrics ip or port, both must be set or neither".into());
     }
-    
+
     let metrics_exporter_addr = if metrics_port.is_some() {
         let ip = match metrics_ip.unwrap().parse::<IpAddr>() {
             Ok(ip) => ip,
             Err(e) => {
                 return Err(format!("Invalid metrics ip address {:?}", e).into());
-            }       
+            }
         };
         Some(SocketAddr::new(ip, metrics_port.unwrap()))
     } else {
@@ -264,13 +315,16 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
             eviction_type: eviction_policy,
             high_water_evict,
             low_water_evict,
+            high_water_clean,
+            low_water_clean,
             eviction_interval: eviction_interval as u64,
         },
         chunk_size,
         block_zone_capacity,
         max_write_size,
+        max_zones,
         metrics: ServerMetricsConfig {
-            metrics_exporter_addr 
+            metrics_exporter_addr
         }
     })
 }

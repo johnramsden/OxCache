@@ -177,6 +177,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         ));
 
         // Shutdown signal
+        let shutdown = self.shutdown.clone();
         let shutdown_signal = self.shutdown.clone();
 
         // Spawn a task to listen for Ctrl+C
