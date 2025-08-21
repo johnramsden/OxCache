@@ -2,7 +2,7 @@ name: Rust build and test
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ '**' ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:  # Allows manual runs
@@ -89,28 +89,29 @@ jobs:
     - name: Run QEMU VM with Ubuntu
       run: |
         sudo qemu-system-x86_64 \
-        -enable-kvm \
-        -m 12G \
-        -smp 2 \
-        -cpu host \
-        -drive file=/tmp/ubuntu.qcow2,format=qcow2,if=virtio \
-        -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
-        -net user,hostfwd=tcp::2222-:22 \
-        -net nic \
-        -device nvme,id=nvme0,serial=deadbeef,zoned.zasl="${zasl}" \
-        -drive file="${znsimg}",id=nvmezns0,format=raw,if=none \
-        -device nvme-ns,drive=nvmezns0,bus=nvme0,nsid=1,logical_block_size="${sector_size}",\
-        physical_block_size="${sector_size}",zoned=true,zoned.zone_size="${zone_size}"M,zoned.zone_capacity="${zone_capacity}"M,\
-        zoned.max_open="${max_open}",zoned.max_active="${max_active}",\
-        uuid=5e40ec5f-eeb6-4317-bc5e-c919796a5f79 \
-        -device nvme,id=nvme1,serial=deadbaaf \
-        -drive file="${ssdimg}",id=nvmessd1,format=raw,if=none \
-        -device nvme-ns,drive=nvmessd1,bus=nvme1,nsid=1,logical_block_size="${sector_size}",\
-        physical_block_size="${sector_size}",zoned=false,uuid=5e40ec5f-eeb6-4317-bc5e-c919796a5f7a \
-        -nographic &
+          -enable-kvm \
+          -m 12G \
+          -smp 2 \
+          -cpu host \
+          -drive file=/tmp/ubuntu.qcow2,format=qcow2,if=virtio \
+          -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
+          -net user,hostfwd=tcp::2222-:22 \
+          -net nic \
+          -device nvme,id=nvme0,serial=deadbeef,zoned.zasl="${zasl}" \
+          -drive file="${znsimg}",id=nvmezns0,format=raw,if=none \
+          -device nvme-ns,drive=nvmezns0,bus=nvme0,nsid=1,logical_block_size="${sector_size}",physical_block_size="${sector_size}",zoned=true,zoned.zone_size="${zone_size}"M,zoned.zone_capacity="${zone_capacity}"M,zoned.max_open="${max_open}",zoned.max_active="${max_active}",uuid=5e40ec5f-eeb6-4317-bc5e-c919796a5f79 \
+          -device nvme,id=nvme1,serial=deadbaaf \
+          -drive file="${ssdimg}",id=nvmessd1,format=raw,if=none \
+          -device nvme-ns,drive=nvmessd1,bus=nvme1,nsid=1,logical_block_size="${sector_size}",physical_block_size="${sector_size}",zoned=false,uuid=5e40ec5f-eeb6-4317-bc5e-c919796a5f7a \
+          -nographic &
+        # Wait for SSH
+        for i in {1..60}; do
+          if sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=2 -p 2222 ubuntu@127.0.0.1 true; then
+            echo "SSH is up"; break
+          fi
+          sleep 5
+        done
 
-        # Wait for SSH to be available
-        sleep 30
 
     - name: Cache cargo registry, git, and target
       id: cache-cargo
@@ -144,3 +145,5 @@ jobs:
     - name: Test
       run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
 
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
