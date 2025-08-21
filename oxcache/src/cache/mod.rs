@@ -5,7 +5,9 @@ use std::io::ErrorKind;
 use std::iter::zip;
 use std::sync::Arc;
 use std::{collections::HashMap, io};
+use bytes::Bytes;
 use tokio::sync::{Notify, RwLock};
+use crate::cache::bucket::Chunk as CacheKey;
 
 pub mod bucket;
 
@@ -208,81 +210,117 @@ impl Cache {
         Ok(())
     }
 
-    /// Updates entries, should only be called by the evictor. Writer
-    /// should return a list of new locations on disk
-    pub async fn remove_zones_and_update_entries<W>(
+    pub async fn clean_zone_and_update_map<R, W, RFut, WFut>(
         &self,
-        zones_to_reset: &[Zone],
-        to_relocate: &[ChunkLocation],
+        zone: Zone,
+        reader: R,
         writer: W,
-    ) -> tokio::io::Result<()>
+    ) -> io::Result<()>
     where
-        W: FnOnce() -> tokio::io::Result<Vec<ChunkLocation>>,
+        R: FnOnce(Vec<(CacheKey, Arc<ChunkLocation>)>) -> RFut + Send,
+        RFut: Future<Output = io::Result<Vec<(CacheKey, Bytes)>>> + Send,
+        W: FnOnce(Vec<(CacheKey, Bytes)>) -> WFut + Send,
+        WFut: Future<Output = io::Result<Vec<(CacheKey, ChunkLocation)>>> + Send,
     {
-        // to_relocate is a list of ChunkLocations that the caller wants to update
-        // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
-        let mut bucket_guard = self.bm.write().await;
-        let mut entry_lock_list = Vec::new();
+        use ndarray::s;
 
-        // Remove to_relocate elements from the reverse_mapping, and
-        // change their entries to be in the waiting state.
-        for location in to_relocate {
-            let chunk_id = match bucket_guard.zone_to_entry[location.as_index()].clone() {
-                Some(id) => {
-                    bucket_guard.zone_to_entry[location.as_index()].take();
-                    id
-                }
-                None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
-            };
+        // Reset the existing entries
+        // Collect items and corresponding notifiers
+        let (items, notifies) = {
+            // TODO: Can we deadlock here?
+            let mut bm = self.bm.write().await;
+            let zone_slice = s![zone as usize, ..];
+            let mut out = Vec::new();
+            let mut notifies = Vec::new();
 
-            let state_guard = bucket_guard
-                .buckets
-                .get(&chunk_id)
-                .ok_or(entry_not_found())?
-                .clone();
-            let state_guard = state_guard.write().await;
-            match &*state_guard {
-                ChunkState::Ready(loc) => {
-                    assert!(**loc == *location);
-                    let entry = new_entry();
-                    bucket_guard.buckets.insert(chunk_id.clone(), entry.clone());
-                    entry_lock_list.push(entry);
-                }
-                ChunkState::Waiting(_notify) => {
-                    panic!("Error state")
+            for opt_key in bm.zone_to_entry.slice(zone_slice).iter() {
+                // Collect only if Some
+                if let Some(key) = opt_key.clone() {
+                    let entry = bm
+                        .buckets
+                        .get(&key)
+                        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
+                        .clone();
+                    let mut st = entry.write().await;
+                    let old_loc = match &*st {
+                        ChunkState::Ready(loc) => Arc::clone(loc),
+                        ChunkState::Waiting(_) => {
+                            // TODO: Shouldnt occur since zone was full
+                            return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
+                        }
+                    };
+
+                    let notify = Arc::new(Notify::new());
+                    // Update state to waiting
+                    *st = ChunkState::Waiting(Arc::clone(&notify));
+                    drop(st);
+                    out.push((key, old_loc, entry));
+                    notifies.push(notify);
                 }
             }
-        }
+            (out, notifies)
+        };
 
-        drop(bucket_guard);
-
-        // Taking advantage of an implementation detail, this will
-        // remove the entries in the zone without touching the
-        // relocated chunks, because it's already been removed from
-        // the reverse mapping
-        self.remove_zones(zones_to_reset).await?;
-
-        let write_result = writer();
-        match write_result {
+        // Read the valid chunks from the zone
+        // Buffer all chunks
+        let read_input: Vec<_> = items
+            .iter()
+            .map(|(k, l, _)| (k.clone(), Arc::clone(l)))
+            .collect();
+        let payloads = match reader(read_input).await {
+            Ok(p) => p,
             Err(e) => {
-                // TODO
+                // TODO: Should we bother? Probably still fatal
+                // rollback
+                for (_, old_loc, entry) in &items {
+                    let mut st = entry.write().await;
+                    *st = ChunkState::Ready(Arc::clone(old_loc));
+                }
+                for n in notifies {
+                    n.notify_waiters();
+                }
                 return Err(e);
             }
-            Ok(new_locations) => {
-                for (entry_lock, new_location) in zip(entry_lock_list, new_locations) {
-                    let mut entry_guard = entry_lock.write().await;
-                    let notif = match &*entry_guard {
-                        ChunkState::Ready(_chunk_location) => panic!("Wrong state"),
-                        ChunkState::Waiting(notify) => notify.clone(),
-                    };
-                    *entry_guard = ChunkState::Ready(Arc::new(new_location));
-                    notif.notify_waiters();
+        };
+
+        // Write data out
+        let new_locs = writer(payloads).await?;
+
+        // Update states & reverse map
+        {
+            let mut bm = self.bm.write().await;
+
+            // Clear old reverse slots
+            for (key, old_loc, _) in &items {
+                if bm.zone_to_entry[old_loc.as_index()].as_ref() == Some(key) {
+                    bm.zone_to_entry[old_loc.as_index()] = None;
                 }
+            }
+
+            // Set Ready and reverse map
+            for (key, new_loc) in new_locs {
+                // set entry
+                if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| *k == key) {
+                    let mut st = entry.write().await;
+                    *st = ChunkState::Ready(Arc::new(new_loc.clone()));
+                } else {
+                    return Err(io::Error::new(
+                        ErrorKind::NotFound,
+                        format!("Missing entry for {:?}", key),
+                    ));
+                }
+
+                bm.zone_to_entry[new_loc.as_index()] = Some(key);
             }
         }
 
+        for n in notifies {
+            n.notify_waiters();
+        }
         Ok(())
     }
+
+
 
     pub async fn remove_entry(&self, chunk: &ChunkLocation) -> tokio::io::Result<()> {
         // to_relocate is a list of ChunkLocations that the caller wants to update

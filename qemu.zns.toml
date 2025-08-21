@@ -1,0 +1,27 @@
+log_level = "info"
+
+[server]
+socket = "/tmp/oxcache.sock"
+disk = "/dev/disk/by-id/nvme-QEMU_NVMe_Ctrl_deadbeef"
+writer_threads = 14
+reader_threads = 14
+chunk_size = 67108864
+block_zone_capacity = 1129316352
+max_write_size = 131072
+#max_zones = 100
+
+[remote]
+remote_type = "emulated" # emulated | S3
+bucket = "S3_BUCKET"
+remote_artificial_delay_microsec = 40632
+
+[eviction]
+eviction_policy = "chunk"
+high_water_evict = 100 # Number remaining from end, evicts if reaches here
+low_water_evict = 150  # Evict until below mark
+high_water_clean = 40 # Number of invalids when we begin cleaning
+low_water_clean = 20  # Clean until below mark (only used with chunk)
+eviction_interval = 1  # Evict every 1s
+
+[metrics]
+file_metrics_directory = "./logs"
