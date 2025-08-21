@@ -130,6 +130,9 @@ jobs:
       run: |
         cargo build
 
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
+
     - name: Copy files and install Rust
       run: |
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
@@ -137,7 +140,7 @@ jobs:
         curl https://sh.rustup.rs -sSf | sh -s -- -y
         . "$HOME/.cargo/env"
         sudo apt update && sudo apt install -y build-essential libclang-dev
-        RUNNING_IN_GITHUB_ACTIONS=yes cargo build
+        cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo build
         EOF
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo/registry ubuntu@127.0.0.1:/home/ubuntu/.cargo/registry
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo/git ubuntu@127.0.0.1:/home/ubuntu/.cargo/git
@@ -145,5 +148,3 @@ jobs:
     - name: Test
       run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
 
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
