@@ -91,7 +91,7 @@ jobs:
         sudo qemu-system-x86_64 \
           -enable-kvm \
           -m 12G \
-          -smp 2 \
+          -smp max \
           -cpu host \
           -drive file=/tmp/ubuntu.qcow2,format=qcow2,if=virtio \
           -drive file=/tmp/cloud-init.iso,format=raw,if=virtio \
