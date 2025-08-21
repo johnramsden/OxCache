@@ -16,3 +16,5 @@ eviction_policy = "promotional"
 high_water_evict = 1 # Number remaining from end, evicts if reaches here
 low_water_evict = 3  # Evict until below mark
 eviction_interval = 1  # Evict every 1s
+
+[metrics]

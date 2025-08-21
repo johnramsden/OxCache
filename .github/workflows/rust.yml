@@ -39,7 +39,7 @@ jobs:
     - name: Install packages
       uses: awalsh128/cache-apt-pkgs-action@latest
       with:
-        packages: qemu-system-x86 qemu-utils cloud-utils wget sshpass build-essential ninja-build meson libclang-dev
+        packages: qemu-system-x86 qemu-utils cloud-utils wget sshpass
         version: 1.0
         execute_install_scripts: true
 
@@ -112,21 +112,16 @@ jobs:
           sleep 5
         done
 
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
-
     - name: Copy files and install Rust
       run: |
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
         curl https://sh.rustup.rs -sSf | sh -s -- -y
         . "$HOME/.cargo/env"
-        sudo apt update && sudo apt install -y build-essential libclang-dev
+        sudo apt update && sudo apt install -y build-essential libclang-dev meson build-essential ninja-build
         cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo build
         EOF
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo/registry ubuntu@127.0.0.1:/home/ubuntu/.cargo/registry
-        sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r ~/.cargo/git ubuntu@127.0.0.1:/home/ubuntu/.cargo/git
 
     - name: Test
-      run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo test'
+      run: sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 'cd OxCache && sudo env "HOME=/home/ubuntu" bash -c ". /home/ubuntu/.cargo/env && RUNNING_IN_GITHUB_ACTIONS=yes cargo test"'
 
