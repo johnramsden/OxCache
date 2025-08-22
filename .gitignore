@@ -2,4 +2,5 @@
 target
 nvme/src/bindings.rs
 nvme-loop.json
-/logs
+/logs/
+/eval/data/
