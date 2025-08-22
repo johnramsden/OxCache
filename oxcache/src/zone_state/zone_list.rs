@@ -209,6 +209,7 @@ impl ZoneList {
             chunks_per_zone,
             max_active_resources: max_active_resources-1, // Keep one reserved for eviction
             zones,
+            #[cfg(debug_assertions)]
             state_tracker: ZoneStateTracker::new(
                 num_zones as usize,
                 chunks_per_zone as usize,
