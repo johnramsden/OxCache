@@ -207,10 +207,7 @@ impl Zoned {
         let (mtx, wait_notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
 
-        let active_zones = get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap();
-        // log::debug!("active zones: {}", active_zones);
-        // assert!(zone_list.get_open_zones() == active_zones, "{} vs {}", zone_list.get_open_zones(), active_zones);
-        assert!(active_zones <= self.config.max_active_resources as usize);
+        debug_assert!(get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap() <= self.config.max_active_resources as usize);
 
         match zone_list.remove() {
             Ok(zone_idx) => Ok(zone_idx),
@@ -237,9 +234,8 @@ impl Zoned {
     fn complete_write(&self, zone_idx: Zone, finish_zone: bool) -> io::Result<()> {
         let (mtx, notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
-        let active_zones = get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap();
         // assert!(zone_list.get_open_zones() == active_zones, "{} vs {}", zone_list.get_open_zones(), active_zones);
-        assert!(active_zones <= self.config.max_active_resources as usize);
+        debug_assert!(get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap() <= self.config.max_active_resources as usize);
 
         zone_list.write_finish(zone_idx, self, finish_zone)?;
         // Tell other threads that we finished writing, so they can

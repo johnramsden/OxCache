@@ -26,14 +26,6 @@ use crate::{
 ///
 /// * `Ok(RawFd)` - File descriptor for the opened NVMe device.
 /// * `Err(NVMeError)` - If the operation fails.
-///
-/// # Example
-///
-/// ```rust
-/// use nvme::ops::zns_open;
-///
-/// let fd = open_device("nvme0n1").expect("Failed to open NVMe device");
-/// ```
 pub fn open_device(device_name: &str) -> Result<RawFd, NVMeError> {
     match unsafe { nvme_open(CString::new(device_name).unwrap().as_ptr()) } {
         -1 => Err(NVMeError::Errno(errno())),
@@ -53,23 +45,6 @@ pub fn open_device(device_name: &str) -> Result<RawFd, NVMeError> {
 ///
 /// * `Ok(u64)` - Starting LBA (in logical blocks) where the data was appended.
 /// * `Err(NVMeError)` - If the operation fails or data buffer is not aligned.
-///
-/// # Example
-///
-/// ```rust
-/// use nvme::ops::{zns_open, zns_append};
-/// use nvme::types::ZNSConfig;
-///
-/// let fd = zns_open("nvme0n1").unwrap();
-/// let config = ZNSConfig {
-///     fd,
-///     timeout: 1000,
-///     nsid: 1,
-///     block_size: 4096,
-/// };
-/// let mut buffer = vec![0u8; 4096];
-/// let lba = zns_append(config, 0, &mut buffer, 4096).unwrap();
-/// ```
 pub fn zns_append(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
@@ -251,22 +226,6 @@ pub fn write(
 /// * `Ok(())` - If the read was successful.
 /// * `Err(NVMeError)` - If the operation fails or buffer is not aligned.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::ops::{zns_open, zns_read};
-/// use nvme::types::ZNSConfig;
-///
-/// let fd = zns_open("nvme0n1").unwrap();
-/// let config = ZNSConfig {
-///     fd,
-///     timeout: 1000,
-///     nsid: 1,
-///     block_size: 4096,
-/// };
-/// let mut buffer = vec![0u8; 4096];
-/// zns_read(config, 0, 0, &mut buffer).unwrap();
-/// ```
 pub fn zns_read(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
@@ -371,21 +330,6 @@ fn zone_op(
 /// * `Ok(())` - If the operation succeeded.
 /// * `Err(NVMeError)` - If the operation failed.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::ops::{zns_open, open_zone};
-/// use nvme::types::{ZNSConfig, PerformOn};
-///
-/// let fd = zns_open("nvme0n1").unwrap();
-/// let config = ZNSConfig {
-///     fd,
-///     timeout: 1000,
-///     nsid: 1,
-///     block_size: 4096,
-/// };
-/// open_zone(config, PerformOn::Zone(0)).unwrap();
-/// ```
 pub fn open_zone(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
@@ -411,21 +355,6 @@ pub fn open_zone(
 /// * `Ok(())` - If the operation succeeded.
 /// * `Err(NVMeError)` - If the operation failed.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::ops::{zns_open, close_zone};
-/// use nvme::types::{ZNSConfig, PerformOn};
-///
-/// let fd = zns_open("nvme0n1").unwrap();
-/// let config = ZNSConfig {
-///     fd,
-///     timeout: 1000,
-///     nsid: 1,
-///     block_size: 4096,
-/// };
-/// close_zone(nvme_config, config, PerformOn::Zone(0)).unwrap();
-/// ```
 pub fn close_zone(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,
@@ -464,21 +393,6 @@ pub fn finish_zone(
 /// * `Ok(())` - If the operation succeeded.
 /// * `Err(NVMeError)` - If the operation failed.
 ///
-/// # Example
-///
-/// ```rust
-/// use nvme::ops::{zns_open, reset_zone};
-/// use nvme::types::{ZNSConfig, PerformOn};
-///
-/// let fd = zns_open("nvme0n1").unwrap();
-/// let config = ZNSConfig {
-///     fd,
-///     timeout: 1000,
-///     nsid: 1,
-///     block_size: 4096,
-/// };
-/// reset_zone(nvme_config, config, PerformOn::Zone(0)).unwrap();
-/// ```
 pub fn reset_zone(
     nvme_config: &NVMeConfig,
     config: &ZNSConfig,

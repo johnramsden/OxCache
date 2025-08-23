@@ -10,8 +10,8 @@ EOF
 
 trap kill_oxcache INT
 
-
 rsync -avP \
+      --delete \
       Cargo.lock \
       Cargo.toml \
       example.server.toml \
@@ -24,8 +24,10 @@ sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 
 cd /home/ubuntu/OxCacheLocal/
 cargo build
 
-cargo run --bin oxcache -- --config ./example.server.toml &
-sleep 3
-cargo run --bin simpleevaluationclient -- --socket /tmp/oxcache.sock --num-clients 10 --query-size 8192
+RUST_BACKTRACE=1 cargo test
+
+# cargo run --bin oxcache -- --config ./example.server.toml &
+# sleep 3
+# cargo run --bin simpleevaluationclient -- --socket /tmp/oxcache.sock --num-clients 10 --query-size 8192
 EOF
 
