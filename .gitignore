@@ -4,3 +4,6 @@ nvme/src/bindings.rs
 nvme-loop.json
 /logs/
 /eval/data/
+/eval/plots/
+user-data
+/eval/tables/
