@@ -77,6 +77,12 @@ for file in "$directory"/*.bin; do
         echo "Low water: $evict_low"
         echo "Eviction $eviction"
         echo "Device $device"
+        if [ -n "$clean_high" ]; then
+            echo "Clean High Water: $clean_high"
+        fi
+        if [ -n "$clean_low" ]; then
+            echo "Clean Low Water: $clean_low"
+        fi
     } | tee "$runfile.client"
 
     echo >> "$runfile.client"
@@ -89,6 +95,14 @@ for file in "$directory"/*.bin; do
         "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
     fi
 
+    clean_args=""
+    if [ -n "$clean_high" ]; then
+        clean_args="$clean_args --high-water-clean=$clean_high"
+    fi
+    if [ -n "$clean_low" ]; then
+        clean_args="$clean_args --low-water-clean=$clean_low"
+    fi
+
     ./target/release/oxcache --config="$configfile" \
       --max-zones="${n_zones}" \
       --chunk-size="$chunk_size" \
@@ -97,7 +111,8 @@ for file in "$directory"/*.bin; do
       --low-water-evict="$evict_low" \
       --log-level=info \
       --remote-artificial-delay-microsec="$latency" \
-      --disk="$device" &>> "$runfile.server" &
+      --disk="$device" \
+      $clean_args &>> "$runfile.server" &
     SERVER_PID=$!
 
     sleep 5s
