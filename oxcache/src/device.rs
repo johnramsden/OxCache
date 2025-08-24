@@ -503,6 +503,7 @@ impl Device for Zoned {
         match locations {
             EvictTarget::Chunk(chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
+                    tracing::debug!("[evict:Chunk] No chunks evicted");
                     return Ok(());
                 }
                 tracing::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
@@ -531,7 +532,7 @@ impl Device for Zoned {
                                             // Increasing chunk index, might not be neccesary
                                             let mut items = items;
                                             items.sort_by_key(|(_, loc)| loc.index);
-
+                                            tracing::debug!("Reading zones");
                                             // Reads from location and returns the bytes
                                             items.iter().map(|(key, loc)| {
                                                 Ok((key.clone(), self_clone.read((**loc).clone())?))
