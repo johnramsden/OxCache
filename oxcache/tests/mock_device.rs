@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use oxcache::{
     cache::bucket::ChunkLocation, device::Device, eviction::EvictorMessage, zone_state::zone_list::{self, ZoneList, ZoneObtainFailure}
 };
+use oxcache::writerpool::WriterPool;
 
 struct Chunk {
     zone_index: usize,
@@ -162,9 +163,10 @@ impl Device for MockZonedDevice {
     }
 
     fn evict(
-        &self,
+        self: Arc<MockZonedDevice>,
         locations: oxcache::eviction::EvictTarget,
         cache: std::sync::Arc<oxcache::cache::Cache>,
+        writer_pool: Arc<WriterPool>
     ) -> std::io::Result<()> {
         todo!()
     }
