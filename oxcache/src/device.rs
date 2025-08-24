@@ -14,7 +14,7 @@ use nvme::ops::{close_zone, finish_zone, reset_zone, zns_append};
 use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Zone, ZoneState};
 use std::io::ErrorKind;
 use std::os::fd::RawFd;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 use crate::metrics::{MetricType, METRICS};
 use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use crate::cache::bucket::Chunk as CacheKey;
@@ -26,7 +26,7 @@ pub struct Zoned {
     zones: Arc<(Mutex<ZoneList>, Condvar)>,
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
-    zone_append_lock: Vec<Mutex<()>>,
+    zone_append_lock: Vec<RwLock<()>>,
 }
 
 // Information about each zone
@@ -291,8 +291,8 @@ impl Zoned {
                     config.max_active_resources as usize,
                 );
 
-                let zone_append_lock: Vec<Mutex<()>> =
-                    (0..restricted_num_zones).map(|_| Mutex::new(())).collect();
+                let zone_append_lock: Vec<RwLock<()>> =
+                    (0..restricted_num_zones).map(|_| RwLock::new(())).collect();
 
                 // Update config to reflect the restricted number of zones
                 config.num_zones = restricted_num_zones;
@@ -346,10 +346,11 @@ impl Zoned {
         );
 
         // Only locks if needed
-        let _maybe_guard: Option<MutexGuard<'_, ()>> = if total_sz > self.max_write_size {
-            Some(self.zone_append_lock[zone_index as usize].lock().unwrap())
+        // this is AWFUL
+        let _maybe_guard = if total_sz > self.max_write_size {
+            (None, Some(self.zone_append_lock[zone_index as usize].write().unwrap()))
         } else {
-            None
+            (Some(self.zone_append_lock[zone_index as usize].read().unwrap()), None)
         };
 
         // Sequentially write looped
@@ -549,6 +550,7 @@ impl Device for Zoned {
                                         async move {
 
                                             { // Return zones back to the zone list and reset the zone
+                                                let _guard = self_clone.zone_append_lock[zone as usize].write().unwrap();
                                                 let (zone_mtx, cv) = &*self_clone.zones;
                                                 let mut zones = zone_mtx.lock().unwrap();
                                                 zones.reset_zone(zone, &*self_clone)?;
