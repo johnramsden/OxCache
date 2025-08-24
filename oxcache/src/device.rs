@@ -5,6 +5,7 @@ use crate::eviction::{EvictTarget, EvictorMessage};
 use crate::server::RUNTIME;
 use crate::writerpool::{WriteRequest, WriterPool};
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
+use aligned_vec::{AVec, Alignment, RuntimeAlign};
 use bytes::Bytes;
 use flume::Sender;
 use futures::future::join_all;
@@ -476,16 +477,22 @@ impl Device for Zoned {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.config.chunk_size_in_bytes as usize];
+        let buffer_size = get_aligned_buffer_size(self.config.chunk_size_in_bytes, self.nvme_config.logical_block_size);
+        let mut buffer: AVec<u8, RuntimeAlign> =  AVec::with_capacity(
+                self.nvme_config.logical_block_size as usize,
+                buffer_size as usize
+        );
+        buffer.resize(buffer_size as usize, 0);
+
         let slba = self.config.get_address_at(location.zone, location.index);
         tracing::trace!("Read slba = {} for {:?}", slba, location);
 
         let start = std::time::Instant::now();
-        self.read_into_buffer(self.max_write_size, slba, &mut data, &self.nvme_config)?;
+        self.read_into_buffer(self.max_write_size, slba, &mut buffer, &self.nvme_config)?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
-        METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
-        METRICS.update_metric_counter("bytes_total", data.len() as u64);
-        Ok(Bytes::from(data))
+        METRICS.update_metric_counter("read_bytes_total", buffer.len() as u64);
+        METRICS.update_metric_counter("bytes_total", buffer.len() as u64);
+        Ok(Bytes::from_owner(buffer))
     }
 
     fn evict(self: Arc<Self>, locations: EvictTarget,  cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()> {
@@ -924,3 +931,12 @@ impl Device for BlockInterface {
         self.nvme_config.nsid
     }
 }
+
+fn get_aligned_buffer_size(buffer_size: Byte, block_size: Byte) -> Byte {
+    if buffer_size.rem_euclid(block_size) != 0 {
+        buffer_size + (block_size - buffer_size.rem_euclid(block_size))
+    } else {
+        buffer_size
+    }
+}
+
