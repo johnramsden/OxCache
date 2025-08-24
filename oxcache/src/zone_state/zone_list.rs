@@ -5,7 +5,7 @@ use crate::cache::bucket::ChunkLocation;
 use crate::device;
 use crate::zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{self};
+use std::io::{self, ErrorKind};
 
 type ZoneIndex = nvme::types::Zone;
 type ZonePriority = usize;
@@ -465,7 +465,11 @@ impl ZoneList {
         idx: ZoneIndex,
         device: &dyn device::Device,
     ) -> std::io::Result<()> {
-        debug_assert!(!self.writing_zones.contains_key(&idx));
+        if self.writing_zones.contains_key(&idx) {
+            return Err(io::Error::new(ErrorKind::ResourceBusy,
+                "Can't reset because it is being written to"));
+        }
+
 
         #[cfg(debug_assertions)]
         self.check_invariants();
@@ -476,6 +480,12 @@ impl ZoneList {
         let zone = self.zones.get_mut(&idx).unwrap();
         zone.chunks_available = (0..self.chunks_per_zone).rev().collect();
 
+        match self.open_zones.iter().position(|zone_i| *zone_i == idx) {
+            Some(open_zone_idx) => {
+                self.open_zones.remove(open_zone_idx)
+            },
+            None => None,
+        };
         self.free_zones.push_back(idx);
 
         #[cfg(debug_assertions)]
