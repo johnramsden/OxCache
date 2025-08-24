@@ -414,7 +414,7 @@ impl ZoneList {
         // self.state_tracker.finish_write_zone(chunk.zone);
 
         let zone = self.zones.get_mut(&chunk.zone).unwrap();
-        tracing::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::debug!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
 
         assert!(
             !zone.chunks_available.contains(&chunk.index),
@@ -422,7 +422,7 @@ impl ZoneList {
             chunk.zone, chunk.index
         );
 
-        tracing::trace!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::debug!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
 
         // Return it
         zone.chunks_available.push(chunk.index);
@@ -432,7 +432,7 @@ impl ZoneList {
         if zone.chunks_available.len() == 1 {
             self.free_zones.push_back(chunk.zone);
         }
-        tracing::trace!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::debug!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
 
         #[cfg(debug_assertions)]
         self.check_invariants();

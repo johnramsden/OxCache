@@ -229,19 +229,24 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
     type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
+        tracing::debug!("Write LRU update at chunk {:?}", chunk);
         self.lru.put(chunk, ());
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
+        tracing::debug!("Read LRU update at chunk {:?}", chunk);
         // assert!(self.lru.contains(&chunk)); // TODO: Race cond with chunk evict?
         self.lru.put(chunk, ());
     }
 
     fn get_evict_targets(&mut self) -> Self::Target {
+        let span = tracing::debug_span!("get_evict_targets");
+        let _enter = span.enter();
         let lru_len = self.lru.len() as Chunk;
         let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
         let high_water_mark = nr_chunks - self.high_water;
         if lru_len < high_water_mark {
+            tracing::debug!("Nothing to evict: lru_len is {} which is less than {}", lru_len, high_water_mark);
             return vec![];
         }
 
@@ -249,8 +254,10 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
+        tracing::debug!("targets:");
         while self.lru.len() as Chunk >= low_water_mark {
             let targ = self.lru.pop_lru().unwrap().0;
+            tracing::debug!("{:?}", targ);
             let target_zone = targ.zone;
             targets.push(targ);
 
