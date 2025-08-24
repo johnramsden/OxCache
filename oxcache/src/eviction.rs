@@ -14,8 +14,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use crate::zone_state::zone_priority_queue;
 
+#[derive(Debug)]
 pub enum EvictionPolicyWrapper {
-    Dummy(DummyEvictionPolicy),
     Promotional(PromotionalEvictionPolicy),
     Chunk(ChunkEvictionPolicy),
 }
@@ -37,7 +37,6 @@ impl EvictionPolicyWrapper {
         clean_low_water: Option<Chunk>,
     ) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
-            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
             "chunk" => {
                 if clean_high_water.is_none() || clean_low_water.is_none() {
                     return Err(std::io::Error::new(ErrorKind::InvalidInput, "Chunk eviction must have clean_high_water and clean_low_water"));
@@ -63,14 +62,12 @@ impl EvictionPolicyWrapper {
 
     pub fn write_update(&mut self, chunk: ChunkLocation) {
         match self {
-            EvictionPolicyWrapper::Dummy(dummy) => dummy.write_update(chunk),
             EvictionPolicyWrapper::Promotional(promotional) => promotional.write_update(chunk),
             EvictionPolicyWrapper::Chunk(c) => c.write_update(chunk),
         }
     }
     pub fn read_update(&mut self, chunk: ChunkLocation) {
         match self {
-            EvictionPolicyWrapper::Dummy(dummy) => dummy.read_update(chunk),
             EvictionPolicyWrapper::Promotional(promotional) => promotional.read_update(chunk),
             EvictionPolicyWrapper::Chunk(c) => c.read_update(chunk),
         }
@@ -78,7 +75,6 @@ impl EvictionPolicyWrapper {
 
     pub fn get_evict_targets(&mut self) -> EvictTarget {
         match self {
-            EvictionPolicyWrapper::Dummy(dummy) => EvictTarget::Zone(dummy.get_evict_targets()),
             EvictionPolicyWrapper::Promotional(promotional) => {
                 EvictTarget::Zone(promotional.get_evict_targets())
             }
@@ -102,28 +98,7 @@ pub trait EvictionPolicy: Send + Sync {
     fn get_clean_targets(&mut self) -> Self::CleanTarget;
 }
 
-pub struct DummyEvictionPolicy {}
-
-impl DummyEvictionPolicy {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl EvictionPolicy for DummyEvictionPolicy {
-    type Target = Vec<Zone>;
-    type CleanTarget = ();
-    fn write_update(&mut self, _chunk: ChunkLocation) {}
-
-    fn read_update(&mut self, _chunk: ChunkLocation) {}
-
-    fn get_evict_targets(&mut self) -> Self::Target {
-        vec![]
-    }
-
-    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
-}
-
+#[derive(Debug)]
 pub struct PromotionalEvictionPolicy {
     high_water: Zone,
     low_water: Zone,
@@ -196,6 +171,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
 }
 
+#[derive(Debug)]
 pub struct ChunkEvictionPolicy {
     high_water: Chunk,
     low_water: Chunk,
