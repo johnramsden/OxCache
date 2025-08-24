@@ -518,7 +518,7 @@ impl Device for Zoned {
                     let cache_clone = cache.clone();
                     let self_clone = self_clone.clone();
                     let writer_pool = writer_pool.clone();
-                    tokio::spawn(
+                    RUNTIME.spawn(
                         async move {
                             cache_clone.clean_zone_and_update_map(
                                 zone.clone(),
@@ -880,10 +880,7 @@ impl Device for BlockInterface {
                     return Ok(());
                 }
                 tracing::debug!("[evict:Zone] Evicting zones {:?}", locations);
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                rt.block_on(cache.remove_zones(&locations))?;
+                RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations, &*self)?;
