@@ -566,7 +566,7 @@ impl Device for Zoned {
                                                 let (tx, rx) = flume::bounded(1);
                                                 futures.push(async move {
 
-                                                    writer_pool.send_no_update_lru(WriteRequest{
+                                                    writer_pool.send(WriteRequest{
                                                         data: data.clone(),
                                                         responder: tx,
                                                     }).await?;

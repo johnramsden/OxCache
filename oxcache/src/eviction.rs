@@ -263,7 +263,24 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     }
 
     fn get_clean_targets(&mut self) -> Self::CleanTarget {
-        self.pq.remove_if_thresh_met()
+        let mut clean_targets = self.pq.remove_if_thresh_met();
+        clean_targets.sort_unstable();
+
+        // Search in the LRU for items which exist in the clean
+        // targets.  These are valid chunks, but must be removed
+        // because their location is invalidated when the zone is
+        // reset.
+        let new_lru_list = self.lru.iter().rev().filter(|lru_item| {
+            clean_targets.binary_search(&lru_item.0.zone).is_err()
+        }).map(|(k, _)| k.clone()).collect::<Vec<ChunkLocation>>();
+
+        self.lru.clear();
+
+        for k in new_lru_list {
+            self.lru.put(k, ());
+        }
+
+        clean_targets
     }
 }
 
