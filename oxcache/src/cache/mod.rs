@@ -233,6 +233,7 @@ impl Cache {
             let mut out = Vec::new();
             let mut notifies = Vec::new();
 
+            // Iterate through the entire list of chunks in the zone
             for opt_key in bm.zone_to_entry.slice(zone_slice).iter() {
                 // Collect only if Some
                 if let Some(key) = opt_key.clone() {

@@ -158,13 +158,6 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.config.eviction.low_water_clean,
         )?));
 
-        let evictor = Evictor::start(
-            Arc::clone(&self.device),
-            Arc::clone(&eviction_policy),
-            Arc::clone(&self.cache),
-            Duration::from_secs(self.config.eviction.eviction_interval),
-            self.evict_rx.clone(),
-        )?;
         let writerpool = Arc::new(WriterPool::start(
             self.config.writer_threads,
             Arc::clone(&self.device),
@@ -175,6 +168,15 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&self.device),
             &eviction_policy,
         ));
+
+        let evictor = Evictor::start(
+            Arc::clone(&self.device),
+            Arc::clone(&eviction_policy),
+            Arc::clone(&self.cache),
+            Duration::from_secs(self.config.eviction.eviction_interval),
+            self.evict_rx.clone(),
+            writerpool.clone()
+        )?;
 
         // Shutdown signal
         let shutdown = self.shutdown.clone();

@@ -4,6 +4,7 @@ pub(crate) type ZoneIndex = nvme::types::Zone;
 use nvme::types::{Chunk, Zone};
 type ZonePriority = Chunk;
 
+#[derive(Debug)]
 pub struct ZonePriorityQueue {
     invalid_count: ZonePriority,
     invalid_queue: PriorityQueue<ZoneIndex, ZonePriority>, // max-heap by priority
