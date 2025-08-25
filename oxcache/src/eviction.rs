@@ -311,82 +311,29 @@ impl Evictor {
                     }
                 };
 
-                // Collect all pending eviction requests
-                let mut pending_senders = Vec::new();
-                if let Some(s) = sender {
-                    pending_senders.push(s);
-                }
-                
-                // Drain additional requests that arrived during processing
-                pending_senders.extend(evict_rx.drain().map(|recv| recv.sender));
-                
-                if pending_senders.is_empty() {
-                    // Timer-based eviction only, no responses needed
-                    let mut policy = eviction_policy_clone.lock().unwrap();
-                    let targets = policy.get_evict_targets();
-                    drop(policy);
+                let mut policy = eviction_policy_clone.lock().unwrap();
+                let targets = policy.get_evict_targets();
 
-                    let device_clone = device_clone.clone();
-                    if let Err(e) = device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
-                        tracing::error!("Error in timer eviction: {}", e);
+                drop(policy);
+
+                let device_clone = device_clone.clone();
+                let result = match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
+                    Err(e) => {
+                        tracing::error!("Error evicting: {}", e);
+                        Err(e.to_string())
                     }
-                    continue;
+                    Ok(_) => Ok(()),
+                };
+
+                if let Some(sender) = sender {
+                    tracing::debug!("Sending eviction response to sender: {:?}", result);
+                    sender.send(result.clone()).unwrap();
                 }
 
-                tracing::debug!("Processing {} eviction requests", pending_senders.len());
-
-                // Perform iterative eviction until we can satisfy pending requests
-                let mut successful_responses = 0;
-                let mut last_result = Ok(());
-                
-                // Try to evict multiple times to handle all requests
-                for cycle in 0..pending_senders.len() {
-                    let mut policy = eviction_policy_clone.lock().unwrap();
-                    let targets = policy.get_evict_targets();
-                    drop(policy);
-
-                    // If no targets available, we can't evict more
-                    let has_targets = match &targets {
-                        EvictTarget::Zone(zones) => !zones.is_empty(),
-                        EvictTarget::Chunk(chunks, clean_zones) => !chunks.is_empty() || !clean_zones.is_empty(),
-                    };
-
-                    if !has_targets {
-                        tracing::warn!("No eviction targets available for cycle {}", cycle);
-                        last_result = Err("No space available for eviction".to_string());
-                        break;
-                    }
-
-                    let device_clone = device_clone.clone();
-                    let result = match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
-                        Err(e) => {
-                            tracing::error!("Error evicting in cycle {}: {}", cycle, e);
-                            last_result = Err(e.to_string());
-                            break;
-                        }
-                        Ok(_) => {
-                            tracing::debug!("Eviction cycle {} completed successfully", cycle);
-                            successful_responses += 1;
-                            Ok(())
-                        }
-                    };
-                    last_result = result;
-                }
-
-                // Respond to requests based on successful evictions
-                for (i, sender) in pending_senders.into_iter().enumerate() {
-                    let response = if i < successful_responses {
-                        tracing::debug!("Sending success response to request {}", i);
-                        Ok(())
-                    } else {
-                        tracing::debug!("Sending failure response to request {}: {:?}", i, last_result);
-                        last_result.clone()
-                    };
-                    
-                    if let Err(e) = sender.send(response) {
-                        tracing::error!("Failed to send eviction response: {:?}", e);
-                    }
-                }
+                evict_rx.drain().into_iter().for_each(|recv| {
+                    tracing::debug!("Sending eviction response to drained sender: {:?}", result);
+                    recv.sender.send(result.clone()).unwrap();
+                })
             }
 
             tracing::debug!("Evictor thread exiting");
