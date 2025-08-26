@@ -151,11 +151,22 @@ impl Cache {
                         return Err(e);
                     }
                     Ok(location) => {
-                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
                         drop(chunk_loc_guard);
 
                         let mut reverse_mapping_guard = self.bm.write().await;
                         reverse_mapping_guard.zone_to_entry[location.as_index()] = Some(key);
+                        tracing::debug!("[map-dbg] location {:?} map updated", location);
+                        tracing::debug!("[map-dbg] state is {:#?}", *reverse_mapping_guard);
+
+                        let mut chunk_loc_guard = locked_chunk_location.write().await;
+                        tracing::debug!("[map-dbg] location {:?} being written to", location);
+                        let notify = match &*chunk_loc_guard {
+                            ChunkState::Waiting(n) => n.clone(),
+                            _ => panic!("Chunk was not in waiting state"),
+                        };
+                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
+                        notify.notify_waiters();
+
                     }
                 }
 
@@ -259,6 +270,13 @@ impl Cache {
                     notifies.push(notify);
                 }
             }
+
+            // Clear old reverse slots
+            for (key, old_loc, _) in &out {
+                if bm.zone_to_entry[old_loc.as_index()].as_ref() == Some(key) {
+                    bm.zone_to_entry[old_loc.as_index()] = None;
+                }
+            }
             (out, notifies)
         };
 
@@ -290,13 +308,6 @@ impl Cache {
         // Update states & reverse map
         {
             let mut bm = self.bm.write().await;
-
-            // Clear old reverse slots
-            for (key, old_loc, _) in &items {
-                if bm.zone_to_entry[old_loc.as_index()].as_ref() == Some(key) {
-                    bm.zone_to_entry[old_loc.as_index()] = None;
-                }
-            }
 
             // Set Ready and reverse map
             for (key, new_loc) in new_locs {
@@ -348,19 +359,31 @@ impl Cache {
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
         let mut bucket_guard = self.bm.write().await;
 
+        tracing::debug!("State is {:#?} before remove_entries", *bucket_guard);
         for chunk in chunks {
-            let chunk_id = match bucket_guard.zone_to_entry[chunk.as_index()].clone() {
-                Some(id) => {
-                    bucket_guard.zone_to_entry[chunk.as_index()].take();
-                    id
-                }
-                None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
+            tracing::debug!("Removing {:?} from map", chunk);
+            let chunk_id = match bucket_guard.zone_to_entry[chunk.as_index()].take() {
+                Some(id) => id,
+                None => {
+                    // Oh, so this fails
+                    tracing::error!("Couldn't find chunk {:?} in reverse map, state is {:?}", chunk, *bucket_guard);
+                    return Err(io::Error::new(ErrorKind::NotFound, format!("Couldn't find chunk {:?} while removing entries", chunk)))
+                },
             };
 
-            bucket_guard
+            tracing::debug!("State is {:#?} after remove_entries", *bucket_guard);
+            let entry = bucket_guard
                 .buckets
-                .remove(&chunk_id)
-                .ok_or(entry_not_found())?;
+                .remove(&chunk_id);
+            tracing::debug!("State is {:#?} after remove_entries remove", *bucket_guard);
+
+            match entry {
+                Some(entry) => tracing::debug!("Found chunk {:?} when removing entries", entry),
+                None => {
+                    tracing::error!("Not found chunk {:?} when removing entries, chunk id is {:?} state is {:#?}", chunk, chunk_id, *bucket_guard);
+                    return Err(entry_not_found());
+                },
+            };
         }
 
         Ok(())
