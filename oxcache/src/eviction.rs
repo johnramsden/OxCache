@@ -212,7 +212,9 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     fn read_update(&mut self, chunk: ChunkLocation) {
         tracing::debug!("Read LRU update at chunk {:?}", chunk);
         // assert!(self.lru.contains(&chunk)); // TODO: Race cond with chunk evict?
-        self.lru.put(chunk, ());
+        if self.lru.contains(&chunk) {
+            self.lru.put(chunk, ());
+        }
     }
 
     fn get_evict_targets(&mut self) -> Self::Target {
