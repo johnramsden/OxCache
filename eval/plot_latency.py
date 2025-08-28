@@ -65,7 +65,6 @@ def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
         print("No data directories found")
         return
     
-    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
     
     # Create one plot per normalized filename
     for normalized_name, dir_label_pairs in all_data_dirs.items():
@@ -136,8 +135,7 @@ def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
         
         # Second pass: plot all data with common scale
         for time_minutes, values, label, i in all_latency_data:
-            color = colors[i % len(colors)]
-            plt.plot(time_minutes, values, color=color, alpha=0.8, linewidth=0.8, label=label)
+            plt.plot(time_minutes, values, alpha=0.8, linewidth=0.8, label=label)
             has_data = True
         
         if has_data:
@@ -156,7 +154,7 @@ def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
             
             # Save plot
             output_file = output_path / f"{normalized_name}_{metric_name}_raw.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
             print(f"Saved plot to {output_file}")
         else:
             print(f"No valid latency data for {normalized_name}")

@@ -111,7 +111,6 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
         print("No data directories found")
         return
     
-    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
     
     # Create one plot per normalized filename
     for normalized_name, dir_label_pairs in all_data_dirs.items():
@@ -194,8 +193,7 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
             # Apply common scaling
             scaled_throughputs = [t / unit_divisor for t in throughputs]
             
-            color = colors[i % len(colors)]
-            plt.plot(time_minutes, scaled_throughputs, color=color, alpha=0.8, linewidth=1.2, label=label)
+            plt.plot(time_minutes, scaled_throughputs, alpha=0.8, linewidth=1.2, label=label)
             has_data = True
         
         if has_data:
@@ -210,7 +208,7 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
             
             # Save plot
             output_file = output_path / f"{normalized_name}_{metric_name}_throughput.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
             print(f"Saved plot to {output_file}")
         
         plt.close()
