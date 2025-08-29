@@ -1,0 +1,29 @@
+log_level = "debug"
+
+[server]
+socket = "/tmp/oxcache.sock"
+disk = "/dev/nvme0n2"
+writer_threads = 14
+reader_threads = 14
+chunk_size = 536870912
+block_zone_capacity = 1129316352
+max_write_size = 262144
+max_zones = 20
+
+[remote]
+remote_type = "emulated" # emulated | S3
+bucket = "S3_BUCKET"
+remote_artificial_delay_microsec = 40632
+
+[eviction]
+eviction_policy = "chunk"
+high_water_evict = 16 # Number remaining from end, evicts if reaches here
+low_water_evict = 32  # Evict until below mark
+eviction_interval = 1  # Evict every 1s
+high_water_clean = 16 # Number remaining from end, cleans if reaches here (only used with chunk)
+low_water_clean = 8  # Clean until below mark (only used with chunk)
+
+[metrics]
+ip_addr = "127.0.0.1"
+port = 9000
+file_metrics_directory = "./logs"

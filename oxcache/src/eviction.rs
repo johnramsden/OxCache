@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use crate::cache::{Cache, bucket::ChunkLocation};
 use crate::device::Device;
+use crate::writerpool::WriterPool;
 use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru::LruCache;
@@ -13,8 +14,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use crate::zone_state::zone_priority_queue;
 
+#[derive(Debug)]
 pub enum EvictionPolicyWrapper {
-    Dummy(DummyEvictionPolicy),
     Promotional(PromotionalEvictionPolicy),
     Chunk(ChunkEvictionPolicy),
 }
@@ -36,7 +37,6 @@ impl EvictionPolicyWrapper {
         clean_low_water: Option<Chunk>,
     ) -> tokio::io::Result<Self> {
         match identifier.to_lowercase().as_str() {
-            "dummy" => Ok(EvictionPolicyWrapper::Dummy(DummyEvictionPolicy::new())),
             "chunk" => {
                 if clean_high_water.is_none() || clean_low_water.is_none() {
                     return Err(std::io::Error::new(ErrorKind::InvalidInput, "Chunk eviction must have clean_high_water and clean_low_water"));
@@ -62,14 +62,12 @@ impl EvictionPolicyWrapper {
 
     pub fn write_update(&mut self, chunk: ChunkLocation) {
         match self {
-            EvictionPolicyWrapper::Dummy(dummy) => dummy.write_update(chunk),
             EvictionPolicyWrapper::Promotional(promotional) => promotional.write_update(chunk),
             EvictionPolicyWrapper::Chunk(c) => c.write_update(chunk),
         }
     }
     pub fn read_update(&mut self, chunk: ChunkLocation) {
         match self {
-            EvictionPolicyWrapper::Dummy(dummy) => dummy.read_update(chunk),
             EvictionPolicyWrapper::Promotional(promotional) => promotional.read_update(chunk),
             EvictionPolicyWrapper::Chunk(c) => c.read_update(chunk),
         }
@@ -77,7 +75,6 @@ impl EvictionPolicyWrapper {
 
     pub fn get_evict_targets(&mut self) -> EvictTarget {
         match self {
-            EvictionPolicyWrapper::Dummy(dummy) => EvictTarget::Zone(dummy.get_evict_targets()),
             EvictionPolicyWrapper::Promotional(promotional) => {
                 EvictTarget::Zone(promotional.get_evict_targets())
             }
@@ -101,28 +98,7 @@ pub trait EvictionPolicy: Send + Sync {
     fn get_clean_targets(&mut self) -> Self::CleanTarget;
 }
 
-pub struct DummyEvictionPolicy {}
-
-impl DummyEvictionPolicy {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl EvictionPolicy for DummyEvictionPolicy {
-    type Target = Vec<Zone>;
-    type CleanTarget = ();
-    fn write_update(&mut self, _chunk: ChunkLocation) {}
-
-    fn read_update(&mut self, _chunk: ChunkLocation) {}
-
-    fn get_evict_targets(&mut self) -> Self::Target {
-        vec![]
-    }
-
-    fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
-}
-
+#[derive(Debug)]
 pub struct PromotionalEvictionPolicy {
     high_water: Zone,
     low_water: Zone,
@@ -195,6 +171,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     fn get_clean_targets(&mut self) -> Self::CleanTarget { () }
 }
 
+#[derive(Debug)]
 pub struct ChunkEvictionPolicy {
     high_water: Chunk,
     low_water: Chunk,
@@ -228,19 +205,26 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
     type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
+        tracing::debug!("Write LRU update at chunk {:?}", chunk);
         self.lru.put(chunk, ());
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
+        tracing::debug!("Read LRU update at chunk {:?}", chunk);
         // assert!(self.lru.contains(&chunk)); // TODO: Race cond with chunk evict?
-        self.lru.put(chunk, ());
+        if self.lru.contains(&chunk) {
+            self.lru.put(chunk, ());
+        }
     }
 
     fn get_evict_targets(&mut self) -> Self::Target {
+        let span = tracing::debug_span!("get_evict_targets");
+        let _enter = span.enter();
         let lru_len = self.lru.len() as Chunk;
         let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
         let high_water_mark = nr_chunks - self.high_water;
         if lru_len < high_water_mark {
+            tracing::debug!("Nothing to evict: lru_len is {} which is less than {}", lru_len, high_water_mark);
             return vec![];
         }
 
@@ -248,8 +232,10 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
+        tracing::debug!("targets:");
         while self.lru.len() as Chunk >= low_water_mark {
             let targ = self.lru.pop_lru().unwrap().0;
+            tracing::debug!("{:?}", targ);
             let target_zone = targ.zone;
             targets.push(targ);
 
@@ -262,7 +248,24 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     }
 
     fn get_clean_targets(&mut self) -> Self::CleanTarget {
-        self.pq.remove_if_thresh_met()
+        let mut clean_targets = self.pq.remove_if_thresh_met();
+        clean_targets.sort_unstable();
+
+        // Search in the LRU for items which exist in the clean
+        // targets.  These are valid chunks, but must be removed
+        // because their location is invalidated when the zone is
+        // reset.
+        let new_lru_list = self.lru.iter().rev().filter(|lru_item| {
+            clean_targets.binary_search(&lru_item.0.zone).is_err()
+        }).map(|(k, _)| k.clone()).collect::<Vec<ChunkLocation>>();
+
+        self.lru.clear();
+
+        for k in new_lru_list {
+            self.lru.put(k, ());
+        }
+
+        clean_targets
     }
 }
 
@@ -283,6 +286,7 @@ impl Evictor {
         cache: Arc<Cache>,
         evict_interval: Duration,
         evict_rx: Receiver<EvictorMessage>,
+        writer_pool: Arc<WriterPool>
     ) -> std::io::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -314,7 +318,8 @@ impl Evictor {
 
                 drop(policy);
 
-                let result = match device_clone.evict(targets, cache_clone.clone()) {
+                let device_clone = device_clone.clone();
+                let result = match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
                     Err(e) => {
                         tracing::error!("Error evicting: {}", e);
                         Err(e.to_string())
