@@ -12,14 +12,14 @@ echo ""
 BUCKET_SECONDS=60
 WINDOW_SECONDS=60
 OUTPUT_DIR="plots"
-BLOCK_DIR="data/BLOCK-PROMO"
 ZONED_DIR="data/ZONED-PROMO"
-BLOCK_SPLIT_DIR="${BLOCK_DIR}/split_output"
+BLOCK_DIR="data/BLOCK-PROMO"
 ZONED_SPLIT_DIR="${ZONED_DIR}/split_output"
+BLOCK_SPLIT_DIR="${BLOCK_DIR}/split_output"
 
 # Labels for comparison plots
-BLOCK_LABEL="Block-interface"
 ZONED_LABEL="ZNS"
+BLOCK_LABEL="Block-interface"
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
@@ -61,8 +61,8 @@ split_data_if_needed() {
 echo "Step 1: Checking and splitting data if needed"
 echo "============================================="
 
-split_data_if_needed "$BLOCK_DIR" "$BLOCK_SPLIT_DIR" "BLOCK-PROMO"
 split_data_if_needed "$ZONED_DIR" "$ZONED_SPLIT_DIR" "ZONED-PROMO"
+split_data_if_needed "$BLOCK_DIR" "$BLOCK_SPLIT_DIR" "BLOCK-PROMO"
 
 echo ""
 
@@ -129,22 +129,22 @@ echo "===================================="
 echo "📊 Generating comparison plots (Block vs ZNS)..."
 
 # Throughput comparison plots
-python plot_throughput.py "$BLOCK_SPLIT_DIR" "$ZONED_SPLIT_DIR" \
-    --labels "$BLOCK_LABEL" "$ZONED_LABEL" \
+python plot_throughput.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
     --bucket-seconds $BUCKET_SECONDS \
     --output-dir "${OUTPUT_DIR}/comparison" \
     --metrics bytes_total written_bytes_total read_bytes_total
 
 # Smoothed latency comparison plots
-python plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" "$ZONED_SPLIT_DIR" \
-    --labels "$BLOCK_LABEL" "$ZONED_LABEL" \
+python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
     --window-seconds $WINDOW_SECONDS \
     --output-dir "${OUTPUT_DIR}/comparison" \
     --metrics device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms get_total_latency_ms
 
 # Hit ratio comparison plots
-python plot_hitratio.py "$BLOCK_SPLIT_DIR" "$ZONED_SPLIT_DIR" \
-    --labels "$BLOCK_LABEL" "$ZONED_LABEL" \
+python plot_hitratio.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
     --output-dir "${OUTPUT_DIR}/comparison"
 
 echo "✅ Comparison plots completed"

@@ -65,7 +65,6 @@ def plot_hitratio(split_data_dirs, output_dir, labels=None):
         print("No data directories found")
         return
     
-    colors = ['orange', 'blue', 'red', 'green', 'purple', 'brown']
     
     # Create one plot per normalized filename
     for normalized_name, dir_label_pairs in all_data_dirs.items():
@@ -113,8 +112,7 @@ def plot_hitratio(split_data_dirs, output_dir, labels=None):
             start_time = timestamps[0]
             time_minutes = [(t - start_time).total_seconds() / 60 for t in timestamps]
             
-            color = colors[i % len(colors)]
-            plt.plot(time_minutes, values, color=color, alpha=0.8, linewidth=1.2, label=label)
+            plt.plot(time_minutes, values, alpha=0.8, linewidth=1.2, label=label)
             has_data = True
         
         if has_data:
@@ -130,7 +128,7 @@ def plot_hitratio(split_data_dirs, output_dir, labels=None):
             
             # Save plot
             output_file = output_path / f"{normalized_name}_hitratio.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
             print(f"Saved plot to {output_file}")
         else:
             print(f"No valid hit ratio data for {normalized_name}")
