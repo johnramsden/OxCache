@@ -147,7 +147,7 @@ pub fn nvme_get_info(device: &str) -> Result<NVMeConfig, NVMeError> {
     let lbaf_fmt = ns_data.lbaf[current_lba_index];
     let logical_block_size = 1 << lbaf_fmt.ds;
     // We can also get the total size of the controller via nvme_id_ctrl
-    let total_size_in_bytes = ns_data.nuse * logical_block_size;
+    let total_size_in_bytes = ns_data.ncap * logical_block_size;
 
     Ok(NVMeConfig {
         fd,
