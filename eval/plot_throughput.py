@@ -17,8 +17,8 @@ from collections import defaultdict
 from numpy import extract
 import numpy as np
 
-# Increase all font sizes by 4 points
-rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 8 points
+rcParams.update({key: rcParams[key] + 8 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 map_files = {
 "metrics-2025-08-30-17-52-04": "536870912,L=5413781,UNIFORM,R=10,I=6000,NZ=200,nvme0n2",
@@ -147,22 +147,30 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
 
         print(f"Processing {metric_file}...")
 
-        # Read data points
+        # Read data points - optimized file reading
         data_points = []
         try:
             with open(metric_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    try:
-                        data = json.loads(line)
-                        timestamp = parse_timestamp(data['timestamp'])
-                        value = float(data['fields']['value'])
-                        data_points.append((timestamp, value))
-                    except (json.JSONDecodeError, KeyError, ValueError) as e:
-                        continue
+                content = f.read()
+            
+            lines = content.strip().split('\n')
+            data_points = [None] * len(lines)  # Pre-allocate list size
+            valid_count = 0
+            
+            for line in lines:
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    timestamp = parse_timestamp(data['timestamp'])
+                    value = float(data['fields']['value'])
+                    data_points[valid_count] = (timestamp, value)
+                    valid_count += 1
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
+            
+            # Trim the list to actual valid data
+            data_points = data_points[:valid_count]
         except Exception as e:
             print(f"Error reading {metric_file}: {e}")
             continue
@@ -176,39 +184,37 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
 
         if not timestamps or not throughputs:
             raise RuntimeError
-        # Convert timestamps to minutes from start
+        # Convert timestamps to minutes from start using numpy for speed
         start_time = timestamps[0]
-        time_minutes = [(t - start_time).total_seconds() / 60 for t in timestamps]
-        all_throughputs_data.append((time_minutes, throughputs, i, info))
+        timestamps_array = np.array([(t - start_time).total_seconds() / 60 for t in timestamps])
+        throughputs_array = np.array(throughputs)
+        all_throughputs_data.append((timestamps_array, throughputs_array, i, info))
         
-    max_throughputs=[]
-    for i in enumerate(all_throughputs_data):
-        # Determine common scale based on maximum throughput across all datasets
-        max_throughputs.append(max(max(throughputs) for _, throughputs, _, _ in all_throughputs_data))
+    # Determine common scale based on maximum throughput across all datasets - optimized
+    max_throughput = max(np.max(throughputs) for _, throughputs, _, _ in all_throughputs_data)
 
     ylabel=""
-    unit_divisor=0
-    for max_throughput in max_throughputs:
-        if 'bytes' in metric_name.lower():
-            # Determine best common unit based on overall maximum
-            if max_throughput >= 1024 * 1024 * 1024:  # >= 1 GiB/s
-                unit_divisor = 1024 * 1024 * 1024
-                ylabel = "Throughput (GiB/s)"
-            elif max_throughput >= 1024 * 1024:  # >= 1 MiB/s
-                unit_divisor = 1024 * 1024
-                ylabel = "Throughput (MiB/s)"
-            elif max_throughput >= 1024:  # >= 1 KiB/s
-                unit_divisor = 1024
-                ylabel = "Throughput (KiB/s)"
-            else:
-                unit_divisor = 1
-                ylabel = "Throughput (B/s)"
+    unit_divisor=1
+    if 'bytes' in metric_name.lower():
+        # Determine best common unit based on overall maximum
+        if max_throughput >= 1024 * 1024 * 1024:  # >= 1 GiB/s
+            unit_divisor = 1024 * 1024 * 1024
+            ylabel = "Throughput (GiB/s)"
+        elif max_throughput >= 1024 * 1024:  # >= 1 MiB/s
+            unit_divisor = 1024 * 1024
+            ylabel = "Throughput (MiB/s)"
+        elif max_throughput >= 1024:  # >= 1 KiB/s
+            unit_divisor = 1024
+            ylabel = "Throughput (KiB/s)"
         else:
             unit_divisor = 1
-            ylabel = "Throughput (units/s)"
+            ylabel = "Throughput (B/s)"
+    else:
+        unit_divisor = 1
+        ylabel = "Throughput (units/s)"
 
     
-    scaled_throughputs = [(a, [x / unit_divisor for x in t], c, d) for (a, t, c, d) in all_throughputs_data]
+    scaled_throughputs = [(a, t / unit_divisor, c, d) for (a, t, c, d) in all_throughputs_data]
     
     # Organize data by experiment configuration (chunk_size, distribution, ratio)
     experiment_configs = {}
@@ -219,19 +225,19 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
         if key not in experiment_configs:
             experiment_configs[key] = {'ZNS': [], 'Block': []}
         
-        # Add throughput data based on interface type
+        # Add throughput data based on interface type - use numpy arrays
         if info['interface'] == 'ZNS':
-            experiment_configs[key]['ZNS'].extend(tp)
+            experiment_configs[key]['ZNS'] = tp.tolist()  # Convert back to list for boxplot
         elif info['interface'] == 'Block':
-            experiment_configs[key]['Block'].extend(tp)
+            experiment_configs[key]['Block'] = tp.tolist()  # Convert back to list for boxplot
 
     # Create subplots
     import matplotlib.patches as mpatches
     
     fig, axes = plt.subplots(1, 8, figsize=(20, 6))
     
-    # Define colors and hatches
-    distribution_hatches = {'ZIPFIAN': 'oo', 'UNIFORM': '//'}
+    # Define colors and hatches - larger hatch patterns
+    distribution_hatches = {'ZIPFIAN': 'O', 'UNIFORM': '\\'}
     chunk_colors = {536870912: "lightgreen", 65536: "lightblue"}
     
     idx = 0
@@ -259,12 +265,12 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
                 
                 # Set labels and formatting
                 axes[idx].set_xticks([1, 2])
-                axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=14)
+                axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=20)
                 
                 # Add ratio label at top
                 ylim = axes[idx].get_ylim()
                 axes[idx].text(1.5, ylim[1],  # Centered above both boxes
-                               f"Ratio: 1:{ratio}", ha='center', va='bottom', fontsize=14)
+                               f"Ratio: 1:{ratio}", ha='center', va='bottom', fontsize=18, weight='bold')
                 
                 # Rotate y-axis labels
                 for label in axes[idx].get_yticklabels():
@@ -287,18 +293,20 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
     
     # Create legend
     legends = [
-        mpatches.Patch(facecolor='lightgreen', hatch='oo', label='Zipfian 512MiB', alpha=.99),
-        mpatches.Patch(facecolor='lightgreen', hatch='//', label='Uniform 512MiB', alpha=.99),
-        mpatches.Patch(facecolor='lightblue', hatch='oo', label='Zipfian 64KiB', alpha=.99),
-        mpatches.Patch(facecolor='lightblue', hatch='//', label='Uniform 64KiB', alpha=.99)
+        mpatches.Patch(facecolor='lightgreen', hatch='O', label='Zipfian 512MiB', alpha=.99),
+        mpatches.Patch(facecolor='lightgreen', hatch='\\', label='Uniform 512MiB', alpha=.99),
+        mpatches.Patch(facecolor='lightblue', hatch='O', label='Zipfian 64KiB', alpha=.99),
+        mpatches.Patch(facecolor='lightblue', hatch='\\', label='Uniform 64KiB', alpha=.99)
     ]
     
-    plt.legend(
+    fig.legend(
         ncols=4,
         handles=legends,
-        bbox_to_anchor=(1, -0.15),  # x = center, y = push it lower
-        # loc='upper center',
-        fontsize="large"
+        bbox_to_anchor=(0.5, 0.02),  # Center horizontally at bottom of figure
+        loc='center',
+        fontsize="x-large",
+        columnspacing=2.0,  # More space between columns
+        frameon=False  # Remove legend frame
     )
     
     # Set common y-label
