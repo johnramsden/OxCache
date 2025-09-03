@@ -12,6 +12,8 @@ from datetime import datetime
 import numpy as np
 from collections import defaultdict
 import re
+import matplotlib.pyplot as plt
+from matplotlib import patches as mpatches
 
 
 def parse_timestamp(timestamp_str):
@@ -161,19 +163,26 @@ def process_metric_file(file_path, is_counter_metric=False):
 def collect_experiment_data(split_data_dirs, labels):
     """Collect all experiment data from split directories."""
     experiments = defaultdict(dict)  # experiment_name -> {interface -> {metric -> stats}}
+
+    print(split_data_dirs, labels)
     
     for split_dir, label in zip(split_data_dirs, labels):
         split_path = Path(split_dir)
         if not split_path.exists():
+            print(f"Skipping {split_path}")
             continue
         
         # Find all experiment directories
         for exp_dir in split_path.iterdir():
+            print(f"Checking {exp_dir}")
+
             if not exp_dir.is_dir():
+                print(f"Skipping {exp_dir}")
                 continue
             
             exp_info = extract_experiment_info(exp_dir.name)
             if not exp_info:
+                print("Skipping")
                 continue
             
             exp_name = exp_info['name'].replace(exp_info['interface'], 'TEMPLATE')
@@ -332,6 +341,82 @@ def generate_latex_table(experiments, metric_key, metric_name, unit="ms"):
     table += f"\\end{{table}}\n\n"
     
     return table
+
+
+# def GenerateGraph(runfile, data, analysis, title, scale, genpdf_name):
+def GenerateGraph():
+    print(f"Generating {title} from {analysis}, output is {genpdf_name}")
+    # font = {'size'   : 12}
+
+    for exp_name in sorted(experiments.keys()):
+        exp_data = experiments[exp_name]
+
+    # # matplotlib.rc('font', **font)
+    # distribution = ["ZIPFIAN", "UNIFORM"]
+    # distrib_hatch = ['oo', '//']
+    # chunk_size = [536870912,65536]
+    # chunk_color = ["lightgreen", "lightblue"]
+    # ratio = [2, 10]
+    # type = ["ZNS", "SSD"]
+
+    # idx = 0
+    # fig, axes = plt.subplots(1, 8, figsize=(10, 4))
+    # for c, cc in zip(chunk_size, chunk_color):
+    #     for d, dh in zip(distribution, distrib_hatch):
+    #         for r in ratio:
+    #             current_data = []
+    #             ids = []
+    #             for t in type:
+    #                 ids.append(runfile[(runfile["type"] == t) &
+    #                                    (runfile["ratio"] == r) &
+    #                                    (runfile["chunk_size"] == c) &
+    #                                    (runfile["distribution"] == d)].index[0])
+    #             cur = data[analysis]
+    #             zns = cur[cur["id"] == ids[0]]
+    #             ssd = cur[cur["id"] == ids[1]]
+    #             current_data.append(zns["value"].to_numpy()*scale)
+    #             current_data.append(ssd["value"].to_numpy()*scale)
+
+    #             bp = axes[idx].boxplot(current_data,
+    #                               showfliers=False,
+    #                               widths=1,
+    #                               medianprops=dict(linewidth=1, color='red'),
+    #                                   patch_artist=True)
+    #             # axes[idx].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+    #             axes[idx].set_xticks([1, 2])
+    #             axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=14)
+
+    #             # axes[idx].set_xlabel(f"1:{r}")
+    #             ylim = axes[idx].get_ylim()
+    #             axes[idx].text(1.5, ylim[1],  # Centered above both boxes
+    #                            f"Ratio: 1:{r}", ha='center', va='bottom', fontsize=14)
+    #             # axes[idx].set_ylabel("GB/s", rotation=90)
+    #             for label in axes[idx].get_yticklabels():
+    #                 label.set_rotation(45)
+    #             # plt.suptitle(title)
+    #             bp['boxes'][0].set_hatch(dh)
+    #             bp['boxes'][1].set_hatch(dh)
+    #             bp['boxes'][0].set_facecolor(cc)
+    #             bp['boxes'][1].set_facecolor(cc)
+    #             idx += 1
+
+    # plt.subplots_adjust(wspace=0.0, hspace=0.0)
+    # plt.tight_layout(pad=0.0)
+    # plt.subplots_adjust(top=0.94)
+    # # Alpha=.99 is due to a bug with pdf export
+    # legends = [mpatches.Patch(facecolor='lightgreen', hatch='oo', label='Zipfian 512MiB', alpha=.99),
+    #            mpatches.Patch(facecolor='lightgreen', hatch='//', label='Uniform 512MiB', alpha=.99),
+    #            mpatches.Patch(facecolor='lightblue', hatch='oo', label='Zipfian 64KiB', alpha=.99),
+    #            mpatches.Patch(facecolor='lightblue', hatch='//', label='Uniform 64KiB', alpha=.99)]
+
+    # plt.legend(
+    #     ncols=4,
+    #     handles=legends,
+    #     bbox_to_anchor=(1, -0.15),  # x = center, y = push it lower
+    #     # loc='upper center',
+    #     fontsize="large"
+    # )
+    # plt.savefig(genpdf_name, bbox_inches='tight')
 
 
 def main():

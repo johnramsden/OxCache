@@ -17,6 +17,16 @@ from collections import defaultdict
 # Increase all font sizes by 4 points
 rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
+map_files = {
+"metrics-2025-08-30-17-52-04": "536870912,L=5413781,UNIFORM,R=10,I=6000,NZ=200,nvme0n2",
+"metrics-2025-08-30-18-35-00": "536870912,L=5413781,UNIFORM,R=2,I=6000,NZ=200,nvme0n2",
+"metrics-2025-08-30-19-07-57": "536870912,L=5413781,ZIPFIAN,R=10,I=6000,NZ=200,nvme0n2",
+"metrics-2025-08-30-19-37-57": "536870912,L=5413781,ZIPFIAN,R=2,I=6000,NZ=200,nvme0n2",
+"metrics-2025-08-30-20-06-12": "65536,L=40632,UNIFORM,R=10,I=9830400,NZ=40,nvme0n2",
+"metrics-2025-08-30-21-45-11": "65536,L=40632,UNIFORM,R=2,I=9830400,NZ=40,nvme0n2",
+"metrics-2025-08-30-22-41-50": "65536,L=40632,ZIPFIAN,R=10,I=9830400,NZ=40,nvme0n2",
+"metrics-2025-08-30-23-07-40": "65536,L=40632,ZIPFIAN,R=2,I=9830400,NZ=40,nvme0n2"
+}
 
 def parse_timestamp(timestamp_str):
     """Parse ISO timestamp string to datetime object."""
@@ -75,7 +85,7 @@ def normalize_filename(filename):
     return normalized
 
 
-def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_dir, labels=None):
+def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_dir, ax, labels=None):
     """Plot throughput for a specific metric, comparing across directories if multiple provided."""
     # Handle single directory case (backward compatibility)
     if isinstance(split_data_dirs, (str, Path)):
@@ -114,6 +124,8 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
     
     # Create one plot per normalized filename
     for normalized_name, dir_label_pairs in all_data_dirs.items():
+        experiment_info = extract_experiment_info(map_files[normalized_name])
+        
         plt.figure(figsize=(12, 4))
         
         has_data = False
@@ -155,7 +167,7 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
             
             # Calculate throughput
             timestamps, throughputs = calculate_throughput(data_points, bucket_seconds)
-            
+
             if timestamps and throughputs:
                 # Convert timestamps to minutes from start
                 start_time = timestamps[0]
@@ -195,23 +207,171 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
             
             plt.plot(time_minutes, scaled_throughputs, alpha=0.8, linewidth=1.2, label=label)
             has_data = True
+
         
-        if has_data:
-            plt.xlabel('Time (minutes)')
-            plt.ylabel(ylabel)
-            plt.grid(True, alpha=0.3)
-            
-            if len(dir_label_pairs) > 1:
-                plt.legend()
-            
-            plt.tight_layout()
-            
-            # Save plot
-            output_file = output_path / f"{normalized_name}_{metric_name}_throughput.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
-            print(f"Saved plot to {output_file}")
         
-        plt.close()
+        bp = ax.boxplot(current_data,
+                        showfliers=False,
+                        widths=1,
+                        medianprops=dict(linewidth=1, color='red'),
+                        patch_artist=True)
+
+        ax.set_xticks([1, 2])
+            axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=14)
+
+        # axes[idx].set_xlabel(f"1:{r}")
+        ylim = ax.get_ylim()
+        ax.text(1.5, ylim[1],  # Centered above both boxes
+                       f"Ratio: 1:{r}", ha='center', va='bottom', fontsize=14)
+        # axes[idx].set_ylabel("GB/s", rotation=90)
+        for label in ax.get_yticklabels():
+            label.set_rotation(45)
+        # plt.suptitle(title)
+        bp['boxes'][0].set_hatch(dh)
+        bp['boxes'][1].set_hatch(dh)
+        bp['boxes'][0].set_facecolor(cc)
+        bp['boxes'][1].set_facecolor(cc)
+
+        return
+
+        #     plt.xlabel('Time (minutes)')
+        #     plt.ylabel(ylabel)
+        #     plt.grid(True, alpha=0.3)
+            
+        #     if len(dir_label_pairs) > 1:
+        #         plt.legend()
+            
+        #     plt.tight_layout()
+            
+        #     # Save plot
+        #     output_file = output_path / f"{normalized_name}_{metric_name}_throughput.png"
+        #     plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
+        #     print(f"Saved plot to {output_file}")
+        
+        # plt.close()
+
+def extract_experiment_info(filename):
+    """Extract experiment parameters from filename."""
+    # Example: 536870912,L=5413781,UNIFORM,R=10,I=6000,NZ=200,nvme1n1
+    # Maps to: chunk_size, cache_size, distribution, ratio, total_io, zones, device
+    
+    parts = filename.split(',')
+    if len(parts) < 7:
+        return None
+    
+    try:
+        chunk_size_bytes = int(parts[0])
+        cache_size = int(parts[1].split('=')[1])
+        distribution = parts[2]
+        ratio = int(parts[3].split('=')[1])
+        total_io = int(parts[4].split('=')[1])
+        zones = int(parts[5].split('=')[1])
+        device = parts[6]
+        
+        # Convert chunk size to readable format
+        if chunk_size_bytes >= 1024*1024:
+            chunk_size = f"{chunk_size_bytes // (1024*1024)}M"
+        elif chunk_size_bytes >= 1024:
+            chunk_size = f"{chunk_size_bytes // 1024}K"
+        else:
+            chunk_size = f"{chunk_size_bytes}B"
+        
+        # Determine interface type from device name
+        if 'nvme1n1' in device:
+            interface = 'Block'
+        elif 'nvme0n2' in device:
+            interface = 'ZNS'
+        else:
+            interface = 'Unknown'
+        
+        # Create readable name
+        dist_short = 'UNIF' if distribution == 'UNIFORM' else 'ZIPF'
+        experiment_name = f"{interface}-{chunk_size}-{dist_short}-{ratio}"
+        
+        return {
+            'name': experiment_name,
+            'interface': interface,
+            'chunk_size': chunk_size,
+            'chunk_size_bytes': chunk_size_bytes,
+            'distribution': distribution,
+            'ratio': ratio,
+            'device': device
+        }
+    except (ValueError, IndexError):
+        return None
+
+
+def GenerateGraph(runfile, data, analysis, title, scale, genpdf_name):
+# def GenerateGraph():
+    font = {'size'   : 12}
+    # matplotlib.rc('font', **font)
+    distribution = ["ZIPFIAN", "UNIFORM"]
+    distrib_hatch = ['oo', '//']
+    chunk_size = [536870912,65536]
+    chunk_color = ["lightgreen", "lightblue"]
+    ratio = [2, 10]
+    type = ["ZNS", "SSD"]
+
+    idx = 0
+    fig, axes = plt.subplots(1, 8, figsize=(10, 4))
+    for c, cc in zip(chunk_size, chunk_color):
+        for d, dh in zip(distribution, distrib_hatch):
+            for r in ratio:
+                current_data = []
+                ids = []
+                for t in type:
+                    ids.append(runfile[(runfile["type"] == t) &
+                                       (runfile["ratio"] == r) &
+                                       (runfile["chunk_size"] == c) &
+                                       (runfile["distribution"] == d)].index[0])
+                cur = data[analysis]
+                zns = cur[cur["id"] == ids[0]]
+                ssd = cur[cur["id"] == ids[1]]
+                current_data.append(zns["value"].to_numpy()*scale)
+                current_data.append(ssd["value"].to_numpy()*scale)
+
+                bp = axes[idx].boxplot(current_data,
+                                  showfliers=False,
+                                  widths=1,
+                                  medianprops=dict(linewidth=1, color='red'),
+                                      patch_artist=True)
+                # axes[idx].tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+                axes[idx].set_xticks([1, 2])
+                axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=14)
+
+                # axes[idx].set_xlabel(f"1:{r}")
+                ylim = axes[idx].get_ylim()
+                axes[idx].text(1.5, ylim[1],  # Centered above both boxes
+                               f"Ratio: 1:{r}", ha='center', va='bottom', fontsize=14)
+                # axes[idx].set_ylabel("GB/s", rotation=90)
+                for label in axes[idx].get_yticklabels():
+                    label.set_rotation(45)
+                # plt.suptitle(title)
+                bp['boxes'][0].set_hatch(dh)
+                bp['boxes'][1].set_hatch(dh)
+                bp['boxes'][0].set_facecolor(cc)
+                bp['boxes'][1].set_facecolor(cc)
+                idx += 1
+
+    plt.subplots_adjust(wspace=0.0, hspace=0.0)
+    plt.tight_layout(pad=0.0)
+    plt.subplots_adjust(top=0.94)
+    # Alpha=.99 is due to a bug with pdf export
+    legends = [mpatches.Patch(facecolor='lightgreen', hatch='oo', label='Zipfian 512MiB', alpha=.99),
+               mpatches.Patch(facecolor='lightgreen', hatch='//', label='Uniform 512MiB', alpha=.99),
+               mpatches.Patch(facecolor='lightblue', hatch='oo', label='Zipfian 64KiB', alpha=.99),
+               mpatches.Patch(facecolor='lightblue', hatch='//', label='Uniform 64KiB', alpha=.99)]
+
+    plt.legend(
+        ncols=4,
+        handles=legends,
+        bbox_to_anchor=(1, -0.15),  # x = center, y = push it lower
+        # loc='upper center',
+        fontsize="large"
+    )
+    plt.savefig(genpdf_name, bbox_inches='tight')
+
+
 
 
 def main():
@@ -236,6 +396,9 @@ def main():
     
     for metric in args.metrics:
         print(f"\nPlotting {metric}...")
+        
+        
+
         plot_metric_throughput(args.split_data_dirs, metric, args.bucket_seconds, args.output_dir, args.labels)
     
     print(f"\nAll plots saved to {args.output_dir}/")
