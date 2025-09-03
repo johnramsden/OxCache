@@ -78,6 +78,15 @@ nvme0n2      host-managed
 nvme1n1      none
 ```
 
+## Scheduler
+
+**IMPORTANT**: On Linux older than 6.10 Must use a non re-ordering scheduler such as `mq-deadline`, set accordingly in `/sys/block/$DEVICE/queue/scheduler`
+
+```shell
+echo mq-deadline | tee /sys/block/$DEVICE/queue/scheduler
+cat /sys/block/$DEVICE/queue/scheduler
+```
+
 Run simple:
 
 ```shell

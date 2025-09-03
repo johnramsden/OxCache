@@ -6,6 +6,8 @@ This directory contains tools for processing and analyzing OxCache evaluation da
 
 - `split_data.py` - Script to split JSON metric data files by metric name
 - `plot.py` - Data visualization script
+- `parse_pidstat.py` - Script to parse pidstat output files and generate statistics
+- `generate_pidstat_latex.sh` - Shell script to generate LaTeX tables for all pidstat files
 
 ## Data Structure
 
@@ -174,3 +176,59 @@ This script will:
 - Hit ratio comparison plots
 
 The script provides progress updates and a summary of generated plots upon completion.
+
+## System Resource Analysis
+
+### Pidstat Output Analysis
+
+The `parse_pidstat.py` script analyzes pidstat output files to extract CPU and memory usage statistics. It supports multiple output formats including LaTeX tables for publication-quality results.
+
+**Basic usage:**
+```bash
+# Human-readable output
+python parse_pidstat.py path/to/pidstat_file.txt
+
+# CSV format
+python parse_pidstat.py --csv path/to/pidstat_file.txt
+
+# LaTeX table format
+python parse_pidstat.py --latex path/to/pidstat_file.txt
+```
+
+**LaTeX Output Features:**
+- Parses filename metadata (chunk size, latency, distribution, ratio, zones, disk type)
+- Maps device names: nvme1n1 → Block-interface, nvme0n2 → ZNS
+- Converts memory values to GiB for better readability
+- Generates separate tables for CPU and Memory statistics
+- Includes descriptive comments with experiment parameters
+
+**Filename Format Expected:**
+```
+CHUNKSZ,L=LATENCY,DISTRIBUTION,R=RATIO,NZ+NUM_ZONES,disk_type.pidstat
+```
+
+**Example output:**
+```latex
+% File: 65536,L=40632,ZIPFIAN,R=10,I=19660800,NZ+80,nvme0n2.pidstat
+% Chunk Size: 65536, Latency: 40632
+% Distribution: Zipfian, Ratio: 10
+% Zones: 80, Disk Type: ZNS
+
+\begin{table}[H]
+\centering
+\caption{CPU Usage Statistics - ZNS (65536)}
+\begin{tabular}{|l|r|}
+...
+\end{tabular}
+\end{table}
+```
+
+### Automated LaTeX Generation
+
+Use the provided shell script to process all pidstat files at once:
+
+```bash
+./generate_pidstat_latex.sh
+```
+
+This script processes all `.pidstat` files in the `data/OXCACHE-UTILIZATION` and `data/ZNCACHE-UTILIZATION` directories (if they exist) and outputs LaTeX tables to stdout.
