@@ -209,38 +209,104 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
 
     
     scaled_throughputs = [(a, [x / unit_divisor for x in t], c, d) for (a, t, c, d) in all_throughputs_data]
-    print("Hi", scaled_throughputs)
-
+    
+    # Organize data by experiment configuration (chunk_size, distribution, ratio)
+    experiment_configs = {}
+    
     for (time, tp, i, info) in scaled_throughputs:
-        print(time, tp, i, info)
-
-    idx = 0
-    fig, axes = plt.subplots(1, 8, figsize=(10, 4))
-
-    for i in range(len(scaled_throughputs)):
+        # Create key from chunk size, distribution, and ratio
+        key = (info['chunk_size_bytes'], info['distribution'], info['ratio'])
+        if key not in experiment_configs:
+            experiment_configs[key] = {'ZNS': [], 'Block': []}
         
-        bp = axes[i].boxplot(current_data,
-                             showfliers=False,
-                             widths=1,
-                             medianprops=dict(linewidth=1, color='red'),
-                             patch_artist=True)
+        # Add throughput data based on interface type
+        if info['interface'] == 'ZNS':
+            experiment_configs[key]['ZNS'].extend(tp)
+        elif info['interface'] == 'Block':
+            experiment_configs[key]['Block'].extend(tp)
 
-        ax.set_xticks([1, 2])
-        axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=14)
+    # Create subplots
+    import matplotlib.patches as mpatches
+    
+    fig, axes = plt.subplots(1, 8, figsize=(20, 6))
+    
+    # Define colors and hatches
+    distribution_hatches = {'ZIPFIAN': 'oo', 'UNIFORM': '//'}
+    chunk_colors = {536870912: "lightgreen", 65536: "lightblue"}
+    
+    idx = 0
+    for chunk_size in [536870912, 65536]:
+        for distribution in ["ZIPFIAN", "UNIFORM"]:
+            for ratio in [2, 10]:
+                key = (chunk_size, distribution, ratio)
+                if key not in experiment_configs:
+                    continue
+                
+                current_data = []
+                if experiment_configs[key]['ZNS']:
+                    current_data.append(experiment_configs[key]['ZNS'])
+                if experiment_configs[key]['Block']:
+                    current_data.append(experiment_configs[key]['Block'])
+                
+                if not current_data:
+                    continue
+                
+                bp = axes[idx].boxplot(current_data,
+                                     showfliers=False,
+                                     widths=1.0,
+                                     medianprops=dict(linewidth=2, color='red'),
+                                     patch_artist=True)
+                
+                # Set labels and formatting
+                axes[idx].set_xticks([1, 2])
+                axes[idx].set_xticklabels(["ZNS", "Block"], rotation=45, fontsize=14)
+                
+                # Add ratio label at top
+                ylim = axes[idx].get_ylim()
+                axes[idx].text(1.5, ylim[1],  # Centered above both boxes
+                               f"Ratio: 1:{ratio}", ha='center', va='bottom', fontsize=14)
+                
+                # Rotate y-axis labels
+                for label in axes[idx].get_yticklabels():
+                    label.set_rotation(45)
+                
+                # Apply colors and hatches
+                cc = chunk_colors[chunk_size]
+                dh = distribution_hatches[distribution]
+                
+                for box in bp['boxes']:
+                    box.set_facecolor(cc)
+                    box.set_hatch(dh)
+                
+                idx += 1
+    
+    # Add legend and formatting
+    plt.subplots_adjust(wspace=0.0, hspace=0.0)
+    plt.tight_layout(pad=0.0)
+    plt.subplots_adjust(top=0.94)
+    
+    # Create legend
+    legends = [
+        mpatches.Patch(facecolor='lightgreen', hatch='oo', label='Zipfian 512MiB', alpha=.99),
+        mpatches.Patch(facecolor='lightgreen', hatch='//', label='Uniform 512MiB', alpha=.99),
+        mpatches.Patch(facecolor='lightblue', hatch='oo', label='Zipfian 64KiB', alpha=.99),
+        mpatches.Patch(facecolor='lightblue', hatch='//', label='Uniform 64KiB', alpha=.99)
+    ]
+    
+    plt.legend(
+        ncols=4,
+        handles=legends,
+        bbox_to_anchor=(1, -0.15),  # x = center, y = push it lower
+        # loc='upper center',
+        fontsize="large"
+    )
+    
+    # Set common y-label
+    # fig.text(0.04, 0.5, ylabel, va='center', rotation='vertical', fontsize=16)
 
-        # axes[idx].set_xlabel(f"1:{r}")
-        ylim = ax.get_ylim()
-        ax.text(1.5, ylim[1],  # Centered above both boxes
-                       f"Ratio: 1:{r}", ha='center', va='bottom', fontsize=14)
-        # axes[idx].set_ylabel("GB/s", rotation=90)
-        for label in ax.get_yticklabels():
-            label.set_rotation(45)
-        # plt.suptitle(title)
-        bp['boxes'][0].set_hatch(dh)
-        bp['boxes'][1].set_hatch(dh)
-        bp['boxes'][0].set_facecolor(cc)
-        bp['boxes'][1].set_facecolor(cc)
-
+    plt.savefig(f'throughput_boxplots_{metric_name}.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
     return
 
     
