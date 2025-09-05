@@ -97,7 +97,8 @@ for file in "$directory"/*.bin; do
 
     if [ "$device" = "/dev/nvme1n1" ]; then
         echo "Pre-conditioning SSD"
-        "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
+        # "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
+        sudo blkdiscard -f /dev/nvme1n1
     fi
 
     clean_args=""
@@ -108,14 +109,14 @@ for file in "$directory"/*.bin; do
         clean_args="$clean_args --low-water-clean=$clean_low"
     fi
 
+        # --max-zones="${n_zones}" \
     ./target/release/oxcache --config="$configfile" \
-        --max-zones="${n_zones}" \
         --chunk-size="$chunk_size" \
         --eviction-policy="$eviction" \
         --high-water-evict="$evict_high" \
         --low-water-evict="$evict_low" \
         --log-level=info \
-        --remote-artificial-delay-microsec="$latency" \
+        $([ "$latency" -ne 0 ] && echo "--remote-artificial-delay-microsec=$latency") \
         --disk="$device" $clean_args &>> "$runfile.server" &
     SERVER_PID=$!
 
