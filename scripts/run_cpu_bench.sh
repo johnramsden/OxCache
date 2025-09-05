@@ -120,7 +120,7 @@ for file in "$directory"/*.bin; do
         --disk="$device" $clean_args &>> "$runfile.server" &
     SERVER_PID=$!
 
-    sleep 5s
+    sleep 15s
 
     # Start pidstat to monitor CPU and memory usage
     pidstat -u -r 1 -p "${SERVER_PID}" > "$runfile.pidstat" &
