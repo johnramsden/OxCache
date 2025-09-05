@@ -147,6 +147,8 @@ for file in "$directory"/*.bin; do
     else
         tail -n3 "$runfile.client"
     fi
+
+    sleep 10s
 done
 
 exit $ret
