@@ -112,13 +112,13 @@ jobs:
           sleep 5
         done
 
-    - name: Copy files and install Rust
+    - name: Copy files and install dependencies
       run: |
         sshpass -p "ubuntu" scp -o StrictHostKeyChecking=no -P 2222 -r $GITHUB_WORKSPACE ubuntu@127.0.0.1:/home/ubuntu/OxCache
         sshpass -p "ubuntu" ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 << 'EOF'
+        sudo apt update && sudo apt install -y build-essential libclang-dev meson ninja-build
         curl https://sh.rustup.rs -sSf | sh -s -- -y
         . "$HOME/.cargo/env"
-        sudo apt update && sudo apt install -y build-essential libclang-dev meson build-essential ninja-build
         cd OxCache && RUNNING_IN_GITHUB_ACTIONS=yes cargo build
         EOF
 
