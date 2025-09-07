@@ -5,6 +5,7 @@ use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use crate::metrics::{MetricType, METRICS};
+use crate::cache::bucket::PinGuard;
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -15,6 +16,7 @@ pub struct ReadResponse {
 pub struct ReadRequest {
     pub location: cache::bucket::ChunkLocation,
     pub responder: Sender<ReadResponse>,
+    pub _pin_guard: PinGuard, // Keep pin alive during disk I/O
 }
 
 /// Represents an individual reader thread

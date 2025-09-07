@@ -1,4 +1,4 @@
-use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState};
+use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState, PinnedChunkLocation, PinGuard};
 use ndarray::{Array2, ArrayBase, s};
 use nvme::types::{self, Zone};
 use std::io::ErrorKind;
@@ -8,6 +8,7 @@ use std::{collections::HashMap, io};
 use bytes::Bytes;
 use tokio::sync::{Notify, RwLock};
 use crate::cache::bucket::Chunk as CacheKey;
+use crate::server::validate_read_response;
 
 pub mod bucket;
 
@@ -55,17 +56,20 @@ impl Cache {
         writer: W,
     ) -> tokio::io::Result<()>
     where
-        R: FnOnce(Arc<ChunkLocation>) -> RFut + Send + 'static,
-        RFut: Future<Output = tokio::io::Result<()>> + Send + 'static,
+        R: FnOnce(PinGuard) -> RFut + Send + 'static,
+        RFut: Future<Output=tokio::io::Result<()>> + Send + 'static,
         W: FnOnce() -> WFut + Send + 'static,
-        WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static,
+        WFut: Future<Output=tokio::io::Result<ChunkLocation>> + Send + 'static,
     {
+        let mut reader = Some(reader);
         // NOTE: If we are ever clearing something from the map we need to acquire exclusive lock
         //       on both the entire map and the individual chunk location
 
         loop {
             // Bucket read locked -- no one can write to map
+            tracing::debug!("READER: Acquiring bucket read lock for key {:?}", key);
             let bucket_guard = self.bm.read().await;
+            tracing::debug!("READER: Acquired bucket read lock for key {:?}", key);
 
             if let Some(state) = bucket_guard.buckets.get(&key) {
                 let state = Arc::clone(state);
@@ -74,22 +78,29 @@ impl Cache {
                 let bucket_state_guard = state;
                 let bucket_state_guard = bucket_state_guard.read().await;
 
-                match &*bucket_state_guard {
+                let result = match &*bucket_state_guard {
                     ChunkState::Waiting(notify) => {
                         let notify = notify.clone();
-                        let notified = notify.notified(); // queue notifies
-                        // Now we can drop full map lock, we have lock on chunkstate
-
                         drop(bucket_state_guard);
-
+                        let notified = notify.notified(); // queue notifies
                         notified.await; // retry loop required
-                        continue; // loop to recheck state
+                        None // Continue the loop
                     }
-                    ChunkState::Ready(loc) => {
-                        let r = reader(Arc::clone(loc)).await;
-                        return r;
+                    ChunkState::Ready(pinned_loc) => {
+                        let pin_guard = pinned_loc.pin();
+                        // drop(bucket_state_guard); // Drop the lock early, pin protects from eviction
+                        if let Some(reader_fn) = reader.take() {
+                            Some(reader_fn(pin_guard).await) // Return the result
+                        } else {
+                            panic!("Reader function called multiple times");
+                        }
                     }
                 };
+
+                match result {
+                    Some(r) => return r,
+                    None => continue, // loop to recheck state
+                }
             } else {
                 break;
             }
@@ -107,20 +118,29 @@ impl Cache {
                 let bucket_state_guard = state;
                 let bucket_state_guard = bucket_state_guard.read().await;
 
-                match &*bucket_state_guard {
+                let result = match &*bucket_state_guard {
                     ChunkState::Waiting(notify) => {
                         let notify = notify.clone();
-                        let notified = notify.notified(); // queue notifies
-                        // Now we can drop full map lock, we have lock on chunkstate
                         drop(bucket_state_guard);
-
+                        let notified = notify.notified(); // queue notifies
                         notified.await; // retry loop required
-                        continue; // loop to recheck state
+                        None // Continue the loop
                     }
-                    ChunkState::Ready(loc) => {
-                        return reader(Arc::clone(loc)).await;
+                    ChunkState::Ready(pinned_loc) => {
+                        let pin_guard = pinned_loc.pin();
+                        // drop(bucket_state_guard); // Drop the lock early, pin protects from eviction
+                        if let Some(reader_fn) = reader.take() {
+                            Some(reader_fn(pin_guard).await) // Return the result
+                        } else {
+                            panic!("Reader function called multiple times");
+                        }
                     }
                 };
+
+                match result {
+                    Some(r) => return r,
+                    None => continue, // loop to recheck state
+                }
             } else {
                 // Otherwise we need to write, the entire map is still locked
                 let locked_chunk_location = new_entry();
@@ -156,7 +176,7 @@ impl Cache {
                         let mut reverse_mapping_guard = self.bm.write().await;
                         reverse_mapping_guard.zone_to_entry[location.as_index()] = Some(key);
                         tracing::debug!("[map-dbg] location {:?} map updated", location);
-                        tracing::debug!("[map-dbg] state is {:#?}", *reverse_mapping_guard);
+                        // tracing::debug!("[map-dbg] state is {:#?}", *reverse_mapping_guard);
 
                         let mut chunk_loc_guard = locked_chunk_location.write().await;
                         tracing::debug!("[map-dbg] location {:?} being written to", location);
@@ -164,9 +184,8 @@ impl Cache {
                             ChunkState::Waiting(n) => n.clone(),
                             _ => panic!("Chunk was not in waiting state"),
                         };
-                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
+                        *chunk_loc_guard = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(location.clone())));
                         notify.notify_waiters();
-
                     }
                 }
 
@@ -228,10 +247,10 @@ impl Cache {
         writer: W,
     ) -> io::Result<()>
     where
-        R: FnOnce(Vec<(CacheKey, Arc<ChunkLocation>)>) -> RFut + Send,
-        RFut: Future<Output = io::Result<Vec<(CacheKey, Bytes)>>> + Send,
+        R: FnOnce(Vec<(CacheKey, ChunkLocation)>) -> RFut + Send,
+        RFut: Future<Output=io::Result<Vec<(CacheKey, Bytes)>>> + Send,
         W: FnOnce(Vec<(CacheKey, Bytes)>) -> WFut + Send,
-        WFut: Future<Output = io::Result<Vec<(CacheKey, ChunkLocation)>>> + Send,
+        WFut: Future<Output=io::Result<Vec<(CacheKey, ChunkLocation, Bytes)>>> + Send,
     {
         use ndarray::s;
 
@@ -253,21 +272,44 @@ impl Cache {
                         .get(&key)
                         .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
                         .clone();
-                    let mut st = entry.write().await;
-                    let old_loc = match &*st {
-                        ChunkState::Ready(loc) => Arc::clone(loc),
-                        ChunkState::Waiting(_) => {
-                            // TODO: Shouldnt occur since zone was full
-                            return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
-                        }
-                    };
+                    
+                    // Wait for pins to be released before proceeding
+                    loop {
+                        tracing::debug!("EVICTION: Obtaining lock for entry {:?}", key);
+                        let mut st = entry.write().await;
+                        tracing::debug!("EVICTION: Obtained lock for entry {:?}", key);
+                        let old_loc = match &*st {
+                            ChunkState::Ready(pinned_loc) => {
+                                // Wait for this location to be unpinned
+                                if !pinned_loc.can_evict() {
+                                    let pinned_loc_clone = Arc::clone(pinned_loc);
+                                    drop(st); // Release lock before waiting
+                                    tracing::warn!("EVICTION: Waiting for chunk at {:?} to be unpinned (pin_count={})",
+                                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+                                    pinned_loc_clone.wait_for_unpin().await;
+                                    tracing::warn!("EVICTION: Chunk at {:?} unpinned (pin_count={}), retrying",
+                                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+                                    continue; // Retry after being notified
+                                }
+                                pinned_loc.location.clone()
+                            },
+                            ChunkState::Waiting(_) => {
+                                // TODO: Shouldnt occur since zone was full
+                                tracing::debug!("Encountered invalid waiting state during zone cleaning");
+                                return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
+                            }
+                        };
 
-                    let notify = Arc::new(Notify::new());
-                    // Update state to waiting
-                    *st = ChunkState::Waiting(Arc::clone(&notify));
-                    drop(st);
-                    out.push((key, old_loc, entry));
-                    notifies.push(notify);
+                        let notify = Arc::new(Notify::new());
+                        tracing::debug!("EVICTION: Setting entry {:?} to Waiting state", key);
+                        // Update state to waiting
+                        *st = ChunkState::Waiting(Arc::clone(&notify));
+                        drop(st);
+                        tracing::debug!("EVICTION: Added entry {:?} to eviction list", key);
+                        out.push((key, old_loc, entry));
+                        notifies.push(notify);
+                        break; // Successfully processed this entry
+                    }
                 }
             }
 
@@ -284,7 +326,7 @@ impl Cache {
         // Buffer all chunks
         let read_input: Vec<_> = items
             .iter()
-            .map(|(k, l, _)| (k.clone(), Arc::clone(l)))
+            .map(|(k, l, _)| (k.clone(), l.clone()))
             .collect();
         let payloads = match reader(read_input).await {
             Ok(p) => p,
@@ -293,7 +335,7 @@ impl Cache {
                 // rollback
                 for (_, old_loc, entry) in &items {
                     let mut st = entry.write().await;
-                    *st = ChunkState::Ready(Arc::clone(old_loc));
+                    *st = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(old_loc.clone())));
                 }
                 for n in notifies {
                     n.notify_waiters();
@@ -310,11 +352,11 @@ impl Cache {
             let mut bm = self.bm.write().await;
 
             // Set Ready and reverse map
-            for (key, new_loc) in new_locs {
+            for (key, new_loc, b) in new_locs {
                 // set entry
                 if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| *k == key) {
                     let mut st = entry.write().await;
-                    *st = ChunkState::Ready(Arc::new(new_loc.clone()));
+                    *st = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(new_loc.clone())));
                 } else {
                     return Err(io::Error::new(
                         ErrorKind::NotFound,
@@ -322,35 +364,21 @@ impl Cache {
                     ));
                 }
 
+                let ch = key.clone();
+
                 bm.zone_to_entry[new_loc.as_index()] = Some(key);
+
+                validate_read_response(&b, &ch.uuid, ch.offset, ch.size);
             }
         }
+
+        // for loc in new_locs {
+        //     validate_read_response()
+        // }
 
         for n in notifies {
             n.notify_waiters();
         }
-        Ok(())
-    }
-
-
-
-    pub async fn remove_entry(&self, chunk: &ChunkLocation) -> tokio::io::Result<()> {
-        // to_relocate is a list of ChunkLocations that the caller wants to update
-        // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
-        let mut bucket_guard = self.bm.write().await;
-
-        let chunk_id = match bucket_guard.zone_to_entry[chunk.as_index()].clone() {
-            Some(id) => {
-                bucket_guard.zone_to_entry[chunk.as_index()].take();
-                id
-            }
-            None => return Err(io::Error::new(ErrorKind::NotFound, "Couldn't find chunk")),
-        };
-
-        bucket_guard
-            .buckets
-            .remove(&chunk_id)
-            .ok_or(entry_not_found())?;
         Ok(())
     }
 
@@ -359,11 +387,11 @@ impl Cache {
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
         let mut bucket_guard = self.bm.write().await;
 
-        tracing::debug!("State is {:#?} before remove_entries", *bucket_guard);
+        // tracing::debug!("State is {:#?} before remove_entries", *bucket_guard);
         for chunk in chunks {
             tracing::debug!("Removing {:?} from map", chunk);
-            let chunk_id = match bucket_guard.zone_to_entry[chunk.as_index()].take() {
-                Some(id) => id,
+            let chunk_id = match &bucket_guard.zone_to_entry[chunk.as_index()] {
+                Some(id) => id.clone(),
                 None => {
                     // Oh, so this fails
                     tracing::error!("Couldn't find chunk {:?} in reverse map, state is {:?}", chunk, *bucket_guard);
@@ -371,99 +399,55 @@ impl Cache {
                 },
             };
 
-            tracing::debug!("State is {:#?} after remove_entries", *bucket_guard);
-            let entry = bucket_guard
-                .buckets
-                .remove(&chunk_id);
-            tracing::debug!("State is {:#?} after remove_entries remove", *bucket_guard);
-
-            match entry {
-                Some(entry) => tracing::debug!("Found chunk {:?} when removing entries", entry),
+            // Get entry reference first while holding bucket lock
+            let entry = match bucket_guard.buckets.get(&chunk_id) {
+                Some(v) => Arc::clone(v),
                 None => {
                     tracing::error!("Not found chunk {:?} when removing entries, chunk id is {:?} state is {:#?}", chunk, chunk_id, *bucket_guard);
                     return Err(entry_not_found());
                 },
             };
+
+            // Get the write lock FIRST to prevent new pins
+            let entry_guard = entry.write().await;
+
+            // Check if pinned and wait if necessary
+            if let ChunkState::Ready(pinned_loc) = &*entry_guard {
+                if !pinned_loc.can_evict() {
+                    let pinned_loc_clone = Arc::clone(pinned_loc);
+                    drop(entry_guard);
+                    drop(bucket_guard); // Release bucket lock before waiting
+                    tracing::warn!("EVICTION: Waiting for chunk at {:?} to be unpinned during entry removal (pin_count={})",
+                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+                    pinned_loc_clone.wait_for_unpin().await;
+                    tracing::warn!("EVICTION: Chunk at {:?} unpinned during entry removal (pin_count={})",
+                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+                    // Re-acquire bucket lock and entry lock
+                    bucket_guard = self.bm.write().await;
+                    let _entry_guard = entry.write().await;
+                }
+            }
+
+            // Now safe to remove from maps while holding entry write lock
+            bucket_guard.zone_to_entry[chunk.as_index()].take();
+            let _removed_entry = bucket_guard.buckets.remove(&chunk_id);
+            tracing::debug!("Found chunk {:?} when removing entries", _removed_entry.is_some());
+            // entry_guard is dropped here, releasing the entry write lock
         }
 
         Ok(())
-    }
-
-    /// Modify entries
-    /// Returns an error if the entry doesn't exist
-    pub async fn modify_entry<R, W, RFut, WFut>(
-        &self,
-        key: Chunk,
-        writer: W,
-    ) -> tokio::io::Result<()>
-    where
-        W: FnOnce() -> WFut + Send + 'static,
-        WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static,
-    {
-        let mut bucket_guard = self.bm.write().await;
-        let state = bucket_guard.buckets.get(&key).ok_or(std::io::Error::new(
-            ErrorKind::NotFound,
-            format!("Couldn't find entry {:?}", key),
-        ))?;
-
-        // We now have the entry
-        let bucket_state_guard = Arc::clone(state);
-        let bucket_state_guard = bucket_state_guard.write().await;
-
-        match &*bucket_state_guard {
-            ChunkState::Waiting(_) => {
-                drop(bucket_guard);
-                Err(std::io::Error::new(
-                    ErrorKind::Other,
-                    "Another thread is already modifying the entry",
-                ))
-            }
-            ChunkState::Ready(_) => {
-                let locked_chunk_location = new_entry();
-                let mut chunk_loc_guard = locked_chunk_location.write().await;
-                bucket_guard
-                    .buckets
-                    .insert(key.clone(), Arc::clone(&locked_chunk_location));
-                drop(bucket_guard); // Bucket write unlocked -- Other writes can proceed on the outer map
-
-                let write_result = writer().await;
-                match write_result {
-                    Err(e) => {
-                        let mut bucket_guard = self.bm.write().await;
-                        bucket_guard.buckets.remove(&key);
-                        match &*chunk_loc_guard {
-                            ChunkState::Waiting(notify) => {
-                                notify.notify_waiters();
-                            }
-                            _ => {
-                                // This should never happen here
-                                panic!("Chunk was not in waiting state");
-                            }
-                        }
-                        // This is the condition where you could be left with something in the waiting state
-                        Err(e)
-                    }
-                    Ok(location) => {
-                        *chunk_loc_guard = ChunkState::Ready(Arc::new(location.clone()));
-                        let mut reverse_mapping_guard = self.bm.write().await;
-                        reverse_mapping_guard.zone_to_entry[location.as_index()] = Some(key);
-                        Ok(())
-                    }
-                }
-            }
-        }
     }
 }
 
 #[cfg(test)]
 mod mod_tests {
-
     use std::sync::Arc;
 
     use crate::cache::{
         Cache,
         bucket::{Chunk, ChunkLocation},
     };
+    use crate::cache::bucket::PinGuard;
 
     #[tokio::test]
     async fn test_insert() {
@@ -486,9 +470,9 @@ mod mod_tests {
         match cache
             .get_or_insert_with(
                 Chunk::new(String::from("fake-uuid"), 120, 10),
-                |loc| async move {
-                    assert!(loc.zone == 0);
-                    assert!(loc.index == 20);
+                |pin_guard| async move {
+                    assert_eq!(pin_guard.location().zone, 0);
+                    assert_eq!(pin_guard.location().index, 20);
                     Ok(())
                 },
                 || async move {
@@ -507,7 +491,7 @@ mod mod_tests {
     async fn test_insert_similar() {
         let cache = Cache::new(10, 100);
 
-        let fail_path = async |_: Arc<ChunkLocation>| {
+        let fail_path = async |_: PinGuard| {
             assert!(false, "Shouldn't reach here");
             Ok(())
         };
@@ -574,9 +558,8 @@ mod mod_tests {
                 .get_or_insert_with(
                     entry1,
                     {
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc1);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc1);
                             Ok(())
                         }
                     },
@@ -590,9 +573,8 @@ mod mod_tests {
                 .get_or_insert_with(
                     entry2,
                     {
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc2);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc2);
                             Ok(())
                         }
                     },
@@ -606,9 +588,8 @@ mod mod_tests {
                 .get_or_insert_with(
                     entry3,
                     {
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc3);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc3);
                             Ok(())
                         }
                     },
@@ -622,9 +603,8 @@ mod mod_tests {
                 .get_or_insert_with(
                     entry4,
                     {
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc4);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc4);
                             Ok(())
                         }
                     },
@@ -638,7 +618,7 @@ mod mod_tests {
     async fn test_remove() {
         let cache = Cache::new(10, 100);
 
-        let fail_path = async |_: Arc<ChunkLocation>| {
+        let fail_path = async |_: PinGuard| {
             assert!(false, "Shouldn't reach here");
             Ok(())
         };
@@ -673,9 +653,8 @@ mod mod_tests {
                     entry.clone(),
                     {
                         let chunk_loc = chunk_loc.clone();
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc);
                             Ok(())
                         }
                     },
@@ -702,7 +681,7 @@ mod mod_tests {
     async fn test_multiple_remove() {
         let cache = Cache::new(10, 100);
 
-        let fail_path = async |_: Arc<ChunkLocation>| {
+        let fail_path = async |_: PinGuard| {
             assert!(false, "Shouldn't reach here");
             Ok(())
         };
@@ -749,9 +728,8 @@ mod mod_tests {
                     entry.clone(),
                     {
                         let chunk_loc = chunk_loc.clone();
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc);
                             Ok(())
                         }
                     },
@@ -766,9 +744,8 @@ mod mod_tests {
                     entry2.clone(),
                     {
                         let chunk_loc = chunk_loc2.clone();
-                        |cl| async move {
-                            let cl = Arc::clone(&cl);
-                            assert_eq!(*cl, chunk_loc);
+                        |pin_guard| async move {
+                            assert_eq!(pin_guard.location(), &chunk_loc);
                             Ok(())
                         }
                     },

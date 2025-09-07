@@ -83,7 +83,7 @@ pub struct Server<T: RemoteBackend + Send + Sync> {
     pub shutdown: Arc<Notify>,
 }
 
-fn validate_read_response(buf: &[u8], key: &str, offset: Byte, size: Byte) {
+pub fn validate_read_response(buf: &[u8], key: &str, offset: Byte, size: Byte) {
     // Hash using DefaultHasher (64-bit hash)
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
@@ -92,7 +92,12 @@ fn validate_read_response(buf: &[u8], key: &str, offset: Byte, size: Byte) {
     // Check the buffer
     let mut buffer = [0u8; 8];
     buffer.copy_from_slice(&buf[0..8]);
-    debug_assert_eq!(u64::from_be_bytes(buffer), key_hash);
+    let read_key_hash = u64::from_be_bytes(buffer);
+    if read_key_hash != key_hash {
+        tracing::error!("Buffer validation failed - key hash mismatch: expected {}, got {}, buf_len: {}", key_hash, read_key_hash, buf.len());
+        tracing::error!("Buffer prefix: {:02x?}", &buf[0..std::cmp::min(32, buf.len())]);
+    }
+    debug_assert_eq!(read_key_hash, key_hash);
 
     buffer.copy_from_slice(&buf[8..16]);
     debug_assert_eq!(u64::from_be_bytes(buffer), offset);
@@ -306,15 +311,16 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let reader_pool = Arc::clone(&reader_pool);
                                 let start = Arc::clone(&start);
                                 // let chunk = chunk.clone();
-                                |location| async move {
+                                |pin_guard| async move {
                                     let chunk = chunk.clone();
                                     // println!("HIT {:?}", chunk);
-                                    let location = location.as_ref().clone();
+                                    let location = pin_guard.location().clone();
 
                                     let (tx, rx) = flume::bounded(1);
                                     let read_req = ReadRequest {
                                         location,
                                         responder: tx,
+                                        _pin_guard: pin_guard,
                                     };
                                     reader_pool.send(read_req).await.map_err(|e| {
                                         std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read request: {}", e))
@@ -333,7 +339,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         }
                                     };
 
-                                    // Validate read response
+                                    // Validate read response - pin_guard must stay alive until here!
+                                    #[cfg(debug_assertions)]
                                     validate_read_response(&read_response, &chunk.uuid, chunk.offset, chunk.size);
 
                                     let encoded = bincode::serde::encode_to_vec(

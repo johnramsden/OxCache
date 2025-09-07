@@ -519,15 +519,14 @@ impl Device for Zoned {
                     let cache_clone = cache.clone();
                     let self_clone = self_clone.clone();
                     let writer_pool = writer_pool.clone();
-                    RUNTIME.spawn(
-                        async move {
+                    RUNTIME.block_on(
                             cache_clone.clean_zone_and_update_map(
                                 zone.clone(),
                                 // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
                                 // which is the list of chunks that need to be written back
                                 {
                                     let self_clone = self_clone.clone();
-                                    |items: Vec<(CacheKey, Arc<ChunkLocation>)>| {
+                                    |items: Vec<(CacheKey, ChunkLocation)>| {
                                         async move {
                                             // Increasing chunk index, might not be neccesary
                                             let mut items = items;
@@ -535,7 +534,7 @@ impl Device for Zoned {
                                             tracing::debug!("Reading zones");
                                             // Reads from location and returns the bytes
                                             items.iter().map(|(key, loc)| {
-                                                Ok((key.clone(), self_clone.read((**loc).clone())?))
+                                                Ok((key.clone(), self_clone.read(loc.clone())?))
                                             }).collect()
                                         }
                                     }
@@ -577,23 +576,18 @@ impl Device for Zoned {
                                                             format!("failed to send write request: {}", e))
                                                     }).and_then(|response| response.location)?;
 
-                                                    Ok::<(CacheKey, ChunkLocation), io::Error>((key.clone(), location))
+                                                    Ok::<(CacheKey, ChunkLocation, bytes::Bytes), io::Error>((key.clone(), location, data.clone()))
                                                 });
                                             }
 
                                             // Await for the results all at the same time, so they can race
-                                            let write_results = join_all(futures).await.into_iter().collect::<Result<Vec<(CacheKey, ChunkLocation)>, io::Error>>()?;
+                                            let write_results = join_all(futures).await.into_iter().collect::<Result<Vec<(CacheKey, ChunkLocation, bytes::Bytes)>, io::Error>>()?;
 
                                             Ok(write_results) // Vec<(Chunk, ChunkLocation)>
                                         }
                                     }
                                 },
-                            ).await
-                            // Interesting, the compiler will throw an error if I don't await here.
-                            // The async move moves the value and declares that this block returns a Future
-                            // If we don't await it, the Future is referencing a local value. So we await it
-                            // to store it in the state of the Future. I think that's what's happening here
-                        });
+                            ))?;
 
                     tracing::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
