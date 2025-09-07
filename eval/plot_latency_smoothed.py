@@ -103,7 +103,6 @@ def plot_metric_latency_smoothed(split_data_dirs, metric_name, window_seconds, o
         print("No data directories found")
         return
     
-    colors = ['green', 'red', 'blue', 'orange', 'purple', 'brown']
     
     # Create one plot per normalized filename
     for normalized_name, dir_label_pairs in all_data_dirs.items():
@@ -178,8 +177,7 @@ def plot_metric_latency_smoothed(split_data_dirs, metric_name, window_seconds, o
         
         # Second pass: plot all data with common scale
         for time_minutes, smooth_values, label, i in all_latency_data:
-            color = colors[i % len(colors)]
-            plt.plot(time_minutes, smooth_values, color=color, alpha=0.8, linewidth=1.5, label=label)
+            plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=1.5, label=label)
             has_data = True
         
         if has_data:
@@ -198,7 +196,7 @@ def plot_metric_latency_smoothed(split_data_dirs, metric_name, window_seconds, o
             
             # Save plot
             output_file = output_path / f"{normalized_name}_{metric_name}_smoothed_{window_seconds}s.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
             print(f"Saved plot to {output_file}")
         
         plt.close()

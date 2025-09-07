@@ -1,0 +1,22 @@
+#!/bin/sh
+
+ZONED_SPLIT_DIR_1000=data/GC-EVAL/SPLIT/ZONED/1000
+ZONED_SPLIT_DIR_32=data/GC-EVAL/SPLIT/ZONED/3209583
+BLOCK_SPLIT_DIR_1000=data/GC-EVAL/SPLIT/BLOCK/1000
+BLOCK_SPLIT_DIR_32=data/GC-EVAL/SPLIT/BLOCK/3209583
+
+ZONED_LABEL_1000="ZNS 0s"
+ZONED_LABEL_32="ZNS 3.2s"
+BLOCK_LABEL_1000="Block-interface 0s"
+BLOCK_LABEL_32="Block-interface 3.2s"
+
+BUCKET_SECONDS=60
+
+OUTPUT_DIR="plots"
+
+# Throughput comparison plots
+python plot_throughput.py "$ZONED_SPLIT_DIR_1000" "$BLOCK_SPLIT_DIR_1000" "$ZONED_SPLIT_DIR_32" "$BLOCK_SPLIT_DIR_32" \
+    --labels "$ZONED_LABEL_1000" "$BLOCK_LABEL_1000" "$ZONED_LABEL_32" "$BLOCK_LABEL_32" \
+    --bucket-seconds $BUCKET_SECONDS \
+    --output-dir "${OUTPUT_DIR}/gccomparison" \
+    --metrics bytes_total
