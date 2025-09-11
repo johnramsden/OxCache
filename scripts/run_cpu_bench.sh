@@ -67,7 +67,7 @@ for file in "$directory"/*.bin; do
         declare -g "$key"="$value"
     done
 
-    runfile="./logs/$chunk_size,L=$latency,$distr,R=$ratio,I=$iterations,NZ=$n_zones,${device##*/}-$(date '+%d_%H:%M:%S')-run"
+    runfile="./logs/$chunk_size,L=$latency,$distr,R=$ratio,I=$iterations,NZ=$n_zones,$eviction,${device##*/}-$(date '+%d_%H:%M:%S')-run"
     # Now you can access the variables
     {
         echo "Chunk Size: $chunk_size"
