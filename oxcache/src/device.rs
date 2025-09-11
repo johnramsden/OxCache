@@ -472,8 +472,6 @@ impl Device for Zoned {
         let start = std::time::Instant::now();
         let res = self.chunked_append(data, zone_index);
         METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
-        METRICS.update_metric_counter("written_bytes_total", sz);
-        METRICS.update_metric_counter("bytes_total", sz);
         res
     }
 
@@ -491,8 +489,6 @@ impl Device for Zoned {
         let start = std::time::Instant::now();
         self.read_into_buffer(self.max_write_size, slba, &mut buffer, &self.nvme_config)?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
-        METRICS.update_metric_counter("read_bytes_total", buffer.len() as u64);
-        METRICS.update_metric_counter("bytes_total", buffer.len() as u64);
         Ok(Bytes::from_owner(buffer))
     }
 
@@ -829,8 +825,6 @@ impl Device for BlockInterface {
         let start = std::time::Instant::now();
         self.chunked_append(data, write_addr)?;
         METRICS.update_metric_histogram_latency("disk_write_latency_ms", start.elapsed(), MetricType::MsLatency);
-        METRICS.update_metric_counter("written_bytes_total", sz);
-        METRICS.update_metric_counter("bytes_total", sz);
         Ok(chunk_location)
     }
 
@@ -847,8 +841,6 @@ impl Device for BlockInterface {
             &self.nvme_config,
         )?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
-        METRICS.update_metric_counter("read_bytes_total", data.len() as u64);
-        METRICS.update_metric_counter("bytes_total", data.len() as u64);
         Ok(Bytes::from(data))
     }
 
