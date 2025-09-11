@@ -83,7 +83,7 @@ pub struct ZNSConfig {
 
     pub chunks_per_zone: Chunk, // Number of chunks that can be allocated in a zone
     pub chunk_size_in_lbas: LogicalBlock, // This is in logical blocks
-    pub chunk_size_in_bytes: Byte, // This is in logical blocks
+    pub chunk_size_in_bytes: Byte, // This is in bytes
 
     pub num_zones: Zone,
 }
