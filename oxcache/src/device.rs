@@ -519,7 +519,8 @@ impl Device for Zoned {
                     let cache_clone = cache.clone();
                     let self_clone = self_clone.clone();
                     let writer_pool = writer_pool.clone();
-                    RUNTIME.block_on(
+                    RUNTIME.spawn(
+                        async move {
                             cache_clone.clean_zone_and_update_map(
                                 zone.clone(),
                                 // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
@@ -587,7 +588,8 @@ impl Device for Zoned {
                                         }
                                     }
                                 },
-                            ))?;
+                            ).await
+                        });
 
                     tracing::debug!("[evict:Chunk] Cleaned zone {}", zone);
                 }
