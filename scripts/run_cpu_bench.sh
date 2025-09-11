@@ -150,7 +150,8 @@ for file in "$directory"/*.bin; do
 
     sleep 10s
 
-    tar -czf "./logs-compressed/$runfile.tar.gz" ./logs
+    tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
+    rm -rf ./logs/*
 
 done
 
