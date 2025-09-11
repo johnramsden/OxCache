@@ -97,8 +97,8 @@ for file in "$directory"/*.bin; do
 
     if [ "$device" = "/dev/nvme1n1" ]; then
         echo "Pre-conditioning SSD"
-        # "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
-        sudo blkdiscard -f /dev/nvme1n1
+         "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
+#        sudo blkdiscard -f /dev/nvme1n1
     fi
 
     clean_args=""
@@ -116,11 +116,11 @@ for file in "$directory"/*.bin; do
         --high-water-evict="$evict_high" \
         --low-water-evict="$evict_low" \
         --log-level=info \
-        $([ "$latency" -ne 0 ] && echo "--remote-artificial-delay-microsec=$latency") \
+        "$([ "$latency" -ne 0 ] && echo "--remote-artificial-delay-microsec=$latency")" \
         --disk="$device" $clean_args &>> "$runfile.server" &
     SERVER_PID=$!
 
-    sleep 15s
+    sleep 30s
 
     # Start pidstat to monitor CPU and memory usage
     pidstat -u -r 1 -p "${SERVER_PID}" > "$runfile.pidstat" &
@@ -149,6 +149,9 @@ for file in "$directory"/*.bin; do
     fi
 
     sleep 10s
+
+    tar -czf "./logs-compressed/$runfile.tar.gz" --transform="s,^logs,$runfile," logs
+
 done
 
 exit $ret
