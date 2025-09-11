@@ -283,11 +283,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
         match msg {
             Ok((request, _)) => {
                 let request_id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-                tracing::info!("REQ[{}] Started processing request", request_id);
+                tracing::debug!("REQ[{}] Started processing request", request_id);
                 
                 match request {
                     request::Request::Get(req) => {
-                        tracing::info!("REQ[{}] Processing GET request for key={}, offset={}, size={}", 
+                        tracing::debug!("REQ[{}] Processing GET request for key={}, offset={}, size={}",
                                      request_id, req.key, req.offset, req.size);
                         if let Err(e) = req.validate(chunk_size) {
                             tracing::warn!("REQ[{}] Validation failed: {}", request_id, e);
@@ -305,7 +305,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     )
                                 })?;
                             }
-                            tracing::info!("REQ[{}] Completed with validation error", request_id);
+                            tracing::debug!("REQ[{}] Completed with validation error", request_id);
                             continue;
                         }
 
@@ -313,7 +313,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                         let chunk: Chunk = req.into();
                         let chunk_clone = chunk.clone();
 
-                        tracing::info!("REQ[{}] Calling cache.get_or_insert_with", request_id);
+                        tracing::debug!("REQ[{}] Calling cache.get_or_insert_with", request_id);
                         cache.get_or_insert_with(
                             chunk.clone(),
                             {
@@ -323,7 +323,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 // let chunk = chunk.clone();
                                 move |pin_guard| async move {
                                     let chunk = chunk.clone();
-                                    tracing::info!("REQ[{}] CACHE HIT - entering read path", request_id);
+                                    tracing::debug!("REQ[{}] CACHE HIT - entering read path", request_id);
                                     let location = pin_guard.location().clone();
 
                                     let (tx, rx) = flume::bounded(1);
@@ -332,17 +332,17 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         responder: tx,
                                         _pin_guard: pin_guard,
                                     };
-                                    tracing::info!("REQ[{}] Sending read request to reader pool", request_id);
+                                    tracing::debug!("REQ[{}] Sending read request to reader pool", request_id);
                                     reader_pool.send(read_req).await.map_err(|e| {
                                         tracing::error!("REQ[{}] Failed to send read request: {}", request_id, e);
                                         std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read request: {}", e))
                                     })?;
 
-                                    tracing::info!("REQ[{}] Waiting for read response", request_id);
+                                    tracing::debug!("REQ[{}] Waiting for read response", request_id);
                                     let recv_err = rx.recv_async().await;
                                     let read_response = match recv_err {
                                         Ok(wr) => {
-                                            tracing::info!("REQ[{}] Received read response from reader pool", request_id);
+                                            tracing::debug!("REQ[{}] Received read response from reader pool", request_id);
                                             match wr.data {
                                                 Ok(loc) => loc,
                                                 Err(e) => {
@@ -366,7 +366,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         bincode::config::standard()
                                     ).unwrap();
                                     {
-                                        tracing::info!("REQ[{}] Sending response to client", request_id);
+                                        tracing::debug!("REQ[{}] Sending response to client", request_id);
                                         let mut w = writer.lock().await;
                                         w.send(Bytes::from(encoded)).await.map_err(|e| {
                                             tracing::error!("REQ[{}] Failed to send read response: {}", request_id, e);
@@ -377,7 +377,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_metric_counter("hit", 1);
                                     METRICS.update_hitratio(HitType::Hit);
-                                    tracing::info!("REQ[{}] CACHE HIT completed successfully", request_id);
+                                    tracing::debug!("REQ[{}] CACHE HIT completed successfully", request_id);
                                     Ok(())
                                 }
                             },
@@ -388,10 +388,10 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let writer_pool = Arc::clone(&writer_pool);
                                 let start = Arc::clone(&start);
                                 move || async move {
-                                    tracing::info!("REQ[{}] CACHE MISS - entering remote fetch path", request_id);
+                                    tracing::debug!("REQ[{}] CACHE MISS - entering remote fetch path", request_id);
                                     let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
                                         Ok(resp) => {
-                                            tracing::info!("REQ[{}] Remote fetch completed successfully", request_id);
+                                            tracing::debug!("REQ[{}] Remote fetch completed successfully", request_id);
                                             resp
                                         },
                                         Err(e) => {
@@ -406,7 +406,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                                     std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send remote error response: {}", e))
                                                 })?;
                                             }
-                                            tracing::info!("REQ[{}] Completed with remote fetch error", request_id);
+                                            tracing::debug!("REQ[{}] Completed with remote fetch error", request_id);
                                             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("remote.get failed: {}", e)));
                                         }
                                     };
@@ -416,7 +416,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         bincode::config::standard()
                                     ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("serialization failed: {}", e)))?;
                                     {
-                                        tracing::info!("REQ[{}] Sending remote response to client", request_id);
+                                        tracing::debug!("REQ[{}] Sending remote response to client", request_id);
                                         let mut w = writer.lock().await;
                                         w.send(Bytes::from(encoded)).await.map_err(|e| {
                                             std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send remote get response: {}", e))
@@ -428,17 +428,17 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         data: resp.clone(),
                                         responder: tx,
                                     };
-                                    tracing::info!("REQ[{}] Sending write request to writer pool", request_id);
+                                    tracing::debug!("REQ[{}] Sending write request to writer pool", request_id);
                                     writer_pool.send(write_req).await.map_err(|e| {
                                         tracing::error!("REQ[{}] Failed to send write request: {}", request_id, e);
                                         std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send write request: {}", e))
                                     })?;
 
-                                    tracing::info!("REQ[{}] Waiting for write response", request_id);
+                                    tracing::debug!("REQ[{}] Waiting for write response", request_id);
                                     let recv_err = rx.recv_async().await;
                                     let write_response = match recv_err {
                                         Ok(wr) => {
-                                            tracing::info!("REQ[{}] Received write response from writer pool", request_id);
+                                            tracing::debug!("REQ[{}] Received write response from writer pool", request_id);
                                             match wr.location {
                                                 Ok(loc) => loc,
                                                 Err(e) => {
@@ -456,7 +456,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_counter("miss", 1);
                                     METRICS.update_metric_histogram_latency("get_miss_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_hitratio(HitType::Miss);
-                                    tracing::info!("REQ[{}] CACHE MISS completed successfully", request_id);
+                                    tracing::debug!("REQ[{}] CACHE MISS completed successfully", request_id);
                                     Ok(write_response)
                                 }
                             },
@@ -464,7 +464,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                             tracing::error!("REQ[{}] cache.get_or_insert_with failed: {}", request_id, e);
                             std::io::Error::new(std::io::ErrorKind::Other, format!("cache.get_or_insert_with failed: {}", e))
                         })?;
-                        tracing::info!("REQ[{}] Request completed successfully", request_id);
+                        tracing::debug!("REQ[{}] Request completed successfully", request_id);
                     }
                     request::Request::Close => {
                         tracing::debug!("Received close request");
