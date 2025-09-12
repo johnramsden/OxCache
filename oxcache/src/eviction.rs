@@ -249,20 +249,27 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
     fn get_clean_targets(&mut self) -> Self::CleanTarget {
         let mut clean_targets = self.pq.remove_if_thresh_met();
+        if clean_targets.is_empty() {
+            return clean_targets;
+        }
+        
         clean_targets.sort_unstable();
 
-        // Search in the LRU for items which exist in the clean
-        // targets.  These are valid chunks, but must be removed
-        // because their location is invalidated when the zone is
-        // reset.
-        let new_lru_list = self.lru.iter().rev().filter(|lru_item| {
-            clean_targets.binary_search(&lru_item.0.zone).is_err()
-        }).map(|(k, _)| k.clone()).collect::<Vec<ChunkLocation>>();
-
-        self.lru.clear();
-
-        for k in new_lru_list {
-            self.lru.put(k, ());
+        let zones_to_clean: std::collections::HashSet<nvme::types::Zone> =
+            clean_targets.iter().copied().collect();
+        let mut items_to_reinsert = Vec::new();
+        
+        // Keep those not in cleaned zones
+        while let Some((chunk_loc, _)) = self.lru.pop_lru() {
+            if !zones_to_clean.contains(&chunk_loc.zone) {
+                items_to_reinsert.push(chunk_loc);
+            }
+        }
+        
+        // Re-insert in reverse order to maintain LRU ordering
+        // (most recently used items go back in last)
+        for chunk_loc in items_to_reinsert.into_iter().rev() {
+            self.lru.put(chunk_loc, ());
         }
 
         clean_targets
