@@ -8,6 +8,8 @@ use std::{collections::HashMap, io};
 use bytes::Bytes;
 use tokio::sync::{Notify, RwLock};
 use crate::cache::bucket::Chunk as CacheKey;
+use crate::writerpool::{WriterPool};
+use std::future::Future;
 use crate::server::validate_read_response;
 
 pub mod bucket;
@@ -175,6 +177,7 @@ impl Cache {
 
                         let mut reverse_mapping_guard = self.bm.write().await;
                         reverse_mapping_guard.zone_to_entry[location.as_index()] = Some(key);
+                        tracing::debug!("LRU_SYNC: Added chunk {:?} to bucket map reverse mapping", location);
                         tracing::debug!("[map-dbg] location {:?} map updated", location);
                         // tracing::debug!("[map-dbg] state is {:#?}", *reverse_mapping_guard);
 
@@ -245,6 +248,7 @@ impl Cache {
         zone: Zone,
         reader: R,
         writer: W,
+        writer_pool: Arc<WriterPool>,
     ) -> io::Result<()>
     where
         R: FnOnce(Vec<(CacheKey, ChunkLocation)>) -> RFut + Send,
@@ -252,43 +256,43 @@ impl Cache {
         W: FnOnce(Vec<(CacheKey, Bytes)>) -> WFut + Send,
         WFut: Future<Output=io::Result<Vec<(CacheKey, ChunkLocation, Bytes)>>> + Send,
     {
-        use ndarray::s;
 
         // Reset the existing entries
         // Collect items and corresponding notifiers
         let (items, notifies) = {
-            // TODO: Can we deadlock here?
             let mut bm = self.bm.write().await;
+
             let zone_slice = s![zone as usize, ..];
             let mut out = Vec::new();
             let mut notifies = Vec::new();
 
+            let mut chunks_processed = 0;
+            let mut chunks_found = 0;
+
             // Iterate through the entire list of chunks in the zone
             for opt_key in bm.zone_to_entry.slice(zone_slice).iter() {
+                chunks_processed += 1;
                 // Collect only if Some
                 if let Some(key) = opt_key.clone() {
+                    chunks_found += 1;
+                    let chunk_process_start = std::time::Instant::now();
                     let entry = bm
                         .buckets
                         .get(&key)
                         .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
                         .clone();
-                    
+
                     // Wait for pins to be released before proceeding
                     loop {
-                        tracing::debug!("EVICTION: Obtaining lock for entry {:?}", key);
                         let mut st = entry.write().await;
-                        tracing::debug!("EVICTION: Obtained lock for entry {:?}", key);
                         let old_loc = match &*st {
                             ChunkState::Ready(pinned_loc) => {
                                 // Wait for this location to be unpinned
                                 if !pinned_loc.can_evict() {
                                     let pinned_loc_clone = Arc::clone(pinned_loc);
                                     drop(st); // Release lock before waiting
-                                    tracing::warn!("EVICTION: Waiting for chunk at {:?} to be unpinned (pin_count={})",
-                                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+
                                     pinned_loc_clone.wait_for_unpin().await;
-                                    tracing::warn!("EVICTION: Chunk at {:?} unpinned (pin_count={}), retrying",
-                                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
                                     continue; // Retry after being notified
                                 }
                                 pinned_loc.location.clone()
@@ -301,11 +305,10 @@ impl Cache {
                         };
 
                         let notify = Arc::new(Notify::new());
-                        tracing::debug!("EVICTION: Setting entry {:?} to Waiting state", key);
                         // Update state to waiting
                         *st = ChunkState::Waiting(Arc::clone(&notify));
                         drop(st);
-                        tracing::debug!("EVICTION: Added entry {:?} to eviction list", key);
+
                         out.push((key, old_loc, entry));
                         notifies.push(notify);
                         break; // Successfully processed this entry
@@ -314,8 +317,10 @@ impl Cache {
             }
 
             // Clear old reverse slots
+            let reverse_clear_start = std::time::Instant::now();
             for (key, old_loc, _) in &out {
                 if bm.zone_to_entry[old_loc.as_index()].as_ref() == Some(key) {
+                    // tracing::info!("LRU_SYNC: Removing chunk {:?} from bucket map reverse mapping (clean_zone_and_update_map)", old_loc);
                     bm.zone_to_entry[old_loc.as_index()] = None;
                 }
             }
@@ -324,12 +329,16 @@ impl Cache {
 
         // Read the valid chunks from the zone
         // Buffer all chunks
+        let read_start = std::time::Instant::now();
         let read_input: Vec<_> = items
             .iter()
             .map(|(k, l, _)| (k.clone(), l.clone()))
             .collect();
+
         let payloads = match reader(read_input).await {
-            Ok(p) => p,
+            Ok(p) => {
+                p
+            },
             Err(e) => {
                 // TODO: Should we bother? Probably still fatal
                 // rollback
@@ -344,48 +353,48 @@ impl Cache {
             }
         };
 
-        // Write data out
+        // Write data out using reserved space
         let new_locs = writer(payloads).await?;
 
         // Update states & reverse map
-        {
-            let mut bm = self.bm.write().await;
-
-            // Set Ready and reverse map
-            for (key, new_loc, b) in new_locs {
-                // set entry
-                if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| *k == key) {
-                    let mut st = entry.write().await;
-                    *st = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(new_loc.clone())));
-                } else {
-                    return Err(io::Error::new(
-                        ErrorKind::NotFound,
-                        format!("Missing entry for {:?}", key),
-                    ));
-                }
-
-                let ch = key.clone();
-
-                bm.zone_to_entry[new_loc.as_index()] = Some(key);
-
-                validate_read_response(&b, &ch.uuid, ch.offset, ch.size);
+        for (key, new_loc, b) in &new_locs {
+            if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| *k == *key) {
+                let mut st = entry.write().await;
+                *st = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(new_loc.clone())));
+            } else {
+                return Err(io::Error::new(
+                    ErrorKind::NotFound,
+                    format!("Missing entry for {:?}", key),
+                ));
             }
+
+            #[cfg(debug_assertions)]
+            validate_read_response(&b, &key.uuid, key.offset, key.size);
         }
 
-        // for loc in new_locs {
-        //     validate_read_response()
-        // }
+        // Batch update reverse map (single bm lock)
+        {
+            let mut bm = self.bm.write().await;
+            for (key, new_loc, _) in new_locs {
+                bm.zone_to_entry[new_loc.as_index()] = Some(key);
+            }
+        }
 
         for n in notifies {
             n.notify_waiters();
         }
+
         Ok(())
     }
 
     pub async fn remove_entries(&self, chunks: &[ChunkLocation]) -> tokio::io::Result<()> {
+        let thread_id = std::thread::current().id();
+        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] remove_entries called for {} chunks", thread_id, chunks.len());
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
+        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Attempting to acquire BM write lock for remove_entries", thread_id);
         let mut bucket_guard = self.bm.write().await;
+        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Acquired BM write lock for remove_entries", thread_id);
 
         // tracing::debug!("State is {:#?} before remove_entries", *bucket_guard);
         for chunk in chunks {
@@ -393,9 +402,9 @@ impl Cache {
             let chunk_id = match &bucket_guard.zone_to_entry[chunk.as_index()] {
                 Some(id) => id.clone(),
                 None => {
-                    // Oh, so this fails
-                    tracing::error!("Couldn't find chunk {:?} in reverse map, state is {:?}", chunk, *bucket_guard);
-                    return Err(io::Error::new(ErrorKind::NotFound, format!("Couldn't find chunk {:?} while removing entries", chunk)))
+                    // This should not happen - indicates LRU/bucket map sync issue
+                    tracing::error!("SYNC_BUG: Chunk {:?} was in LRU but not found in reverse map", chunk);
+                    return Err(io::Error::new(ErrorKind::NotFound, format!("LRU/bucket map sync bug: chunk {:?} missing from reverse map", chunk)))
                 },
             };
 
@@ -431,10 +440,14 @@ impl Cache {
             // Now safe to remove from maps while holding entry write lock
             bucket_guard.zone_to_entry[chunk.as_index()].take();
             let _removed_entry = bucket_guard.buckets.remove(&chunk_id);
+            tracing::info!("LRU_SYNC: Removed chunk {:?} from bucket map via remove_entries", chunk);
             tracing::debug!("Found chunk {:?} when removing entries", _removed_entry.is_some());
             // entry_guard is dropped here, releasing the entry write lock
         }
 
+        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Releasing BM write lock for remove_entries", thread_id);
+        // bucket_guard is dropped here
+        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Completed remove_entries for {} chunks", thread_id, chunks.len());
         Ok(())
     }
 }

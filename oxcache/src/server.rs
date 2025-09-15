@@ -171,6 +171,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.config.writer_threads,
             Arc::clone(&self.device),
             &eviction_policy,
+            (self.device.get_num_zones() * self.device.get_chunks_per_zone()) as usize,
         ));
         let readerpool = Arc::new(ReaderPool::start(
             self.config.reader_threads,

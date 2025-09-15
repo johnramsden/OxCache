@@ -4,3 +4,6 @@ members = ["libnvme-sys", "nvme", "oxcache"]
 
 [profile.dev.package."*"]
 opt-level = 3
+strip = "none"
+
+

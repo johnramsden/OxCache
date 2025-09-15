@@ -3,12 +3,11 @@ use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
 use crate::eviction::{EvictTarget, EvictorMessage};
 use crate::server::RUNTIME;
-use crate::writerpool::{WriteRequest, WriterPool};
+use crate::writerpool::{WriterPool, BatchWriteRequest};
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
 use aligned_vec::{AVec, Alignment, RuntimeAlign};
 use bytes::Bytes;
 use flume::Sender;
-use futures::future::join_all;
 use nvme::info::{get_active_zones, get_lba_at, is_zoned_device, nvme_get_info, report_zones_all};
 use nvme::ops::{close_zone, finish_zone, reset_zone, zns_append};
 use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Zone, ZoneState};
@@ -19,6 +18,8 @@ use crate::metrics::{MetricType, METRICS};
 use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use crate::cache::bucket::Chunk as CacheKey;
 
+
+#[derive(Debug)]
 pub struct Zoned {
     nvme_config: NVMeConfig,
     config: ZNSConfig,
@@ -109,14 +110,9 @@ pub trait Device: Send + Sync {
                 "Unaligned read size"
             );
 
-            // println!("Reading {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
-
-            if let Err(err) = nvme::ops::read(nvme_config, lba_loc, &mut read_buffer[byte_ind..end])
-            {
+            if let Err(err) = nvme::ops::read(nvme_config, lba_loc, &mut read_buffer[byte_ind..end]) {
                 return Err(err.try_into().unwrap());
             }
-
-            // println!("Read {} lbas, lba loc = {}, into ({}..{})", lbas_read, lba_loc, byte_ind, end);
 
             byte_ind += chunk_size;
             lba_loc += lbas_read;
@@ -161,6 +157,7 @@ pub fn get_device(
 }
 
 fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> {
+    tracing::info!("DEVICE: [Thread {:?}] Sending eviction trigger", std::thread::current().id());
     let (resp_tx, resp_rx) = flume::bounded(1);
     if let Err(e) = eviction_channel.send(EvictorMessage { sender: resp_tx }) {
         tracing::error!("[append] Failed to send eviction message: {}", e);
@@ -205,6 +202,7 @@ impl Zoned {
 
     /// Wrapper for ZoneList, handles mutex and notification
     fn get_free_zone(&self) -> io::Result<Zone> {
+        tracing::info!("DEVICE: [Thread {:?}] get_free_zone called, checking zone availability", std::thread::current().id());
         let (mtx, wait_notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
 
@@ -245,6 +243,7 @@ impl Zoned {
 
         Ok(())
     }
+
 
 }
 
@@ -448,6 +447,7 @@ impl Zoned {
     }
 }
 
+
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
     fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
@@ -455,10 +455,14 @@ impl Device for Zoned {
         let sz = data.len() as u64;
 
         let zone_index: Zone = loop {
+            tracing::info!("DEVICE: [Thread {:?}] Attempting to get free zone", std::thread::current().id());
             match self.get_free_zone() {
-                Ok(res) => break res,
+                Ok(res) => {
+                    tracing::info!("DEVICE: [Thread {:?}] Successfully got free zone: {:?}", std::thread::current().id(), res);
+                    break res;
+                },
                 Err(err) => {
-                    tracing::trace!("[append] Failed to get free zone: {}", err);
+                    tracing::info!("DEVICE: [Thread {:?}] Failed to get free zone: {}, triggering eviction", std::thread::current().id(), err);
                 }
             };
             trigger_eviction(self.eviction_channel.clone())?;
@@ -502,21 +506,19 @@ impl Device for Zoned {
                     tracing::debug!("[evict:Chunk] No chunks evicted");
                     return Ok(());
                 }
-                tracing::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
 
                 // Cleaning
                 let self_clone = self.clone();
-                for zone in clean_locations {
-                    // Spawn a task that asynchronously runs this function.
+                for zone in clean_locations.iter() {
 
                     let cache_clone = cache.clone();
                     let self_clone = self_clone.clone();
                     let writer_pool = writer_pool.clone();
-                    RUNTIME.spawn(
-                        async move {
+
+                    RUNTIME.block_on(
                             cache_clone.clean_zone_and_update_map(
                                 zone.clone(),
                                 // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
@@ -527,7 +529,6 @@ impl Device for Zoned {
                                         async move {
                                             let mut items = items;
                                             items.sort_by_key(|(_, loc)| loc.index);
-                                            tracing::debug!("Reading {} chunks in parallel", items.len());
 
                                             if items.is_empty() {
                                                 return Ok(Vec::new());
@@ -538,6 +539,7 @@ impl Device for Zoned {
                                             let mut all_results = Vec::with_capacity(items.len());
 
                                             for chunk in items.chunks(BATCH_SIZE) {
+
                                                 let futures: Vec<_> = chunk.iter().map(|(key, loc)| {
                                                     let self_clone = self_clone.clone();
                                                     let key = key.clone();
@@ -549,7 +551,6 @@ impl Device for Zoned {
                                                     })
                                                 }).collect();
 
-                                                let futures_len = futures.len();
                                                 let batch_results: Result<Vec<_>, _> = futures::future::join_all(futures)
                                                     .await
                                                     .into_iter()
@@ -559,10 +560,8 @@ impl Device for Zoned {
                                                     .collect();
 
                                                 all_results.extend(batch_results?);
-                                                tracing::trace!("Completed batch of {} reads", futures_len);
                                             }
 
-                                            tracing::debug!("Completed parallel reading of {} chunks", all_results.len());
                                             Ok(all_results)
                                         }
                                     }
@@ -577,49 +576,51 @@ impl Device for Zoned {
                                     |payloads: Vec<(CacheKey, bytes::Bytes)>| {
                                         async move {
                                             { // Return zones back to the zone list and reset the zone
-                                                let _guard = self_clone.zone_append_lock[zone as usize].write().unwrap();
+                                                let _guard = self_clone.zone_append_lock[*zone as usize].write().unwrap();
                                                 let (zone_mtx, cv) = &*self_clone.zones;
                                                 let mut zones = zone_mtx.lock().unwrap();
-                                                zones.reset_zone(zone, &*self_clone)?;
+                                                zones.reset_zone(*zone, &*self_clone)?;
                                                 cv.notify_all();
                                             } // Drop the mutex, so we don't have to put it in an await
 
-                                            // Queue valid chunks to be written back to, in the writer pool
-                                            let mut futures = Vec::with_capacity(payloads.len());
-                                            for (key, data) in payloads {
-                                                let writer_pool = writer_pool.clone();
+                                            // Use prioritized batch write for eviction
+                                            let keys: Vec<_> = payloads.iter().map(|(key, _)| key.clone()).collect();
+                                            let data_vec: Vec<_> = payloads.iter().map(|(_, data)| data.clone()).collect();
 
-                                                // Generate a vector of futures that send the data and then get their location in the cache
-                                                let (tx, rx) = flume::bounded(1);
-                                                futures.push(async move {
+                                            let (batch_tx, batch_rx) = flume::bounded(1);
 
-                                                    writer_pool.send(WriteRequest{
-                                                        data: data.clone(),
-                                                        responder: tx,
-                                                    }).await?;
+                                            let batch_request = BatchWriteRequest {
+                                                data: data_vec,
+                                                responder: batch_tx,
+                                            };
 
-                                                    let location = rx.recv_async().await.map_err(|e| {
-                                                        io::Error::new(io::ErrorKind::Other,
-                                                            format!("failed to send write request: {}", e))
-                                                    }).and_then(|response| response.location)?;
+                                            writer_pool.send_priority_batch(batch_request).await?;
 
-                                                    Ok::<(CacheKey, ChunkLocation, bytes::Bytes), io::Error>((key.clone(), location, data.clone()))
-                                                });
-                                            }
+                                            let batch_response = batch_rx.recv_async().await.map_err(|e| {
+                                                io::Error::new(io::ErrorKind::Other,
+                                                    format!("failed to receive batch write response: {}", e))
+                                            })?;
 
-                                            // Await for the results all at the same time, so they can race
-                                            let write_results = join_all(futures).await.into_iter().collect::<Result<Vec<(CacheKey, ChunkLocation, bytes::Bytes)>, io::Error>>()?;
+                                            // Convert batch response back to individual results
+                                            let write_results: Result<Vec<(CacheKey, ChunkLocation, bytes::Bytes)>, io::Error> =
+                                                keys.into_iter()
+                                                    .zip(batch_response.locations.into_iter())
+                                                    .zip(payloads.into_iter())
+                                                    .map(|((key, location_result), (_, data))| {
+                                                        location_result.map(|loc| (key, loc, data))
+                                                    })
+                                                    .collect();
+
+                                            let write_results = write_results?;
 
                                             Ok(write_results) // Vec<(Chunk, ChunkLocation)>
                                         }
                                     }
                                 },
-                            ).await
-                        });
-
-                    tracing::debug!("[evict:Chunk] Cleaned zone {}", zone);
+                                writer_pool.clone(),
+                            )
+                        )?;
                 }
-
                 Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
@@ -628,8 +629,6 @@ impl Device for Zoned {
                 let (zone_mtx, _) = &*self.zones;
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict, &*self)?;
-
-                tracing::debug!("Zones evicted: {:?}", zones_to_evict);
 
                 Ok(())
             }
