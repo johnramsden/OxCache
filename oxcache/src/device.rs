@@ -14,6 +14,7 @@ use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Z
 use std::io::ErrorKind;
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
+use std::time::Duration;
 use crate::metrics::{MetricType, METRICS};
 use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use crate::cache::bucket::Chunk as CacheKey;
@@ -586,6 +587,9 @@ impl Device for Zoned {
                                             // Use prioritized batch write for eviction
                                             let keys: Vec<_> = payloads.iter().map(|(key, _)| key.clone()).collect();
                                             let data_vec: Vec<_> = payloads.iter().map(|(_, data)| data.clone()).collect();
+
+                                            // Used to verify no RACE, TODO: Remove!
+                                            tokio::time::sleep(Duration::from_secs(5)).await;
 
                                             let (batch_tx, batch_rx) = flume::bounded(1);
 

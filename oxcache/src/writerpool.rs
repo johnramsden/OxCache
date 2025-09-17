@@ -54,6 +54,7 @@ struct Writer {
     receiver: Receiver<WriteRequestInternal>,
     priority_receiver: Receiver<BatchWriteRequest>,
     eviction: Arc<Mutex<EvictionPolicyWrapper>>,
+    priority_only: bool
 }
 
 impl Writer {
@@ -63,6 +64,7 @@ impl Writer {
         priority_receiver: Receiver<BatchWriteRequest>,
         device: Arc<dyn device::Device>,
         eviction: &Arc<Mutex<EvictionPolicyWrapper>>,
+        priority_only: bool
     ) -> Self {
         Self {
             id,
@@ -70,18 +72,18 @@ impl Writer {
             priority_receiver,
             device,
             eviction: eviction.clone(),
+            priority_only
         }
     }
 
-    fn run(self) {
-        tracing::info!("Writer {} started", self.id);
+    fn receive_all(&self) {
         loop {
             // Prioritize batch requests (eviction) over regular requests
             let batch_msg = self.priority_receiver.try_recv();
             if let Ok(batch_req) = batch_msg {
                 self.process_batch_request(batch_req);
                 continue;
-            }
+            };
 
             // If no priority request, handle regular requests with timeout
             match self.receiver.recv_timeout(std::time::Duration::from_millis(10)) {
@@ -99,6 +101,20 @@ impl Writer {
                     }
                 }
             }
+        }
+    }
+    fn receive_priority(&self) {
+        while let Ok(batch_msg) = self.priority_receiver.recv() {
+            self.process_batch_request(batch_msg);
+        }
+    }
+
+    fn run(self) {
+        tracing::info!("Writer {} started", self.id);
+        if self.priority_only {
+            self.receive_priority();
+        } else {
+            self.receive_all();
         }
         tracing::info!("Writer {} exiting", self.id);
     }
@@ -134,12 +150,13 @@ impl Writer {
 
             let result = self.device.append(data);
 
-            // CRITICAL: Update LRU for batch writes (eviction writes)
             if let Ok(ref loc) = result {
                 let mtx = Arc::clone(&self.eviction);
                 let mut policy = mtx.lock().unwrap();
                 policy.write_update(loc.clone());
                 drop(policy);
+            } else {
+                tracing::error!("Failed to append: {:?}", result);
             }
 
             locations.push(result);
@@ -159,7 +176,6 @@ pub struct WriterPool {
     sender: Sender<WriteRequestInternal>,
     priority_sender: Sender<BatchWriteRequest>,
     handles: Vec<JoinHandle<()>>,
-    max_capacity: usize,
 }
 
 impl WriterPool {
@@ -168,16 +184,18 @@ impl WriterPool {
         num_writers: usize,
         device: Arc<dyn device::Device>,
         eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>,
-        max_capacity: usize,
     ) -> Self {
         let (sender, receiver): (Sender<WriteRequestInternal>, Receiver<WriteRequestInternal>) = unbounded();
         let (priority_sender, priority_receiver): (Sender<BatchWriteRequest>, Receiver<BatchWriteRequest>) = unbounded();
         let mut handles = Vec::with_capacity(num_writers);
 
-        for id in 0..num_writers {
+        // Regular writers
+        for id in 0..=num_writers {
             let rx_clone = receiver.clone();
             let priority_rx_clone = priority_receiver.clone();
-            let writer = Writer::new(id, rx_clone, priority_rx_clone, device.clone(), eviction_policy);
+
+            // Will create ONE priority writer (last) via id == num_writers
+            let writer = Writer::new(id, rx_clone, priority_rx_clone, device.clone(), eviction_policy, id == num_writers);
             let handle = thread::spawn(move || writer.run());
             handles.push(handle);
         }
@@ -186,7 +204,6 @@ impl WriterPool {
             sender,
             priority_sender,
             handles,
-            max_capacity,
         }
     }
 
