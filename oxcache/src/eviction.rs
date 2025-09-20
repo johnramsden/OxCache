@@ -190,6 +190,11 @@ impl ChunkEvictionPolicy {
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
     ) -> Self {
+        assert!(
+            high_water > nr_chunks_per_zone,
+            "high_water={} must be larget than nr_chunks_per_zone={} to leave room for eviction",
+            high_water, nr_chunks_per_zone
+        );
         Self {
             high_water,
             low_water,

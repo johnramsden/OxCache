@@ -114,41 +114,11 @@ impl MockZonedDevice {
 /// Does not actually write data. Only validates that the state of things are correct
 impl Device for MockZonedDevice {
     fn append(&self, data: Bytes) -> std::io::Result<oxcache::cache::bucket::ChunkLocation> {
-        // let zone_index = loop {
-        //     match self.get_free_zone() {
-        //         Ok(res) => break res,
-        //         Err(err) => {
-        //             eprintln!("[append] Failed to get free zone: {}", err);
-        //         }
-        //     };
-        //     trigger_eviction(self.eviction_channel.clone())?;
-        // };
-        // // Note: this performs a copy every time because we need to
-        // // pass in a mutable vector to libnvme
-        // assert_eq!(
-        //     data.as_ptr() as usize % self.nvme_config.logical_block_size as usize,
-        //     0
-        // );
-
-        // match zns_append(
-        //     &self.nvme_config,
-        //     &self.config,
-        //     zone_index as u64,
-        //     data.as_ref(),
-        // ) {
-        //     Ok(lba) => {
-        //         self.complete_write(zone_index)?;
-        //         let chunk = lba / self.config.chunk_size as u64;
-        //         Ok(ChunkLocation::new(zone_index, chunk))
-        //     }
-        //     Err(mut err) => {
-        //         self.complete_write(zone_index)?;
-        //         err.add_context(format!("Write failed at zone {}\n", zone_index));
-        //         Err(err.try_into().unwrap())
-        //     }
-        // }
-
         Ok(ChunkLocation { zone: 1, index: 2 })
+    }
+
+    fn append_with_eviction_bypass(&self, data: bytes::Bytes, _: bool) -> Result<ChunkLocation, std::io::Error> {
+        self.append(data)
     }
 
     fn read_into_buffer(

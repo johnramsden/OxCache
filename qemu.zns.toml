@@ -21,7 +21,7 @@ high_water_evict = 100 # Number remaining from end, evicts if reaches here
 low_water_evict = 150  # Evict until below mark
 high_water_clean = 40 # Number of invalids when we begin cleaning
 low_water_clean = 20  # Clean until below mark (only used with chunk)
-eviction_interval = 1  # Evict every 1s
+eviction_interval_ms = 1000  # Evict every 1s
 
 [metrics]
 file_metrics_directory = "./logs"

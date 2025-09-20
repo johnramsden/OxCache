@@ -148,7 +148,8 @@ impl Writer {
 
         for data in batch_req.data.into_iter() {
 
-            let result = self.device.append(data);
+            // Use eviction bypass for priority batch requests (eviction writes)
+            let result = self.device.append_with_eviction_bypass(data, true);
 
             if let Ok(ref loc) = result {
                 let mtx = Arc::clone(&self.eviction);

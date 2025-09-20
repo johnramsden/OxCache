@@ -275,7 +275,6 @@ impl Cache {
                 // Collect only if Some
                 if let Some(key) = opt_key.clone() {
                     chunks_found += 1;
-                    let chunk_process_start = std::time::Instant::now();
                     let entry = bm
                         .buckets
                         .get(&key)
@@ -317,7 +316,6 @@ impl Cache {
             }
 
             // Clear old reverse slots
-            let reverse_clear_start = std::time::Instant::now();
             for (key, old_loc, _) in &out {
                 if bm.zone_to_entry[old_loc.as_index()].as_ref() == Some(key) {
                     // tracing::info!("LRU_SYNC: Removing chunk {:?} from bucket map reverse mapping (clean_zone_and_update_map)", old_loc);
@@ -329,7 +327,6 @@ impl Cache {
 
         // Read the valid chunks from the zone
         // Buffer all chunks
-        let read_start = std::time::Instant::now();
         let read_input: Vec<_> = items
             .iter()
             .map(|(k, l, _)| (k.clone(), l.clone()))

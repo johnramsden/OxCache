@@ -57,7 +57,7 @@ pub struct CliArgs {
     pub block_zone_capacity: Option<Byte>,
 
     #[arg(long)]
-    pub eviction_interval: Option<usize>,
+    pub eviction_interval_ms: Option<usize>,
 
     #[arg(long)]
     pub remote_artificial_delay_microsec: Option<usize>,
@@ -106,7 +106,7 @@ pub struct ParsedEvictionConfig {
     pub low_water_evict: Option<u64>,
     pub high_water_clean: Option<u64>,
     pub low_water_clean: Option<u64>,
-    pub eviction_interval: Option<usize>,
+    pub eviction_interval_ms: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,9 +226,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .or_else(|| config.as_ref()?.eviction.low_water_clean.clone());
 
     let eviction_interval = cli
-        .eviction_interval
+        .eviction_interval_ms
         .clone()
-        .or_else(|| config.as_ref()?.eviction.eviction_interval.clone())
+        .or_else(|| config.as_ref()?.eviction.eviction_interval_ms.clone())
         .ok_or("Missing eviction_interval")?;
 
     if low_water_evict < high_water_evict {

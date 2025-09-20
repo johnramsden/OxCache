@@ -66,7 +66,11 @@ pub struct BlockInterface {
 }
 
 pub trait Device: Send + Sync {
-    fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation>;
+    fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
+        self.append_with_eviction_bypass(data, false)
+    }
+
+    fn append_with_eviction_bypass(&self, data: Bytes, is_eviction: bool) -> std::io::Result<ChunkLocation>;
 
     /// This is expected to remove elements from the cache as well
     fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()>;
@@ -168,48 +172,36 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
         ));
     };
 
-    if let Err(e) = resp_rx.recv() {
-        tracing::error!("[append] Failed to receive eviction message: {}", e);
+    match resp_rx.recv() {
+        Ok(result) => {
+            match result {
+                Ok(_) => {
+                    tracing::debug!("DEVICE: [Thread {:?}] Eviction completed successfully", std::thread::current().id());
+                }
+                Err(e) => {
+                    tracing::error!("DEVICE: [Thread {:?}] Eviction failed: {}", std::thread::current().id(), e);
+                    return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Eviction failed: {}", e)));
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("DEVICE: [Thread {:?}] Failed to receive eviction response: {}", std::thread::current().id(), e);
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to receive eviction response: {}", e)));
+        }
     }
 
     Ok(())
 }
 
 impl Zoned {
-    fn compact_zone(
-        &self,
-        zone_to_compact: Zone,
-        chunks_to_keep: &[ChunkLocation],
-        buffer: &mut [u8],
-    ) -> io::Result<Vec<ChunkLocation>> {
-        let mut new_locations = Vec::with_capacity(chunks_to_keep.len());
-        for chunk in chunks_to_keep {
-            let starting_byte_loc: Byte =
-                self.config.chunks_to_bytes(&self.nvme_config, chunk.index);
-            let ending_byte_loc: Byte = self
-                .config
-                .chunks_to_bytes(&self.nvme_config, chunk.index + 1);
-            let new_idx = zns_append(
-                &self.nvme_config,
-                &self.config,
-                zone_to_compact,
-                &mut buffer[starting_byte_loc as usize..ending_byte_loc as usize],
-            )
-            .map_err(|err| std::io::Error::new(ErrorKind::Other, err.to_string()))?;
-            new_locations.push(ChunkLocation::new(zone_to_compact, new_idx));
-        }
-        Ok(new_locations)
-    }
-
     /// Wrapper for ZoneList, handles mutex and notification
-    fn get_free_zone(&self) -> io::Result<Zone> {
-        tracing::info!("DEVICE: [Thread {:?}] get_free_zone called, checking zone availability", std::thread::current().id());
+    fn get_free_zone(&self, is_eviction: bool) -> io::Result<Zone> {
         let (mtx, wait_notify) = &*self.zones;
         let mut zone_list = mtx.lock().unwrap();
 
         debug_assert!(get_active_zones(self.nvme_config.fd, self.nvme_config.nsid).unwrap() <= self.config.max_active_resources as usize);
 
-        match zone_list.remove() {
+        match zone_list.remove_with_eviction_bypass(is_eviction) {
             Ok(zone_idx) => Ok(zone_idx),
             Err(error) => match error {
                 ZoneObtainFailure::EvictNow => {
@@ -217,7 +209,7 @@ impl Zoned {
                 }
                 ZoneObtainFailure::Wait => loop {
                     zone_list = wait_notify.wait(zone_list).unwrap();
-                    match zone_list.remove() {
+                    match zone_list.remove_with_eviction_bypass(is_eviction) {
                         Ok(idx) => return Ok(idx),
                         Err(err) => match err {
                             ZoneObtainFailure::EvictNow => {
@@ -405,25 +397,6 @@ impl Zoned {
                         ))
                         .try_into()
                         .unwrap());
-
-                    // return match self.complete_write(zone_index, false) {
-                    //     Ok(()) => Err(err
-                    //         .add_context(format!("Write failed at zone {}\n", zone_index))
-                    //         .try_into()
-                    //         .unwrap()),
-                    //     Err(err2) => Err(err
-                    //         .add_context(format!("Write failed at zone {}", zone_index))
-                    //         .add_context(format!("Zone state: {:#?}", {
-                    //             let (_nz, state) = report_zones_all(self.nvme_config.fd, self.nvme_config.nsid).unwrap();
-                    //             state.iter().map(|state|{
-                    //                 state.zone_state.clone()
-                    //             }).collect::<Vec<ZoneState>>()
-                    //         }))
-                    //         .add_context(format!("Zone list state:\n{:#?}", self.zones.0.lock().unwrap()))
-                    //         .add_context(format!("Additional failure while trying to handle error: {}\n", err2.to_string()))
-                    //         .try_into()
-                    //         .unwrap()),
-                    // };
                 }
             }
             byte_ind += write_sz;
@@ -451,21 +424,24 @@ impl Zoned {
 
 impl Device for Zoned {
     /// Hold internal state to keep track of zone state
-    fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
-
-        let sz = data.len() as u64;
+    fn append_with_eviction_bypass(&self, data: Bytes, is_eviction: bool) -> std::io::Result<ChunkLocation> {
 
         let zone_index: Zone = loop {
-            tracing::info!("DEVICE: [Thread {:?}] Attempting to get free zone", std::thread::current().id());
-            match self.get_free_zone() {
+            match self.get_free_zone(is_eviction) {
                 Ok(res) => {
-                    tracing::info!("DEVICE: [Thread {:?}] Successfully got free zone: {:?}", std::thread::current().id(), res);
                     break res;
                 },
                 Err(err) => {
-                    tracing::info!("DEVICE: [Thread {:?}] Failed to get free zone: {}, triggering eviction", std::thread::current().id(), err);
+                    if is_eviction {
+                        // If eviction itself can't get a zone, we're truly stuck
+                        tracing::error!("DEVICE: [Thread {:?}] Eviction failed to get free zone: {}", std::thread::current().id(), err);
+                        return Err(err);
+                    }
+                    tracing::debug!("DEVICE: [Thread {:?}] Failed to get free zone: {}, triggering eviction", std::thread::current().id(), err);
                 }
             };
+            // Add a small delay to prevent eviction spam
+            std::thread::sleep(std::time::Duration::from_millis(10));
             trigger_eviction(self.eviction_channel.clone())?;
         };
 
@@ -589,7 +565,7 @@ impl Device for Zoned {
                                             let data_vec: Vec<_> = payloads.iter().map(|(_, data)| data.clone()).collect();
 
                                             // Used to verify no RACE, TODO: Remove!
-                                            tokio::time::sleep(Duration::from_secs(5)).await;
+                                            // tokio::time::sleep(Duration::from_secs(5)).await;
 
                                             let (batch_tx, batch_rx) = flume::bounded(1);
 
@@ -830,7 +806,8 @@ impl BlockInterface {
 
 impl Device for BlockInterface {
     /// Hold internal state to keep track of "ssd" zone state
-    fn append(&self, data: Bytes) -> std::io::Result<ChunkLocation> {
+    fn append_with_eviction_bypass(&self, data: Bytes, _is_eviction: bool) -> std::io::Result<ChunkLocation> {
+        // Block devices don't need eviction bypass logic
         let sz = data.len() as u64;
         let mtx = self.state.clone();
 

@@ -182,7 +182,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&self.device),
             Arc::clone(&eviction_policy),
             Arc::clone(&self.cache),
-            Duration::from_secs(self.config.eviction.eviction_interval),
+            Duration::from_millis(self.config.eviction.eviction_interval),
             self.evict_rx.clone(),
             writerpool.clone()
         )?;
