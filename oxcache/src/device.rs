@@ -271,7 +271,7 @@ impl Zoned {
                 config.chunk_size_in_lbas = chunk_size_in_logical_blocks;
                 config.chunk_size_in_bytes = chunk_size;
                 let num_zones: Zone = config.num_zones;
-                
+
                 // Apply max_zones restriction if specified
                 let restricted_num_zones = if let Some(max_zones) = max_zones {
                     if max_zones > num_zones {
@@ -284,7 +284,7 @@ impl Zoned {
                 } else {
                     num_zones
                 };
-                
+
                 let zone_list = ZoneList::new(
                     restricted_num_zones,
                     config.chunks_per_zone,
@@ -528,27 +528,27 @@ impl Device for Zoned {
                                             let mut items = items;
                                             items.sort_by_key(|(_, loc)| loc.index);
                                             tracing::debug!("Reading {} chunks in parallel", items.len());
-                                            
+
                                             if items.is_empty() {
                                                 return Ok(Vec::new());
                                             }
-                                            
+
                                             // Batch reads to avoid overwhelming the device
                                             const BATCH_SIZE: usize = 16;
                                             let mut all_results = Vec::with_capacity(items.len());
-                                            
+
                                             for chunk in items.chunks(BATCH_SIZE) {
                                                 let futures: Vec<_> = chunk.iter().map(|(key, loc)| {
                                                     let self_clone = self_clone.clone();
                                                     let key = key.clone();
                                                     let loc = loc.clone();
-                                                    
+
                                                     tokio::task::spawn_blocking(move || {
                                                         tracing::trace!("Reading chunk at {:?}", loc);
                                                         self_clone.read(loc.clone()).map(|bytes| (key, bytes))
                                                     })
                                                 }).collect();
-                                                
+
                                                 let futures_len = futures.len();
                                                 let batch_results: Result<Vec<_>, _> = futures::future::join_all(futures)
                                                     .await
@@ -557,11 +557,11 @@ impl Device for Zoned {
                                                         join_result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Task join error: {}", e)))?
                                                     })
                                                     .collect();
-                                                
+
                                                 all_results.extend(batch_results?);
                                                 tracing::trace!("Completed batch of {} reads", futures_len);
                                             }
-                                            
+
                                             tracing::debug!("Completed parallel reading of {} chunks", all_results.len());
                                             Ok(all_results)
                                         }
@@ -576,7 +576,6 @@ impl Device for Zoned {
                                     // Writer callback
                                     |payloads: Vec<(CacheKey, bytes::Bytes)>| {
                                         async move {
-
                                             { // Return zones back to the zone list and reset the zone
                                                 let _guard = self_clone.zone_append_lock[zone as usize].write().unwrap();
                                                 let (zone_mtx, cv) = &*self_clone.zones;
@@ -742,7 +741,7 @@ impl BlockInterface {
 
         // Num_zones
         let num_zones = nvme_config.total_size_in_bytes / block_zone_capacity;
-        
+
         // Apply max_zones restriction if specified
         let restricted_num_zones = if let Some(max_zones) = max_zones {
             if max_zones > num_zones {
@@ -755,7 +754,7 @@ impl BlockInterface {
         } else {
             num_zones
         };
-        
+
         // Chunks per zone
         let chunks_per_zone = block_zone_capacity / chunk_size;
 
