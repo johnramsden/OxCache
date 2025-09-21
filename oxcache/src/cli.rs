@@ -48,9 +48,6 @@ pub struct CliArgs {
     pub low_water_evict: Option<u64>,
 
     #[arg(long)]
-    pub high_water_clean: Option<u64>,
-
-    #[arg(long)]
     pub low_water_clean: Option<u64>,
 
     #[arg(long)]
@@ -104,7 +101,6 @@ pub struct ParsedEvictionConfig {
     pub eviction_policy: Option<String>,
     pub high_water_evict: Option<u64>,
     pub low_water_evict: Option<u64>,
-    pub high_water_clean: Option<u64>,
     pub low_water_clean: Option<u64>,
     pub eviction_interval_ms: Option<usize>,
 }
@@ -216,10 +212,6 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .or_else(|| config.as_ref()?.eviction.low_water_evict.clone())
         .ok_or("Missing low_water_evict")?;
 
-    let high_water_clean = cli
-        .high_water_clean
-        .clone()
-        .or_else(|| config.as_ref()?.eviction.high_water_clean.clone());
     let low_water_clean = cli
         .low_water_clean
         .clone()
@@ -241,16 +233,8 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
             return Err("low_water_clean must be set".into());
         } else { low_water_clean.unwrap() };
 
-        let high_water_clean = if high_water_clean.is_none() {
-            return Err("high_water_clean must be set".into());
-        } else { high_water_clean.unwrap() };
-
-        if low_water_clean > high_water_clean {
-            return Err("low_water_clean must be less than high_water_clean".into());
-        }
-
-        if high_water_clean > low_water_evict {
-            return Err("high_water_clean must be less than or equal to low_water_evict".into());
+        if low_water_clean >= (low_water_evict - high_water_evict) {
+            return Err("low_water_clean must be less than (low_water_evict - high_water_evict)".into());
         }
     }
 
@@ -315,7 +299,6 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
             eviction_type: eviction_policy,
             high_water_evict,
             low_water_evict,
-            high_water_clean,
             low_water_clean,
             eviction_interval: eviction_interval as u64,
         },

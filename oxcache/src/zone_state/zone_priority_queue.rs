@@ -8,14 +8,11 @@ type ZonePriority = Chunk;
 pub struct ZonePriorityQueue {
     invalid_count: ZonePriority,
     invalid_queue: PriorityQueue<ZoneIndex, ZonePriority>, // max-heap by priority
-    high_water_thresh: Chunk,  // trigger cleaning when >= this
     low_water_thresh: Chunk,   // clean down to < this
 }
 
 impl ZonePriorityQueue {
-    pub fn new(num_zones: ZoneIndex, high_water_thresh: Chunk, low_water_thresh: Chunk) -> Self {
-        assert!(high_water_thresh > low_water_thresh);
-
+    pub fn new(num_zones: ZoneIndex, low_water_thresh: Chunk) -> Self {
         let mut invalid_queue = PriorityQueue::new();
         for z in 0..num_zones {
             invalid_queue.push(z, 0);
@@ -24,7 +21,6 @@ impl ZonePriorityQueue {
         Self {
             invalid_queue,
             invalid_count: 0,
-            high_water_thresh: high_water_thresh,
             low_water_thresh: low_water_thresh,
         }
     }
@@ -43,9 +39,6 @@ impl ZonePriorityQueue {
     pub fn remove_if_thresh_met(&mut self) -> Vec<ZoneIndex> {
         let mut zones = Vec::new();
         tracing::trace!("[evict:Chunk] Cleaning zones, invalid={}", self.invalid_count);
-        if self.invalid_count < self.high_water_thresh {
-            return zones;
-        }
         while self.invalid_count >= self.low_water_thresh {
             zones.push(self.pop_reset());
         }

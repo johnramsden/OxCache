@@ -617,14 +617,14 @@ impl ZoneList {
 #[cfg(test)]
 mod zone_list_tests {
 
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use crate::{
         cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, writerpool::WriterPool, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}
     };
     use bytes::Bytes;
     use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
-
+    use crate::eviction::EvictionPolicyWrapper;
     use super::ZoneList;
 
     struct MockDevice {}
@@ -645,7 +645,7 @@ mod zone_list_tests {
         }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(self: Arc<Self>, _locations: EvictTarget, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>) -> std::io::Result<()> {
+        fn evict(self: Arc<Self>, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, _eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<()> {
             Ok(())
         }
 

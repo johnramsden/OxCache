@@ -1,7 +1,7 @@
 use std::{fs, io};
 use crate::cache::Cache;
 use crate::cache::bucket::ChunkLocation;
-use crate::eviction::{EvictTarget, EvictorMessage};
+use crate::eviction::{EvictTarget, EvictionPolicyWrapper, EvictorMessage};
 use crate::server::RUNTIME;
 use crate::writerpool::{WriterPool, BatchWriteRequest};
 use crate::zone_state::zone_list::{ZoneList, ZoneObtainFailure};
@@ -73,7 +73,7 @@ pub trait Device: Send + Sync {
     fn append_with_eviction_bypass(&self, data: Bytes, is_eviction: bool) -> std::io::Result<ChunkLocation>;
 
     /// This is expected to remove elements from the cache as well
-    fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()>;
+    fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
@@ -473,11 +473,16 @@ impl Device for Zoned {
         Ok(Bytes::from_owner(buffer))
     }
 
-    fn evict(self: Arc<Self>, locations: EvictTarget,  cache: Arc<Cache>, writer_pool: Arc<WriterPool>) -> io::Result<()> {
+    fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
-        match locations {
+        let targets = {
+            let mut policy = eviction_policy.lock().unwrap();
+            policy.get_evict_targets()
+        };
+
+        match targets {
             EvictTarget::Chunk(chunk_locations, clean_locations) => {
                 if chunk_locations.is_empty() {
                     tracing::debug!("[evict:Chunk] No chunks evicted");
@@ -854,10 +859,16 @@ impl Device for BlockInterface {
         Ok(Bytes::from(data))
     }
 
-    fn evict(self: Arc<Self>, locations: EvictTarget, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>) -> io::Result<()> {
+    fn evict(self: Arc<Self>, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
-        match locations {
+
+        let targets = {
+            let mut policy = eviction_policy.lock().unwrap();
+            policy.get_evict_targets()
+        };
+
+        match targets {
             EvictTarget::Chunk(chunk_locations, _) => {
 
                 if chunk_locations.is_empty() {
