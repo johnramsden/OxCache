@@ -190,6 +190,11 @@ impl ChunkEvictionPolicy {
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
     ) -> Self {
+        assert!(
+            high_water > nr_chunks_per_zone,
+            "high_water={} must be larget than nr_chunks_per_zone={} to leave room for eviction",
+            high_water, nr_chunks_per_zone
+        );
         Self {
             high_water,
             low_water,
@@ -205,26 +210,21 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
     type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
-        tracing::debug!("Write LRU update at chunk {:?}", chunk);
         self.lru.put(chunk, ());
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
-        tracing::debug!("Read LRU update at chunk {:?}", chunk);
-        // assert!(self.lru.contains(&chunk)); // TODO: Race cond with chunk evict?
         if self.lru.contains(&chunk) {
             self.lru.put(chunk, ());
         }
     }
 
     fn get_evict_targets(&mut self) -> Self::Target {
-        let span = tracing::debug_span!("get_evict_targets");
-        let _enter = span.enter();
         let lru_len = self.lru.len() as Chunk;
         let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
         let high_water_mark = nr_chunks - self.high_water;
+
         if lru_len < high_water_mark {
-            tracing::debug!("Nothing to evict: lru_len is {} which is less than {}", lru_len, high_water_mark);
             return vec![];
         }
 
@@ -232,16 +232,13 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
-        tracing::debug!("targets:");
         while self.lru.len() as Chunk >= low_water_mark {
             let targ = self.lru.pop_lru().unwrap().0;
-            tracing::debug!("{:?}", targ);
             let target_zone = targ.zone;
             targets.push(targ);
 
             // Adjust pq
             self.pq.modify_priority(target_zone, 1);
-            tracing::trace!("Increased priority for zone {}", target_zone);
         }
 
         targets
@@ -252,20 +249,20 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         if clean_targets.is_empty() {
             return clean_targets;
         }
-        
+
         clean_targets.sort_unstable();
 
         let zones_to_clean: std::collections::HashSet<nvme::types::Zone> =
             clean_targets.iter().copied().collect();
         let mut items_to_reinsert = Vec::new();
-        
+
         // Keep those not in cleaned zones
         while let Some((chunk_loc, _)) = self.lru.pop_lru() {
             if !zones_to_clean.contains(&chunk_loc.zone) {
                 items_to_reinsert.push(chunk_loc);
             }
         }
-        
+
         // Re-insert in reverse order to maintain LRU ordering
         // (most recently used items go back in last)
         for chunk_loc in items_to_reinsert.into_iter().rev() {
@@ -321,6 +318,7 @@ impl Evictor {
                 };
 
                 let mut policy = eviction_policy_clone.lock().unwrap();
+
                 let targets = policy.get_evict_targets();
 
                 drop(policy);
@@ -328,10 +326,11 @@ impl Evictor {
                 let device_clone = device_clone.clone();
                 let result = match device_clone.evict(targets, cache_clone.clone(), writer_pool.clone()) {
                     Err(e) => {
-                        tracing::error!("Error evicting: {}", e);
                         Err(e.to_string())
                     }
-                    Ok(_) => Ok(()),
+                    Ok(_) => {
+                        Ok(())
+                    },
                 };
 
                 if let Some(sender) = sender {
