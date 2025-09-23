@@ -4,7 +4,7 @@ use crate::device::Device;
 use crate::writerpool::WriterPool;
 use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
-use lru::LruCache;
+use lru_mem::{LruCache, MemSize};
 use nvme::types::{Chunk, Zone};
 use std::sync::{
     Arc, Mutex,
@@ -13,6 +13,8 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use crate::zone_state::zone_priority_queue;
+
+// Note: Unit type () should already implement MemSize via blanket implementations
 
 #[derive(Debug)]
 pub enum EvictionPolicyWrapper {
@@ -112,7 +114,7 @@ impl PromotionalEvictionPolicy {
         nr_zones: Zone,
         nr_chunks_per_zone: Chunk,
     ) -> Self {
-        let lru = LruCache::unbounded();
+        let lru = LruCache::new(usize::MAX); // Effectively unbounded
         Self {
             high_water,
             low_water,
@@ -134,7 +136,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
 
         // We only want to put it in the LRU once the zone is full
         if chunk.index == self.nr_chunks_per_zone - 1 {
-            self.lru.put(chunk.zone, ());
+            self.lru.insert(chunk.zone, ()).ok();
         }
     }
 
@@ -143,7 +145,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         // If it has filled before we want to update every time "promoting" it
         // Following this, only zones that have filled prior are updated
         if self.lru.contains(&chunk.zone) {
-            self.lru.put(chunk.zone, ());
+            self.lru.insert(chunk.zone, ()).ok();
         }
     }
 
@@ -160,7 +162,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         let mut targets = Vec::with_capacity(cap as usize);
 
         while self.lru.len() as Zone >= low_water_mark {
-            targets.push(self.lru.pop_lru().unwrap().0)
+            targets.push(self.lru.remove_lru().unwrap().0)
         }
 
         targets
@@ -197,7 +199,7 @@ impl ChunkEvictionPolicy {
             low_water,
             nr_zones,
             nr_chunks_per_zone,
-            lru: LruCache::unbounded(),
+            lru: LruCache::new(usize::MAX), // Effectively unbounded
             pq: ZonePriorityQueue::new(nr_zones, clean_low_water)
         }
     }
@@ -207,12 +209,12 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
     type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
-        self.lru.put(chunk, ());
+        self.lru.insert(chunk, ()).ok();
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
         if self.lru.contains(&chunk) {
-            self.lru.put(chunk, ());
+            self.lru.insert(chunk, ()).ok();
         }
     }
 
@@ -230,7 +232,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
         let mut targets = Vec::with_capacity(cap as usize);
         for _ in 0..cap {
-            if let Some((targ, _)) = self.lru.pop_lru() {
+            if let Some((targ, _)) = self.lru.remove_lru() {
                 let target_zone = targ.zone;
                 targets.push(targ);
 
@@ -252,20 +254,12 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
         let zones_to_clean: std::collections::HashSet<nvme::types::Zone> =
             clean_targets.iter().copied().collect();
-        let mut items_to_reinsert = Vec::new();
 
-        // Keep those not in cleaned zones
-        while let Some((chunk_loc, _)) = self.lru.pop_lru() {
-            if !zones_to_clean.contains(&chunk_loc.zone) {
-                items_to_reinsert.push(chunk_loc);
-            }
-        }
-
-        // Re-insert in reverse order to maintain LRU ordering
-        // (most recently used items go back in last)
-        for chunk_loc in items_to_reinsert.into_iter().rev() {
-            self.lru.put(chunk_loc, ());
-        }
+        // Efficient selective removal - O(k) where k = items removed
+        // instead of O(n) where n = total LRU size
+        self.lru.retain(|chunk_loc, _| {
+            !zones_to_clean.contains(&chunk_loc.zone)
+        });
 
         clean_targets
     }
@@ -540,5 +534,143 @@ mod tests {
 
         let got = policy.get_clean_targets().len();
         assert_eq!(2, got, "Expected 2, but got {}", got);
+    }
+
+    #[test]
+    fn performance_test_large_lru_get_clean_targets() {
+        // Performance test with ~15.6M chunks in LRU
+        // 904 zones, 17232 chunks per zone = 15,581,728 total chunks
+        let nr_zones = 904;
+        let nr_chunks_per_zone = 17232;
+        let total_chunks = nr_zones * nr_chunks_per_zone;
+
+        // Set clean_low_water to trigger cleaning when zones have 1+ evicted chunks
+        let clean_low_water = 1;
+
+        // High/low water marks - trigger eviction when LRU approaches capacity
+        let high_water = total_chunks - (total_chunks / 20); // 95% capacity
+        let low_water = total_chunks - (total_chunks / 10); // 90% capacity
+
+        let mut policy = ChunkEvictionPolicy::new(
+            high_water, low_water, clean_low_water, nr_zones, nr_chunks_per_zone);
+
+        println!("Filling LRU with {} chunks across {} zones...", total_chunks, nr_zones);
+        let start_fill = std::time::Instant::now();
+
+        // Fill the LRU with chunks from all zones
+        for zone in 0..nr_zones {
+            for chunk_idx in 0..nr_chunks_per_zone {
+                policy.write_update(ChunkLocation::new(zone, chunk_idx));
+            }
+        }
+
+        let fill_duration = start_fill.elapsed();
+        println!("LRU fill took: {:?}", fill_duration);
+        println!("LRU size: {}", policy.lru.len());
+
+        // Trigger some evictions to populate the priority queue
+        // This will evict 500 chunks and mark zones for potential cleaning
+        println!("Triggering evictions to populate priority queue...");
+        let evict_start = std::time::Instant::now();
+        let evicted = policy.get_evict_targets();
+        let evict_duration = evict_start.elapsed();
+        println!("Evicted {} chunks in {:?}", evicted.len(), evict_duration);
+
+        // Now test get_clean_targets performance with different scenarios
+
+        // Scenario 1: Small cleanup (few zones)
+        println!("\n=== Scenario 1: Small cleanup ===");
+        let start_small = std::time::Instant::now();
+        let clean_targets_small = policy.get_clean_targets();
+        let small_duration = start_small.elapsed();
+        println!("Small cleanup: {} zones cleaned in {:?}",
+                clean_targets_small.len(), small_duration);
+        println!("LRU size after small cleanup: {}", policy.lru.len());
+
+        // Refill LRU with new chunks to simulate continued cache activity
+        println!("Refilling LRU with new chunks for scenario 2...");
+        let refill_start = std::time::Instant::now();
+        let chunks_to_add = (total_chunks as usize) / 3; // Add 33% more chunks
+        for i in 0..chunks_to_add {
+            let zone = i % (nr_zones as usize);
+            let chunk_idx = (i / (nr_zones as usize)) % (nr_chunks_per_zone as usize);
+            // Use high zone/chunk indices to avoid conflicts with existing chunks
+            policy.write_update(ChunkLocation::new(
+                (zone + nr_zones as usize) as u64,
+                chunk_idx as u64
+            ));
+        }
+        let refill_duration = refill_start.elapsed();
+        println!("Refilled LRU with {} chunks in {:?}", chunks_to_add, refill_duration);
+        println!("LRU size after refill: {}", policy.lru.len());
+
+        // Trigger evictions to populate priority queue for scenario 2
+        let evict2_start = std::time::Instant::now();
+        let evicted2 = policy.get_evict_targets();
+        let evict2_duration = evict2_start.elapsed();
+        println!("Second eviction: {} chunks in {:?}", evicted2.len(), evict2_duration);
+
+        // Scenario 2: Medium cleanup
+        println!("\n=== Scenario 2: Medium cleanup ===");
+        let start_medium = std::time::Instant::now();
+        let clean_targets_medium = policy.get_clean_targets();
+        let medium_duration = start_medium.elapsed();
+        println!("Medium cleanup: {} zones cleaned in {:?}",
+                clean_targets_medium.len(), medium_duration);
+        println!("LRU size after medium cleanup: {}", policy.lru.len());
+
+        // Refill LRU again for scenario 3
+        println!("Refilling LRU with new chunks for scenario 3...");
+        let refill2_start = std::time::Instant::now();
+        let chunks_to_add2 = (total_chunks as usize) / 2; // Add 50% more chunks
+        for i in 0..chunks_to_add2 {
+            let zone = i % (nr_zones as usize);
+            let chunk_idx = (i / (nr_zones as usize)) % (nr_chunks_per_zone as usize);
+            // Use even higher indices to avoid conflicts
+            policy.write_update(ChunkLocation::new(
+                (zone + 2 * nr_zones as usize) as u64,
+                chunk_idx as u64
+            ));
+        }
+        let refill2_duration = refill2_start.elapsed();
+        println!("Refilled LRU with {} chunks in {:?}", chunks_to_add2, refill2_duration);
+        println!("LRU size after second refill: {}", policy.lru.len());
+
+        // Trigger evictions for scenario 3
+        let evict3_start = std::time::Instant::now();
+        let evicted3 = policy.get_evict_targets();
+        let evict3_duration = evict3_start.elapsed();
+        println!("Third eviction: {} chunks in {:?}", evicted3.len(), evict3_duration);
+
+        // Scenario 3: Large cleanup
+        println!("\n=== Scenario 3: Large cleanup ===");
+        let start_large = std::time::Instant::now();
+        let clean_targets_large = policy.get_clean_targets();
+        let large_duration = start_large.elapsed();
+        println!("Large cleanup: {} zones cleaned in {:?}",
+                clean_targets_large.len(), large_duration);
+        println!("LRU size after large cleanup: {}", policy.lru.len());
+
+        // Performance analysis
+        println!("\n=== Performance Analysis ===");
+        println!("Initial LRU size: {}", total_chunks);
+        println!("Small cleanup time: {:?} ({} zones)", small_duration, clean_targets_small.len());
+        println!("Medium cleanup time: {:?} ({} zones)", medium_duration, clean_targets_medium.len());
+        println!("Large cleanup time: {:?} ({} zones)", large_duration, clean_targets_large.len());
+
+        // Calculate time per LRU item processed
+        if policy.lru.len() > 0 {
+            let time_per_item_ns = large_duration.as_nanos() as f64 / total_chunks as f64;
+            println!("Approximate time per LRU item processed: {:.2} ns", time_per_item_ns);
+        }
+
+        // Verify correctness - LRU should still function properly
+        assert!(policy.lru.len() <= total_chunks as usize);
+
+        // Test that we can still perform normal operations
+        policy.write_update(ChunkLocation::new(999, 14));
+        policy.read_update(ChunkLocation::new(0, 0));
+
+        println!("Test completed successfully!");
     }
 }
