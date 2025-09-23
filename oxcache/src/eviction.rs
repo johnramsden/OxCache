@@ -229,13 +229,14 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
-        while self.lru.len() as Chunk >= low_water_mark {
-            let targ = self.lru.pop_lru().unwrap().0;
-            let target_zone = targ.zone;
-            targets.push(targ);
+        for _ in 0..cap {
+            if let Some((targ, _)) = self.lru.pop_lru() {
+                let target_zone = targ.zone;
+                targets.push(targ);
 
-            // Adjust pq
-            self.pq.modify_priority(target_zone, 1);
+                // Adjust pq
+                self.pq.modify_priority(target_zone, 1);
+            }
         }
 
         targets
@@ -315,6 +316,7 @@ impl Evictor {
                 };
 
                 let device_clone = device_clone.clone();
+                let eviction_start = std::time::Instant::now();
                 let result = match device_clone.evict(cache_clone.clone(), writer_pool.clone(), eviction_policy_clone.clone()) {
                     Err(e) => {
                         Err(e.to_string())
@@ -323,6 +325,8 @@ impl Evictor {
                         Ok(())
                     },
                 };
+                let eviction_duration = eviction_start.elapsed();
+                tracing::info!("[Eviction] Total eviction took {:?}", eviction_duration);
 
                 if let Some(sender) = sender {
                     tracing::debug!("Sending eviction response to sender: {:?}", result);
@@ -395,146 +399,146 @@ mod tests {
 
     // TODO: Fix params
 
-    // #[test]
-    // fn test_chunk_update_ordering() {
-    //     let mut policy = ChunkEvictionPolicy::new(3, 5, 0, 6, 2);
-    //
-    //     // zone=[_,_,_,_], lru=()
-    //     let c = ChunkLocation::new(1, 0);
-    //     let mut order: VecDeque<ChunkLocation> = VecDeque::new();
-    //     order.push_front(c.clone());
-    //     policy.write_update(c);
-    //     // zone=[_,_,(1,0),_], lru=((1,0))
-    //     compare_order(&mut policy.lru, &order);
-    //
-    //     let et = policy.get_evict_targets();
-    //     let expect_none: VecDeque<ChunkLocation> = VecDeque::new();
-    //     assert_eq!(
-    //         expect_none, et,
-    //         "Expected = {:?}, but got {:?}",
-    //         expect_none, et
-    //     );
-    //
-    //     let c = ChunkLocation::new(1, 1);
-    //     policy.write_update(c.clone());
-    //     // zone=[_,_,(1,0),(1,1)], lru=((1,0),(1,1))
-    //     order.push_front(c);
-    //     compare_order(&mut policy.lru, &order);
-    //     let et = policy.get_evict_targets();
-    //     assert_eq!(
-    //         expect_none, et,
-    //         "Expected = {:?}, but got {:?}",
-    //         expect_none, et
-    //     );
-    //
-    //     let c = ChunkLocation::new(1, 0);
-    //     // Expect order to update
-    //     policy.read_update(c.clone());
-    //     // zone=[_,_,(1,0),(1,1)], lru=((1,1),(1,0))
-    //     let c = order.pop_back().unwrap();
-    //     order.push_front(c);
-    //     compare_order(&mut policy.lru, &order);
-    //     let et = policy.get_evict_targets();
-    //     assert_eq!(
-    //         expect_none, et,
-    //         "Expected = {:?}, but got {:?}",
-    //         expect_none, et
-    //     );
-    //
-    //     let c = ChunkLocation::new(0, 0);
-    //     policy.write_update(c.clone());
-    //     // zone=[(0,0),_,(1,0),(1,1)], lru=((1,0),(1,1),(0,0))
-    //     order.push_front(c);
-    //     compare_order(&mut policy.lru, &order);
-    //     let et = policy.get_evict_targets();
-    //     let order = order
-    //         .clone()
-    //         .into_iter()
-    //         .rev()
-    //         .collect::<VecDeque<ChunkLocation>>();
-    //     assert_eq!(order, et, "Expected = {:?}, but got {:?}", order, et);
-    // }
-    //
-    // #[test]
-    // fn test_promotional_update_ordering() {
-    //     let mut policy = PromotionalEvictionPolicy::new(1, 3, 4, 2);
-    //
-    //     // zone=[_,_,_,_], lru=()
-    //     let mut order: VecDeque<Zone> = VecDeque::new();
-    //     policy.write_update(ChunkLocation::new(3, 0));
-    //     compare_order(&mut policy.lru, &order);
-    //     let et = policy.get_evict_targets();
-    //     let expect_none: Vec<Zone> = vec![];
-    //     assert_eq!(
-    //         expect_none, et,
-    //         "Expected = {:?}, but got {:?}",
-    //         expect_none, et
-    //     );
-    //
-    //     // zone=[_,_,_,_], lru=()
-    //     policy.write_update(ChunkLocation::new(3, 1));
-    //     // zone=[_,_,_,3], lru=(3)
-    //     order.push_back(3);
-    //     compare_order(&mut policy.lru, &order);
-    //     let et = policy.get_evict_targets();
-    //     assert_eq!(
-    //         expect_none, et,
-    //         "Expected = {:?}, but got {:?}",
-    //         expect_none, et
-    //     );
-    //
-    //     policy.write_update(ChunkLocation::new(1, 0));
-    //     // There should be no change
-    //     // zone=[_,_,_,3], lru=(3)
-    //     compare_order(&mut policy.lru, &order);
-    //
-    //     policy.write_update(ChunkLocation::new(1, 1));
-    //     // zone=[_,1,_,3], lru=(3, 1)
-    //     order.push_front(1);
-    //     compare_order(&mut policy.lru, &order);
-    //     let et = policy.get_evict_targets();
-    //     assert_eq!(
-    //         expect_none, et,
-    //         "Expected = {:?}, but got {:?}",
-    //         expect_none, et
-    //     );
-    //
-    //     policy.write_update(ChunkLocation::new(2, 0));
-    //     policy.write_update(ChunkLocation::new(2, 1));
-    //     order.push_front(2);
-    //     // zone=[_,1,2,3], lru=(3, 1, 2)
-    //     compare_order(&mut policy.lru, &order);
-    //
-    //     // Should update in place, and adjust order
-    //     policy.read_update(ChunkLocation::new(3, 1));
-    //     let c = order.pop_back().unwrap();
-    //     order.push_front(c);
-    //     // zone=[_,1,2,3], lru=(1, 2, 3)
-    //     compare_order(&mut policy.lru, &order);
-    //
-    //     let et = policy.get_evict_targets();
-    //     let expect = VecDeque::from(vec![1, 2, 3]);
-    //     assert_eq!(expect, et, "Expected = {:?}, but got {:?}", expect, et);
-    //
-    //     compare_order(&mut policy.lru, &VecDeque::from(vec![]));
-    // }
-    //
-    // #[test]
-    // fn check_chunk_priority_queue() {
-    //     // 8 zones, 1 chunks per zone. Should evict at 3 inserted
-    //     let mut policy = ChunkEvictionPolicy::new(
-    //         2, 6, 1, 4, 2);
-    //
-    //     for z in 0..3 {
-    //         for i in 0..2 {
-    //             policy.write_update(ChunkLocation::new(z, i));
-    //         }
-    //     }
-    //
-    //     let got = policy.get_evict_targets().len();
-    //     assert_eq!(5, got, "Expected 5, but got {}", got);
-    //
-    //     let got = policy.get_clean_targets().len();
-    //     assert_eq!(3, got, "Expected 3, but got {}", got);
-    // }
+    #[test]
+    fn test_chunk_update_ordering() {
+        let mut policy = ChunkEvictionPolicy::new(9, 12, 0, 6, 2);
+
+        // zone=[_,_,_,_], lru=()
+        let c = ChunkLocation::new(1, 0);
+        let mut order: VecDeque<ChunkLocation> = VecDeque::new();
+        order.push_front(c.clone());
+        policy.write_update(c);
+        // zone=[_,_,(1,0),_], lru=((1,0))
+        compare_order(&mut policy.lru, &order);
+
+        let et = policy.get_evict_targets();
+        let expect_none: VecDeque<ChunkLocation> = VecDeque::new();
+        assert_eq!(
+            expect_none, et,
+            "Expected = {:?}, but got {:?}",
+            expect_none, et
+        );
+
+        let c = ChunkLocation::new(1, 1);
+        policy.write_update(c.clone());
+        // zone=[_,_,(1,0),(1,1)], lru=((1,0),(1,1))
+        order.push_front(c);
+        compare_order(&mut policy.lru, &order);
+        let et = policy.get_evict_targets();
+        assert_eq!(
+            expect_none, et,
+            "Expected = {:?}, but got {:?}",
+            expect_none, et
+        );
+
+        let c = ChunkLocation::new(1, 0);
+        // Expect order to update
+        policy.read_update(c.clone());
+        // zone=[_,_,(1,0),(1,1)], lru=((1,1),(1,0))
+        let c = order.pop_back().unwrap();
+        order.push_front(c);
+        compare_order(&mut policy.lru, &order);
+        let et = policy.get_evict_targets();
+        assert_eq!(
+            expect_none, et,
+            "Expected = {:?}, but got {:?}",
+            expect_none, et
+        );
+
+        let c = ChunkLocation::new(0, 0);
+        policy.write_update(c.clone());
+        // zone=[(0,0),_,(1,0),(1,1)], lru=((1,0),(1,1),(0,0))
+        order.push_front(c);
+        compare_order(&mut policy.lru, &order);
+        let et = policy.get_evict_targets();
+        let order = order
+            .clone()
+            .into_iter()
+            .rev()
+            .collect::<VecDeque<ChunkLocation>>();
+        assert_eq!(order, et, "Expected = {:?}, but got {:?}", order, et);
+    }
+
+    #[test]
+    fn test_promotional_update_ordering() {
+        let mut policy = PromotionalEvictionPolicy::new(1, 3, 4, 2);
+
+        // zone=[_,_,_,_], lru=()
+        let mut order: VecDeque<Zone> = VecDeque::new();
+        policy.write_update(ChunkLocation::new(3, 0));
+        compare_order(&mut policy.lru, &order);
+        let et = policy.get_evict_targets();
+        let expect_none: Vec<Zone> = vec![];
+        assert_eq!(
+            expect_none, et,
+            "Expected = {:?}, but got {:?}",
+            expect_none, et
+        );
+
+        // zone=[_,_,_,_], lru=()
+        policy.write_update(ChunkLocation::new(3, 1));
+        // zone=[_,_,_,3], lru=(3)
+        order.push_back(3);
+        compare_order(&mut policy.lru, &order);
+        let et = policy.get_evict_targets();
+        assert_eq!(
+            expect_none, et,
+            "Expected = {:?}, but got {:?}",
+            expect_none, et
+        );
+
+        policy.write_update(ChunkLocation::new(1, 0));
+        // There should be no change
+        // zone=[_,_,_,3], lru=(3)
+        compare_order(&mut policy.lru, &order);
+
+        policy.write_update(ChunkLocation::new(1, 1));
+        // zone=[_,1,_,3], lru=(3, 1)
+        order.push_front(1);
+        compare_order(&mut policy.lru, &order);
+        let et = policy.get_evict_targets();
+        assert_eq!(
+            expect_none, et,
+            "Expected = {:?}, but got {:?}",
+            expect_none, et
+        );
+
+        policy.write_update(ChunkLocation::new(2, 0));
+        policy.write_update(ChunkLocation::new(2, 1));
+        order.push_front(2);
+        // zone=[_,1,2,3], lru=(3, 1, 2)
+        compare_order(&mut policy.lru, &order);
+
+        // Should update in place, and adjust order
+        policy.read_update(ChunkLocation::new(3, 1));
+        let c = order.pop_back().unwrap();
+        order.push_front(c);
+        // zone=[_,1,2,3], lru=(1, 2, 3)
+        compare_order(&mut policy.lru, &order);
+
+        let et = policy.get_evict_targets();
+        let expect = VecDeque::from(vec![1, 2, 3]);
+        assert_eq!(expect, et, "Expected = {:?}, but got {:?}", expect, et);
+
+        compare_order(&mut policy.lru, &VecDeque::from(vec![]));
+    }
+
+    #[test]
+    fn check_chunk_priority_queue() {
+        // 4 zones, 2 chunks per zone. Should evict at 3 inserted
+        let mut policy = ChunkEvictionPolicy::new(
+            3, 6, 1, 4, 2);
+
+        for z in 0..3 {
+            for i in 0..2 {
+                policy.write_update(ChunkLocation::new(z, i));
+            }
+        }
+
+        let got = policy.get_evict_targets().len();
+        assert_eq!(4, got, "Expected 4, but got {}", got);
+
+        let got = policy.get_clean_targets().len();
+        assert_eq!(2, got, "Expected 2, but got {}", got);
+    }
 }
