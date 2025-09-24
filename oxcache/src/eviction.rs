@@ -14,8 +14,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use crate::zone_state::zone_priority_queue;
 
-// Note: Unit type () should already implement MemSize via blanket implementations
-
 #[derive(Debug)]
 pub enum EvictionPolicyWrapper {
     Promotional(PromotionalEvictionPolicy),
@@ -231,14 +229,22 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
+        let mut zone_counts = std::collections::HashMap::new();
+
+        // Collect evicted items and count by zone (batch the counting)
         for _ in 0..cap {
             if let Some((targ, _)) = self.lru.remove_lru() {
                 let target_zone = targ.zone;
                 targets.push(targ);
 
-                // Adjust pq
-                self.pq.modify_priority(target_zone, 1);
+                // Batch count instead of individual priority queue updates
+                *zone_counts.entry(target_zone).or_insert(0) += 1;
             }
+        }
+
+        // Batch update priority queue (far fewer operations)
+        for (zone, count) in zone_counts {
+            self.pq.modify_priority(zone, count);
         }
 
         targets
@@ -548,8 +554,9 @@ mod tests {
         let clean_low_water = 1;
 
         // High/low water marks - trigger eviction when LRU approaches capacity
-        let high_water = total_chunks - (total_chunks / 20); // 95% capacity
-        let low_water = total_chunks - (total_chunks / 10); // 90% capacity
+        // Use more reasonable eviction ratios to avoid massive bulk evictions
+        let high_water = total_chunks - (total_chunks / 100); // 99% capacity
+        let low_water = total_chunks - (total_chunks / 50);   // 98% capacity
 
         let mut policy = ChunkEvictionPolicy::new(
             high_water, low_water, clean_low_water, nr_zones, nr_chunks_per_zone);
