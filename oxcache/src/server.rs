@@ -53,7 +53,6 @@ pub struct ServerEvictionConfig {
     pub eviction_type: String,
     pub high_water_evict: u64,
     pub low_water_evict: u64,
-    pub high_water_clean: Option<u64>,
     pub low_water_clean: Option<u64>,
     pub eviction_interval: u64,
 }
@@ -163,7 +162,6 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.config.eviction.low_water_evict,
             self.device.get_num_zones(),
             self.device.get_chunks_per_zone(),
-            self.config.eviction.high_water_clean,
             self.config.eviction.low_water_clean,
         )?));
 
@@ -182,7 +180,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&self.device),
             Arc::clone(&eviction_policy),
             Arc::clone(&self.cache),
-            Duration::from_secs(self.config.eviction.eviction_interval),
+            Duration::from_millis(self.config.eviction.eviction_interval),
             self.evict_rx.clone(),
             writerpool.clone()
         )?;

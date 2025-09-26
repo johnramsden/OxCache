@@ -2,6 +2,7 @@ use crate::request::GetRequest;
 use nvme::types::{Byte, Zone};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::Notify;
+use lru_mem::HeapSize;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Chunk {
@@ -25,6 +26,15 @@ impl ChunkLocation {
         [self.zone as usize, self.index as usize]
     }
 }
+
+impl HeapSize for ChunkLocation {
+    fn heap_size(&self) -> usize {
+        // ChunkLocation contains no heap-allocated data
+        0
+    }
+}
+
+// ValueSize is automatically implemented via blanket implementation
 
 /// A ChunkLocation with pin counting for coordinating with eviction
 #[derive(Debug)]

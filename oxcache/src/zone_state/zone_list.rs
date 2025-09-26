@@ -207,7 +207,7 @@ impl ZoneList {
             open_zones: VecDeque::with_capacity(max_active_resources),
             writing_zones: HashMap::with_capacity(max_active_resources),
             chunks_per_zone,
-            max_active_resources: max_active_resources-1, // Keep one reserved for eviction
+            max_active_resources: max_active_resources,
             zones,
             #[cfg(debug_assertions)]
             state_tracker: ZoneStateTracker::new(
@@ -220,12 +220,26 @@ impl ZoneList {
 
     // Get a zone to write to
     pub fn remove(&mut self) -> Result<ZoneIndex, ZoneObtainFailure> {
+        self.remove_with_eviction_bypass(false)
+    }
+
+    // Get a zone to write to, with option to bypass eviction check for eviction operations
+    pub fn remove_with_eviction_bypass(&mut self, is_eviction: bool) -> Result<ZoneIndex, ZoneObtainFailure> {
         #[cfg(debug_assertions)]
         self.check_invariants();
 
-        if self.is_full() {
-            // Need to evict
-            tracing::debug!("Full, need to evict now");
+        let remaining_zones = self.free_zones.len() + self.open_zones.len();
+        tracing::debug!("remove_with_eviction_bypass: is_eviction={}, remaining_zones={}", is_eviction, remaining_zones);
+
+        if !is_eviction && self.should_evict() {
+            // Need to evict before we run out completely (but not during eviction itself)
+            tracing::debug!("Low on zones, need to evict now");
+            return Err(EvictNow);
+        }
+
+        if is_eviction && self.is_full() {
+            // Even eviction can't proceed if completely full
+            tracing::debug!("Completely full, even eviction cannot proceed");
             return Err(EvictNow);
         }
 
@@ -443,6 +457,13 @@ impl ZoneList {
         self.free_zones.is_empty() && self.open_zones.is_empty()
     }
 
+    // Check if we should trigger eviction (before completely full)
+    pub fn should_evict(&self) -> bool {
+        // Trigger eviction when we have 1 or fewer zones left
+        let remaining_zones = self.free_zones.len() + self.open_zones.len();
+        remaining_zones <= 1
+    }
+
     // Gets the number of open zones by counting the unique
     // zones listed in open_zones and writing_zones
     pub fn get_open_zones(&self) -> usize {
@@ -596,20 +617,20 @@ impl ZoneList {
 #[cfg(test)]
 mod zone_list_tests {
 
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use crate::{
         cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, writerpool::WriterPool, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}
     };
     use bytes::Bytes;
     use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
-
+    use crate::eviction::EvictionPolicyWrapper;
     use super::ZoneList;
 
     struct MockDevice {}
 
     impl Device for MockDevice {
-        fn append(&self, _data: Bytes) -> std::io::Result<ChunkLocation> {
+        fn append_with_eviction_bypass(&self, _data: Bytes, _is_eviction: bool) -> std::io::Result<ChunkLocation> {
             Ok(ChunkLocation { zone: 0, index: 0 })
         }
 
@@ -624,7 +645,7 @@ mod zone_list_tests {
         }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(self: Arc<Self>, _locations: EvictTarget, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>) -> std::io::Result<()> {
+        fn evict(self: Arc<Self>, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, _eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<()> {
             Ok(())
         }
 
