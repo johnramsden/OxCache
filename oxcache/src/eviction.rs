@@ -390,7 +390,10 @@ mod tests {
             order.len(),
             lru.len()
         );
-        for (_index, ((lru_key, _), order_item)) in lru.iter().zip(order.iter()).enumerate() {
+        // The lru_mem crate iterates from most recently used to least recently used
+        // but our order VecDeque is constructed with push_front for most recent
+        // So we need to reverse the iteration order to match
+        for (_index, ((lru_key, _), order_item)) in lru.iter().zip(order.iter().rev()).enumerate() {
             assert_eq!(
                 order_item, lru_key,
                 "Expected {:?}, but got {:?}",
