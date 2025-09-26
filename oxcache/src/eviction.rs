@@ -22,7 +22,7 @@ pub enum EvictionPolicyWrapper {
 
 #[derive(Debug)]
 pub enum EvictTarget {
-    Chunk(Vec<ChunkLocation>, Vec<ZoneIndex>),
+    Chunk(Vec<ChunkLocation>, Option<Vec<ZoneIndex>>),
     Zone(Vec<Zone>),
 }
 
@@ -71,14 +71,16 @@ impl EvictionPolicyWrapper {
         }
     }
 
-    pub fn get_evict_targets(&mut self) -> EvictTarget {
+    pub fn get_evict_targets(&mut self, get_clean_targets: bool) -> EvictTarget {
         match self {
             EvictionPolicyWrapper::Promotional(promotional) => {
                 EvictTarget::Zone(promotional.get_evict_targets())
             }
             EvictionPolicyWrapper::Chunk(c) => {
                 let et = c.get_evict_targets();
-                let ct = c.get_clean_targets();
+                let ct = if get_clean_targets {
+                    Some(c.get_clean_targets())
+                } else { None };
                 EvictTarget::Chunk(et, ct)
             },
         }

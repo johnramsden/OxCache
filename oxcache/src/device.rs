@@ -479,11 +479,12 @@ impl Device for Zoned {
 
         let targets = {
             let mut policy = eviction_policy.lock().unwrap();
-            policy.get_evict_targets()
+            policy.get_evict_targets(true)
         };
 
         match targets {
             EvictTarget::Chunk(chunk_locations, clean_locations) => {
+                let clean_locations = clean_locations.unwrap();
                 if chunk_locations.is_empty() {
                     tracing::debug!("[evict:Chunk] No chunks evicted");
                     return Ok(());
@@ -865,7 +866,7 @@ impl Device for BlockInterface {
 
         let targets = {
             let mut policy = eviction_policy.lock().unwrap();
-            policy.get_evict_targets()
+            policy.get_evict_targets(false)
         };
 
         match targets {
