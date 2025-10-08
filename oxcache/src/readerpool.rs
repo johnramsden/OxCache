@@ -9,7 +9,7 @@ use crate::cache::bucket::PinGuard;
 
 #[derive(Debug)]
 pub struct ReadResponse {
-    pub data: std::io::Result<Bytes>,
+    pub data: std::io::Result<(Bytes, Bytes)>, // (header, data)
 }
 
 #[derive(Debug)]
@@ -17,6 +17,8 @@ pub struct ReadRequest {
     pub location: cache::bucket::ChunkLocation,
     pub responder: Sender<ReadResponse>,
     pub _pin_guard: PinGuard, // Keep pin alive during disk I/O
+    pub read_offset: nvme::types::Byte, // Offset within the chunk to start reading
+    pub read_size: nvme::types::Byte,   // Number of bytes to read from the chunk
 }
 
 /// Represents an individual reader thread
@@ -47,7 +49,7 @@ impl Reader {
         while let Ok(msg) = self.receiver.recv() {
             // println!("Reader {} processing: {:?}", self.id, msg);
             let start = std::time::Instant::now();
-            let result = self.device.read(msg.location.clone());
+            let result = self.device.read_subset(msg.location.clone(), msg.read_offset, msg.read_size);
             METRICS.update_metric_histogram_latency("device_read_latency_ms", start.elapsed(), MetricType::MsLatency);
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);

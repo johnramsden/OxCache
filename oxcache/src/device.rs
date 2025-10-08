@@ -77,6 +77,8 @@ pub trait Device: Send + Sync {
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
+    fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)>;
+
     fn get_num_zones(&self) -> Zone;
 
     fn get_chunks_per_zone(&self) -> Chunk;
@@ -457,20 +459,71 @@ impl Device for Zoned {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let buffer_size = get_aligned_buffer_size(self.config.chunk_size_in_bytes, self.nvme_config.logical_block_size);
-        let mut buffer: AVec<u8, RuntimeAlign> =  AVec::with_capacity(
-                self.nvme_config.logical_block_size as usize,
-                buffer_size as usize
-        );
-        buffer.resize(buffer_size as usize, 0);
+        let (_header, data) = self.read_subset(location, 0, self.config.chunk_size_in_bytes)?;
+        // When offset=0, data already includes header as first bytes, so just return data
+        Ok(data)
+    }
+
+    fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)> {
+        const HEADER_SIZE: Byte = 24; // 8 bytes key hash + 8 bytes offset + 8 bytes size
+
+        // Validate LBA alignment
+        if offset % self.nvme_config.logical_block_size != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Offset {} must be aligned to logical block size {}",
+                    offset, self.nvme_config.logical_block_size
+                ),
+            ));
+        }
+        if size % self.nvme_config.logical_block_size != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Size {} must be aligned to logical block size {}",
+                    size, self.nvme_config.logical_block_size
+                ),
+            ));
+        }
 
         let slba = self.config.get_address_at(location.zone, location.index);
-        tracing::trace!("Read slba = {} for {:?}", slba, location);
+
+        // Header (always first 24 bytes for validation)
+        let header_buffer_size = get_aligned_buffer_size(HEADER_SIZE, self.nvme_config.logical_block_size);
+        let mut header_buffer: AVec<u8, RuntimeAlign> = AVec::with_capacity(
+            self.nvme_config.logical_block_size as usize,
+            header_buffer_size as usize
+        );
+        header_buffer.resize(header_buffer_size as usize, 0);
+
+        tracing::trace!("Read subset header at slba = {} for {:?}", slba, location);
 
         let start = std::time::Instant::now();
-        self.read_into_buffer(self.max_write_size, slba, &mut buffer, &self.nvme_config)?;
+        self.read_into_buffer(self.max_write_size, slba, &mut header_buffer, &self.nvme_config)?;
+        let header = Bytes::from_owner(header_buffer).slice(0..HEADER_SIZE as usize);
+
+        // Data (size bytes starting from offset position in chunk)
+        let data_buffer_size = get_aligned_buffer_size(size, self.nvme_config.logical_block_size);
+        let mut data_buffer: AVec<u8, RuntimeAlign> = AVec::with_capacity(
+            self.nvme_config.logical_block_size as usize,
+            data_buffer_size as usize
+        );
+        data_buffer.resize(data_buffer_size as usize, 0);
+
+        // Calculate LBA offset for the data read
+        let byte_offset = offset;
+        let lba_offset = byte_offset / self.nvme_config.logical_block_size;
+        let data_slba = slba + lba_offset;
+
+        tracing::trace!("Read subset data at slba = {} for {:?}, offset={}, size={}", data_slba, location, offset, size);
+
+        self.read_into_buffer(self.max_write_size, data_slba, &mut data_buffer, &self.nvme_config)?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
-        Ok(Bytes::from_owner(buffer))
+
+        let data = Bytes::from_owner(data_buffer).slice(0..size as usize);
+
+        Ok((header, data))
     }
 
     fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()> {
@@ -845,19 +898,66 @@ impl Device for BlockInterface {
     }
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes> {
-        let mut data = vec![0u8; self.chunk_size_in_bytes as usize];
+        let (_header, data) = self.read_subset(location, 0, self.chunk_size_in_bytes)?;
+        // When offset=0, data already includes header as first bytes, so just return data
+        Ok(data)
+    }
 
-        let write_addr = self.get_lba_at(&location);
+    fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)> {
+        const HEADER_SIZE: Byte = 24; // 8 bytes key hash + 8 bytes offset + 8 bytes size
+
+        // Validate LBA alignment
+        if offset % self.nvme_config.logical_block_size != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Offset {} must be aligned to logical block size {}",
+                    offset, self.nvme_config.logical_block_size
+                ),
+            ));
+        }
+        if size % self.nvme_config.logical_block_size != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Size {} must be aligned to logical block size {}",
+                    size, self.nvme_config.logical_block_size
+                ),
+            ));
+        }
+
+        let base_lba = self.get_lba_at(&location);
+
+        // Header (always first 24 bytes for validation)
+        let mut header_data = vec![0u8; HEADER_SIZE as usize];
 
         let start = std::time::Instant::now();
         self.read_into_buffer(
             self.max_write_size,
-            write_addr,
-            &mut data,
+            base_lba,
+            &mut header_data,
+            &self.nvme_config,
+        )?;
+        let header = Bytes::from(header_data);
+
+        let mut data_buffer = vec![0u8; size as usize];
+
+        // Calculate LBA offset for the data read
+        let byte_offset = offset;
+        let lba_offset = byte_offset / self.nvme_config.logical_block_size;
+        let data_lba = base_lba + lba_offset;
+
+        self.read_into_buffer(
+            self.max_write_size,
+            data_lba,
+            &mut data_buffer,
             &self.nvme_config,
         )?;
         METRICS.update_metric_histogram_latency("disk_read_latency_ms", start.elapsed(), MetricType::MsLatency);
-        Ok(Bytes::from(data))
+
+        let data = Bytes::from(data_buffer);
+
+        Ok((header, data))
     }
 
     fn evict(self: Arc<Self>, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()> {

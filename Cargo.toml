@@ -3,9 +3,9 @@ resolver = "3"
 members = ["libnvme-sys", "nvme", "oxcache"]
 
 [profile.dev]
-debug-assertions = false
+#debug-assertions = false
 
 [profile.dev.package."*"]
 opt-level = 3
 strip = "none"
-debug-assertions = false
+#debug-assertions = false
