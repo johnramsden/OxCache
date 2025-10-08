@@ -188,4 +188,8 @@ impl Device for MockZonedDevice {
     fn get_nsid(&self) -> u32 {
         todo!()
     }
+
+    fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)> {
+        todo!()
+    }
 }

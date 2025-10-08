@@ -329,6 +329,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         location,
                                         responder: tx,
                                         _pin_guard: pin_guard,
+                                        read_offset: chunk.offset,
+                                        read_size: chunk.size,
                                     };
                                     tracing::debug!("REQ[{}] Sending read request to reader pool", request_id);
                                     reader_pool.send(read_req).await.map_err(|e| {
@@ -338,11 +340,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     tracing::debug!("REQ[{}] Waiting for read response", request_id);
                                     let recv_err = rx.recv_async().await;
-                                    let read_response = match recv_err {
+                                    let (header, data) = match recv_err {
                                         Ok(wr) => {
                                             tracing::debug!("REQ[{}] Received read response from reader pool", request_id);
                                             match wr.data {
-                                                Ok(loc) => loc,
+                                                Ok((header, data)) => (header, data),
                                                 Err(e) => {
                                                     tracing::error!("REQ[{}] Read data error: {}", request_id, e);
                                                     return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("read data error: {}", e)));
@@ -356,11 +358,16 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     };
 
                                     // Validate read response - pin_guard must stay alive until here!
+                                    // Note: We validate against the original chunk that was stored (0, chunk_size),
+                                    // not the subset request (chunk.offset, chunk.size)
                                     #[cfg(debug_assertions)]
-                                    validate_read_response(&read_response, &chunk.uuid, chunk.offset, chunk.size);
+                                    validate_read_response(&header, &chunk.uuid, 0, chunk_size);
+
+                                    // Return only the data portion (header is just for validation)
+                                    let chunked_resp = data;
 
                                     let encoded = bincode::serde::encode_to_vec(
-                                        request::GetResponse::Response(read_response.clone()),
+                                        request::GetResponse::Response(chunked_resp.clone()),
                                         bincode::config::standard()
                                     ).unwrap();
                                     {
@@ -389,7 +396,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let start = Arc::clone(&start);
                                 move || async move {
                                     tracing::debug!("REQ[{}] CACHE MISS - entering remote fetch path", request_id);
-                                    let resp = match remote.get(chunk.uuid.as_str(), chunk.offset, chunk.size).await {
+                                    let resp = match remote.get(chunk.uuid.as_str(), 0, chunk_size).await {
                                         Ok(resp) => {
                                             tracing::debug!("REQ[{}] Remote fetch completed successfully", request_id);
                                             resp
@@ -411,8 +418,10 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         }
                                     };
 
+                                    // Will implicitly fail if size larger than chunk
+                                    let chunked_resp = resp.slice(chunk.offset as usize..(chunk.offset + chunk.size) as usize);
                                     let encoded = bincode::serde::encode_to_vec(
-                                        request::GetResponse::Response(resp.clone()),
+                                        request::GetResponse::Response(chunked_resp),
                                         bincode::config::standard()
                                     ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("serialization failed: {}", e)))?;
                                     {
@@ -456,8 +465,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_counter("miss", 1);
                                     METRICS.update_metric_histogram_latency("get_miss_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_hitratio(HitType::Miss);
-                                    METRICS.update_metric_counter("read_bytes_total", chunk.size);
-                                    METRICS.update_metric_counter("bytes_total", chunk.size);
+                                    METRICS.update_metric_counter("read_bytes_total", chunk_size);
+                                    METRICS.update_metric_counter("bytes_total", chunk_size);
                                     tracing::debug!("REQ[{}] CACHE MISS completed successfully", request_id);
                                     Ok(write_response)
                                 }

@@ -23,22 +23,20 @@ pub enum Request {
 
 impl GetRequest {
     pub fn validate(&self, chunk_size: Byte) -> tokio::io::Result<()> {
-        if self.offset % chunk_size != 0 {
+        // Allow subset reads within a chunk - offset + size should not exceed chunk_size
+        if self.offset + self.size > chunk_size {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Offset must be aligned, recieved {}, not aligned to {}",
-                    self.offset, chunk_size
+                    "Request extends beyond chunk boundary: offset {} + size {} > chunk_size {}",
+                    self.offset, self.size, chunk_size
                 ),
             ));
         }
-        if self.size > chunk_size || self.size == 0 {
+        if self.size == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Request size {} can not be larger than chunk size {} or smaller than 1",
-                    self.size, chunk_size
-                ),
+                "Request size cannot be 0",
             ));
         }
 

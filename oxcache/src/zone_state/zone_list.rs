@@ -688,6 +688,10 @@ mod zone_list_tests {
         fn get_nsid(&self) -> u32 {
             0
         }
+
+        fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)> {
+            Ok((Bytes::new(), Bytes::new()))
+        }
     }
 
     #[macro_export]
