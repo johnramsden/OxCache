@@ -75,6 +75,14 @@ pub struct CliArgs {
     /// Directory to store metrics log files
     #[arg(long)]
     pub file_metrics_directory: Option<String>,
+
+    /// Enable throughput benchmark mode (measures bytes/sec after first eviction)
+    #[arg(long)]
+    pub benchmark_mode: bool,
+
+    /// Duration in seconds to run benchmark after first eviction (default: 1800 = 30 min)
+    #[arg(long)]
+    pub benchmark_duration_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +118,8 @@ pub struct ParsedMetricsConfig {
     pub ip_addr: Option<String>,
     pub port: Option<u16>,
     pub file_metrics_directory: Option<String>,
+    pub benchmark_mode: Option<bool>,
+    pub benchmark_duration_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +293,12 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         None
     };
 
+    // Benchmark mode settings
+    let benchmark_mode = cli.benchmark_mode || config.as_ref().and_then(|c| c.metrics.benchmark_mode).unwrap_or(false);
+    let benchmark_duration_secs = cli.benchmark_duration_secs
+        .or_else(|| config.as_ref().and_then(|c| c.metrics.benchmark_duration_secs))
+        .unwrap_or(1800); // Default to 30 minutes
+
     // TODO: Add secrets from env vars
 
     Ok(ServerConfig {
@@ -307,7 +323,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         max_write_size,
         max_zones,
         metrics: ServerMetricsConfig {
-            metrics_exporter_addr
+            metrics_exporter_addr,
+            benchmark_mode,
+            benchmark_duration_secs,
         }
     })
 }

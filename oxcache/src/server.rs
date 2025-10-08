@@ -60,6 +60,8 @@ pub struct ServerEvictionConfig {
 #[derive(Debug, Clone)]
 pub struct ServerMetricsConfig {
     pub metrics_exporter_addr: Option<SocketAddr>,
+    pub benchmark_mode: bool,
+    pub benchmark_duration_secs: u64,
 }
 
 #[derive(Debug)]
@@ -199,6 +201,51 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 shutdown_signal.notify_waiters();
             }
         });
+
+        // Spawn benchmark timer task if benchmark mode is enabled
+        if self.config.metrics.benchmark_mode {
+            let shutdown_benchmark = self.shutdown.clone();
+            let benchmark_duration = self.config.metrics.benchmark_duration_secs;
+            tokio::spawn(async move {
+                loop {
+                    // Check if first eviction has been triggered
+                    use std::sync::atomic::Ordering;
+                    if METRICS.benchmark_state.first_eviction_triggered.load(Ordering::SeqCst) {
+                        tracing::info!("=== BENCHMARK: Timer started for {} seconds ===", benchmark_duration);
+
+                        // Wait for the benchmark duration
+                        tokio::time::sleep(Duration::from_secs(benchmark_duration)).await;
+
+                        // Calculate and print throughput
+                        let initial_bytes = METRICS.benchmark_state.initial_bytes_total.lock().unwrap().unwrap_or(0);
+                        let final_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                        let start_time = METRICS.benchmark_state.benchmark_start_time.lock().unwrap().unwrap();
+                        let elapsed = start_time.elapsed().as_secs_f64();
+
+                        let bytes_transferred = final_bytes.saturating_sub(initial_bytes);
+                        let throughput = bytes_transferred as f64 / elapsed;
+
+                        tracing::info!("========================================");
+                        tracing::info!("=== THROUGHPUT BENCHMARK RESULTS ===");
+                        tracing::info!("========================================");
+                        tracing::info!("Duration: {:.2} seconds", elapsed);
+                        tracing::info!("Initial bytes_total: {}", initial_bytes);
+                        tracing::info!("Final bytes_total: {}", final_bytes);
+                        tracing::info!("Bytes transferred: {}", bytes_transferred);
+                        tracing::info!("Throughput: {:.2} bytes/sec", throughput);
+                        tracing::info!("Throughput: {:.2} MB/sec", throughput / 1_048_576.0);
+                        tracing::info!("========================================");
+
+                        // Trigger shutdown
+                        shutdown_benchmark.notify_waiters();
+                        break;
+                    }
+
+                    // Check every 100ms if eviction has started
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            });
+        }
 
         // Reset device
         self.device.reset()?;

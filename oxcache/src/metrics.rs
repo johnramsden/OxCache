@@ -11,6 +11,7 @@ use tracing_appender::non_blocking;
 use tracing_subscriber::fmt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static METRICS: Lazy<MetricsRecorder> = Lazy::new(|| {
     MetricsRecorder::new()
@@ -73,11 +74,28 @@ pub fn init_metrics_exporter(addr: SocketAddr) {
     });
 }
 
+pub struct BenchmarkState {
+    pub first_eviction_triggered: AtomicBool,
+    pub benchmark_start_time: Mutex<Option<std::time::Instant>>,
+    pub initial_bytes_total: Mutex<Option<u64>>,
+}
+
+impl BenchmarkState {
+    pub fn new() -> Self {
+        Self {
+            first_eviction_triggered: AtomicBool::new(false),
+            benchmark_start_time: Mutex::new(None),
+            initial_bytes_total: Mutex::new(None),
+        }
+    }
+}
+
 pub struct MetricsRecorder {
     run_id: String,
     prefix: String,
     metric_state: MetricState,
     counters: Arc<Mutex<HashMap<String, u64>>>,
+    pub benchmark_state: Arc<BenchmarkState>,
 }
 
 pub enum MetricType {
@@ -96,7 +114,13 @@ impl MetricsRecorder {
             prefix: String::from("oxcache"),
             metric_state: MetricState::new(),
             counters: Arc::new(Mutex::new(HashMap::new())),
+            benchmark_state: Arc::new(BenchmarkState::new()),
         }
+    }
+
+    pub fn get_counter(&self, name: &str) -> Option<u64> {
+        let counters = self.counters.lock().unwrap();
+        counters.get(name).copied()
     }
     pub fn update_metric_histogram_latency(&self, name: &str, value: Duration, metric_type: MetricType) {
         let id = self.run_id.clone();

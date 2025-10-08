@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::metrics::{MetricType, METRICS};
 use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use crate::cache::bucket::Chunk as CacheKey;
-
+use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
 pub struct Zoned {
@@ -160,6 +160,17 @@ pub fn get_device(
             max_write_size,
             max_zones,
         )?))
+    }
+}
+
+fn check_first_evict_bench() {
+    // Check if this is the first eviction for benchmark mode
+    if !METRICS.benchmark_state.first_eviction_triggered.swap(true, Ordering::SeqCst) {
+        // This is the first eviction
+        let current_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+        *METRICS.benchmark_state.initial_bytes_total.lock().unwrap() = Some(current_bytes);
+        *METRICS.benchmark_state.benchmark_start_time.lock().unwrap() = Some(std::time::Instant::now());
+        tracing::info!("=== BENCHMARK: First eviction triggered at bytes_total={} ===", current_bytes);
     }
 }
 
@@ -543,6 +554,8 @@ impl Device for Zoned {
                     return Ok(());
                 }
 
+                check_first_evict_bench();
+
                 // Remove from map (invalidation)
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
 
@@ -663,6 +676,12 @@ impl Device for Zoned {
                 Ok(())
             }
             EvictTarget::Zone(zones_to_evict) => {
+                if zones_to_evict.is_empty() {
+                    return Ok(());
+                }
+
+                check_first_evict_bench();
+
                 RUNTIME.block_on(cache.remove_zones(&zones_to_evict))?;
 
                 let (zone_mtx, _) = &*self.zones;
@@ -975,6 +994,9 @@ impl Device for BlockInterface {
                 if chunk_locations.is_empty() {
                     return Ok(());
                 }
+
+                check_first_evict_bench();
+
                 tracing::debug!("[evict:Chunk] Evicting chunks {:?}", chunk_locations);
 
                 RUNTIME.block_on(cache.remove_entries(&chunk_locations))?;
@@ -990,6 +1012,9 @@ impl Device for BlockInterface {
                 if locations.is_empty() {
                     return Ok(());
                 }
+
+                check_first_evict_bench();
+
                 tracing::debug!("[evict:Zone] Evicting zones {:?}", locations);
                 RUNTIME.block_on(cache.remove_zones(&locations))?;
                 let state_mtx = Arc::clone(&self.state);
