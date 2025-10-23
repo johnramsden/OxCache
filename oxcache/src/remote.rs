@@ -8,7 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 
 #[async_trait]
 pub trait RemoteBackend: Send + Sync {
@@ -143,13 +143,28 @@ impl RemoteBackend for S3Backend {
 impl RemoteBackend for EmulatedBackend {
     async fn get(&self, key: &str, offset: Byte, size: Byte) -> tokio::io::Result<Bytes> {
         if let Some(remote_artificial_delay_microsec) = self.remote_artificial_delay_microsec {
-            sleep(Duration::from_micros(
-                remote_artificial_delay_microsec as u64,
-            ))
-            .await;
-        }
+            let start = Instant::now();
 
-        self.gen_random_buffer(key, offset, size)
+            // Perform the actual work
+            let buf = self.gen_random_buffer(key, offset, size);
+
+            let elapsed = start.elapsed();
+            let elapsed_us = elapsed.as_micros() as u64;
+            let delay_us = remote_artificial_delay_microsec as u64;
+
+            // Only sleep for the remaining time if gen_random_buffer was faster
+            if elapsed_us < delay_us {
+                let remaining = delay_us - elapsed_us;
+                sleep(Duration::from_micros(remaining)).await;
+            } else {
+                tracing::warn!("Delay was exceeded during random buffer generation");
+            }
+
+            buf
+        } else {
+            // No artificial delay — just run the function
+            self.gen_random_buffer(key, offset, size)
+        }
     }
 
     fn set_blocksize(&mut self, blocksize: Byte) {

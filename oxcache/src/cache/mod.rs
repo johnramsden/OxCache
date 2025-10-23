@@ -318,7 +318,6 @@ impl Cache {
             // Clear old reverse slots
             for (key, old_loc, _) in &out {
                 if bm.zone_to_entry[old_loc.as_index()].as_ref() == Some(key) {
-                    // tracing::info!("LRU_SYNC: Removing chunk {:?} from bucket map reverse mapping (clean_zone_and_update_map)", old_loc);
                     bm.zone_to_entry[old_loc.as_index()] = None;
                 }
             }
@@ -386,14 +385,10 @@ impl Cache {
 
     pub async fn remove_entries(&self, chunks: &[ChunkLocation]) -> tokio::io::Result<()> {
         let thread_id = std::thread::current().id();
-        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] remove_entries called for {} chunks", thread_id, chunks.len());
         // to_relocate is a list of ChunkLocations that the caller wants to update
         // We pass in each chunk location and the writer function should return back with the list of updated chunk locations
-        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Attempting to acquire BM write lock for remove_entries", thread_id);
         let mut bucket_guard = self.bm.write().await;
-        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Acquired BM write lock for remove_entries", thread_id);
 
-        // tracing::debug!("State is {:#?} before remove_entries", *bucket_guard);
         for chunk in chunks {
             tracing::debug!("Removing {:?} from map", chunk);
             let chunk_id = match &bucket_guard.zone_to_entry[chunk.as_index()] {
@@ -437,14 +432,14 @@ impl Cache {
             // Now safe to remove from maps while holding entry write lock
             bucket_guard.zone_to_entry[chunk.as_index()].take();
             let _removed_entry = bucket_guard.buckets.remove(&chunk_id);
-            tracing::info!("LRU_SYNC: Removed chunk {:?} from bucket map via remove_entries", chunk);
+            tracing::debug!("LRU_SYNC: Removed chunk {:?} from bucket map via remove_entries", chunk);
             tracing::debug!("Found chunk {:?} when removing entries", _removed_entry.is_some());
             // entry_guard is dropped here, releasing the entry write lock
         }
 
-        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Releasing BM write lock for remove_entries", thread_id);
+        tracing::debug!("DEADLOCK_DEBUG: [Thread {:?}] Releasing BM write lock for remove_entries", thread_id);
         // bucket_guard is dropped here
-        tracing::info!("DEADLOCK_DEBUG: [Thread {:?}] Completed remove_entries for {} chunks", thread_id, chunks.len());
+        tracing::debug!("DEADLOCK_DEBUG: [Thread {:?}] Completed remove_entries for {} chunks", thread_id, chunks.len());
         Ok(())
     }
 }

@@ -137,7 +137,8 @@ impl Device for MockZonedDevice {
         self: Arc<MockZonedDevice>,
         cache: std::sync::Arc<oxcache::cache::Cache>,
         writer_pool: Arc<WriterPool>,
-        eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>
+        eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
+        always_evict: bool,
     ) -> std::io::Result<()> {
         todo!()
     }
