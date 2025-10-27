@@ -157,6 +157,12 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         }
 
         let low_water_mark = self.nr_zones - self.low_water;
+
+        // Prevent underflow when lru_len < low_water_mark
+        if lru_len < low_water_mark {
+            return vec![];
+        }
+
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
@@ -228,6 +234,12 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         }
 
         let low_water_mark = nr_chunks - self.low_water;
+
+        // Prevent underflow when lru_len < low_water_mark
+        if lru_len < low_water_mark {
+            return vec![];
+        }
+
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
