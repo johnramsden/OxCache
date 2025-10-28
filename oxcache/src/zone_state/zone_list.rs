@@ -645,7 +645,7 @@ mod zone_list_tests {
         }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(self: Arc<Self>, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, _eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> std::io::Result<()> {
+        fn evict(self: Arc<Self>, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, _eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>, always_evict: bool) -> std::io::Result<()> {
             Ok(())
         }
 

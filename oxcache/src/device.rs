@@ -73,7 +73,7 @@ pub trait Device: Send + Sync {
     fn append_with_eviction_bypass(&self, data: Bytes, is_eviction: bool) -> std::io::Result<ChunkLocation>;
 
     /// This is expected to remove elements from the cache as well
-    fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()>;
+    fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>, always_evict: bool) -> io::Result<()>;
 
     fn read(&self, location: ChunkLocation) -> std::io::Result<Bytes>;
 
@@ -175,7 +175,7 @@ fn check_first_evict_bench() {
 }
 
 fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> {
-    tracing::info!("DEVICE: [Thread {:?}] Sending eviction trigger", std::thread::current().id());
+    tracing::debug!("DEVICE: [Thread {:?}] Sending eviction trigger", std::thread::current().id());
     let (resp_tx, resp_rx) = flume::bounded(1);
     if let Err(e) = eviction_channel.send(EvictorMessage { sender: resp_tx }) {
         tracing::error!("[append] Failed to send eviction message: {}", e);
@@ -537,13 +537,13 @@ impl Device for Zoned {
         Ok((header, data))
     }
 
-    fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()> {
+    fn evict(self: Arc<Self>, cache: Arc<Cache>, writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>, always_evict: bool) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
         let targets = {
             let mut policy = eviction_policy.lock().unwrap();
-            policy.get_evict_targets(true)
+            policy.get_evict_targets(true, always_evict)
         };
 
         match targets {
@@ -948,17 +948,19 @@ impl Device for BlockInterface {
         let base_lba = self.get_lba_at(&location);
 
         // Header (always first 24 bytes for validation)
-        let mut header_data = vec![0u8; HEADER_SIZE as usize];
+        let header_buffer_size = get_aligned_buffer_size(HEADER_SIZE, self.nvme_config.logical_block_size);
+        let mut header_buffer = vec![0u8; header_buffer_size as usize];
 
         let start = std::time::Instant::now();
         self.read_into_buffer(
             self.max_write_size,
             base_lba,
-            &mut header_data,
+            &mut header_buffer,
             &self.nvme_config,
         )?;
-        let header = Bytes::from(header_data);
+        let header = Bytes::copy_from_slice(&header_buffer[0..HEADER_SIZE as usize]);
 
+        // Data buffer - size is already validated to be aligned
         let mut data_buffer = vec![0u8; size as usize];
 
         // Calculate LBA offset for the data read
@@ -979,13 +981,13 @@ impl Device for BlockInterface {
         Ok((header, data))
     }
 
-    fn evict(self: Arc<Self>, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>) -> io::Result<()> {
+    fn evict(self: Arc<Self>, cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>, always_evict: bool) -> io::Result<()> {
         let usage = self.get_use_percentage();
         METRICS.update_metric_gauge("usage_percentage", usage as f64);
 
         let targets = {
             let mut policy = eviction_policy.lock().unwrap();
-            policy.get_evict_targets(false)
+            policy.get_evict_targets(false, always_evict)
         };
 
         match targets {

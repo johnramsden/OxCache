@@ -71,13 +71,13 @@ impl EvictionPolicyWrapper {
         }
     }
 
-    pub fn get_evict_targets(&mut self, get_clean_targets: bool) -> EvictTarget {
+    pub fn get_evict_targets(&mut self, get_clean_targets: bool, always_evict: bool) -> EvictTarget {
         match self {
             EvictionPolicyWrapper::Promotional(promotional) => {
-                EvictTarget::Zone(promotional.get_evict_targets())
+                EvictTarget::Zone(promotional.get_evict_targets(always_evict))
             }
             EvictionPolicyWrapper::Chunk(c) => {
-                let et = c.get_evict_targets();
+                let et = c.get_evict_targets(always_evict);
                 let ct = if get_clean_targets {
                     Some(c.get_clean_targets())
                 } else { None };
@@ -93,7 +93,7 @@ pub trait EvictionPolicy: Send + Sync {
 
     fn write_update(&mut self, chunk: ChunkLocation);
     fn read_update(&mut self, chunk: ChunkLocation);
-    fn get_evict_targets(&mut self) -> Self::Target;
+    fn get_evict_targets(&mut self, always_evict: bool) -> Self::Target;
 
     fn get_clean_targets(&mut self) -> Self::CleanTarget;
 }
@@ -149,14 +149,20 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         }
     }
 
-    fn get_evict_targets(&mut self) -> Self::Target {
+    fn get_evict_targets(&mut self, always_evict: bool) -> Self::Target {
         let lru_len = self.lru.len() as Zone;
         let high_water_mark = self.nr_zones - self.high_water;
-        if lru_len < high_water_mark {
+        if !always_evict && lru_len < high_water_mark {
             return vec![];
         }
 
         let low_water_mark = self.nr_zones - self.low_water;
+
+        // Prevent underflow when lru_len < low_water_mark
+        if lru_len < low_water_mark {
+            return vec![];
+        }
+
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
@@ -218,16 +224,22 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         }
     }
 
-    fn get_evict_targets(&mut self) -> Self::Target {
+    fn get_evict_targets(&mut self, always_evict: bool) -> Self::Target {
         let lru_len = self.lru.len() as Chunk;
         let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
         let high_water_mark = nr_chunks - self.high_water;
 
-        if lru_len < high_water_mark {
+        if !always_evict && lru_len < high_water_mark {
             return vec![];
         }
 
         let low_water_mark = nr_chunks - self.low_water;
+
+        // Prevent underflow when lru_len < low_water_mark
+        if lru_len < low_water_mark {
+            return vec![];
+        }
+
         let cap = lru_len - low_water_mark;
 
         let mut targets = Vec::with_capacity(cap as usize);
@@ -302,14 +314,14 @@ impl Evictor {
 
         let handle = thread::spawn(move || {
             while !shutdown_clone.load(Ordering::Relaxed) {
-                let sender = match evict_rx.recv_timeout(evict_interval) {
+                let (sender, always_evict) = match evict_rx.recv_timeout(evict_interval) {
                     Ok(s) => {
                         tracing::debug!("Received immediate eviction request");
-                        Some(s.sender)
+                        (Some(s.sender), true)
                     }
                     Err(flume::RecvTimeoutError::Timeout) => {
                         tracing::debug!("Timer eviction");
-                        None
+                        (None, false)
                     }
                     Err(flume::RecvTimeoutError::Disconnected) => {
                         tracing::debug!("Disconnected");
@@ -319,7 +331,7 @@ impl Evictor {
 
                 let device_clone = device_clone.clone();
                 let eviction_start = std::time::Instant::now();
-                let result = match device_clone.evict(cache_clone.clone(), writer_pool.clone(), eviction_policy_clone.clone()) {
+                let result = match device_clone.evict(cache_clone.clone(), writer_pool.clone(), eviction_policy_clone.clone(), always_evict) {
                     Err(e) => {
                         Err(e.to_string())
                     }
@@ -328,7 +340,7 @@ impl Evictor {
                     },
                 };
                 let eviction_duration = eviction_start.elapsed();
-                tracing::info!("[Eviction] Total eviction took {:?}", eviction_duration);
+                tracing::debug!("[Eviction] Total eviction took {:?}", eviction_duration);
 
                 if let Some(sender) = sender {
                     tracing::debug!("Sending eviction response to sender: {:?}", result);
@@ -416,7 +428,7 @@ mod tests {
         // zone=[_,_,(1,0),_], lru=((1,0))
         compare_order(&mut policy.lru, &order);
 
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         let expect_none: VecDeque<ChunkLocation> = VecDeque::new();
         assert_eq!(
             expect_none, et,
@@ -429,7 +441,7 @@ mod tests {
         // zone=[_,_,(1,0),(1,1)], lru=((1,0),(1,1))
         order.push_front(c);
         compare_order(&mut policy.lru, &order);
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         assert_eq!(
             expect_none, et,
             "Expected = {:?}, but got {:?}",
@@ -443,7 +455,7 @@ mod tests {
         let c = order.pop_back().unwrap();
         order.push_front(c);
         compare_order(&mut policy.lru, &order);
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         assert_eq!(
             expect_none, et,
             "Expected = {:?}, but got {:?}",
@@ -455,7 +467,7 @@ mod tests {
         // zone=[(0,0),_,(1,0),(1,1)], lru=((1,0),(1,1),(0,0))
         order.push_front(c);
         compare_order(&mut policy.lru, &order);
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         let order = order
             .clone()
             .into_iter()
@@ -472,7 +484,7 @@ mod tests {
         let mut order: VecDeque<Zone> = VecDeque::new();
         policy.write_update(ChunkLocation::new(3, 0));
         compare_order(&mut policy.lru, &order);
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         let expect_none: Vec<Zone> = vec![];
         assert_eq!(
             expect_none, et,
@@ -485,7 +497,7 @@ mod tests {
         // zone=[_,_,_,3], lru=(3)
         order.push_back(3);
         compare_order(&mut policy.lru, &order);
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         assert_eq!(
             expect_none, et,
             "Expected = {:?}, but got {:?}",
@@ -501,7 +513,7 @@ mod tests {
         // zone=[_,1,_,3], lru=(3, 1)
         order.push_front(1);
         compare_order(&mut policy.lru, &order);
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         assert_eq!(
             expect_none, et,
             "Expected = {:?}, but got {:?}",
@@ -521,7 +533,7 @@ mod tests {
         // zone=[_,1,2,3], lru=(1, 2, 3)
         compare_order(&mut policy.lru, &order);
 
-        let et = policy.get_evict_targets();
+        let et = policy.get_evict_targets(false);
         let expect = VecDeque::from(vec![1, 2, 3]);
         assert_eq!(expect, et, "Expected = {:?}, but got {:?}", expect, et);
 
@@ -540,7 +552,7 @@ mod tests {
             }
         }
 
-        let got = policy.get_evict_targets().len();
+        let got = policy.get_evict_targets(false).len();
         assert_eq!(4, got, "Expected 4, but got {}", got);
 
         let got = policy.get_clean_targets().len();
@@ -584,7 +596,7 @@ mod tests {
         // This will evict 500 chunks and mark zones for potential cleaning
         println!("Triggering evictions to populate priority queue...");
         let evict_start = std::time::Instant::now();
-        let evicted = policy.get_evict_targets();
+        let evicted = policy.get_evict_targets(false);
         let evict_duration = evict_start.elapsed();
         println!("Evicted {} chunks in {:?}", evicted.len(), evict_duration);
 
@@ -618,7 +630,7 @@ mod tests {
 
         // Trigger evictions to populate priority queue for scenario 2
         let evict2_start = std::time::Instant::now();
-        let evicted2 = policy.get_evict_targets();
+        let evicted2 = policy.get_evict_targets(false);
         let evict2_duration = evict2_start.elapsed();
         println!("Second eviction: {} chunks in {:?}", evicted2.len(), evict2_duration);
 
@@ -650,7 +662,7 @@ mod tests {
 
         // Trigger evictions for scenario 3
         let evict3_start = std::time::Instant::now();
-        let evicted3 = policy.get_evict_targets();
+        let evicted3 = policy.get_evict_targets(false);
         let evict3_duration = evict3_start.elapsed();
         println!("Third eviction: {} chunks in {:?}", evicted3.len(), evict3_duration);
 
