@@ -430,7 +430,6 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_counter("hit", 1);
                                     METRICS.update_hitratio(HitType::Hit);
                                     METRICS.update_metric_counter("written_bytes_total", chunk.size);
-                                    METRICS.update_metric_counter("bytes_total", chunk.size);
                                     tracing::debug!("REQ[{}] CACHE HIT completed successfully", request_id);
                                     Ok(())
                                 }
@@ -513,7 +512,6 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_histogram_latency("get_miss_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_hitratio(HitType::Miss);
                                     METRICS.update_metric_counter("read_bytes_total", chunk_size);
-                                    METRICS.update_metric_counter("bytes_total", chunk_size);
                                     tracing::debug!("REQ[{}] CACHE MISS completed successfully", request_id);
                                     Ok(write_response)
                                 }
@@ -523,6 +521,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                             std::io::Error::new(std::io::ErrorKind::Other, format!("cache.get_or_insert_with failed: {}", e))
                         })?;
                         tracing::debug!("REQ[{}] Request completed successfully", request_id);
+                        METRICS.update_metric_counter("bytes_total", chunk_size);
                     }
                     request::Request::Close => {
                         tracing::debug!("Received close request");
