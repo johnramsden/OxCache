@@ -4,3 +4,6 @@
 [submodule "vendor/workloadgen"]
 	path = vendor/workloadgen
 	url = git@github.com:johnramsden/OxCache-YCSB.git
+[submodule "vendor/OxCache-WiredTiger-Trace"]
+	path = vendor/OxCache-WiredTiger-Trace
+	url = https://github.com/johnramsden/OxCache-WiredTiger-Trace
