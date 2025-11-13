@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-Script to plot throughput metrics from counter-based data (bytes_total, etc.)
-Uses a bucket approach to calculate throughput over specified time intervals.
+Script to create boxplot visualizations for latency metrics.
+Processes latency data directly without throughput calculations.
 """
 
 import json
 import sys
 import argparse
-import pickle
-import hashlib
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -47,48 +44,16 @@ def parse_timestamp(timestamp_str):
     return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
 
 
-def calculate_throughput(data_points, bucket_seconds):
-    """Calculate throughput from counter data using time buckets."""
-    if len(data_points) < 2:
-        return [], []
+def extract_latency_values(data_points):
+    """Extract latency values from data points (no calculation needed)."""
+    if len(data_points) < 1:
+        return []
     
-    # Sort by timestamp
+    # Sort by timestamp and extract just the values
     data_points.sort(key=lambda x: x[0])
+    latency_values = [value for _, value in data_points]
     
-    start_time = data_points[0][0]
-    bucket_duration = timedelta(seconds=bucket_seconds)
-    
-    buckets = defaultdict(list)
-    
-    # Group data points into time buckets
-    for timestamp, value in data_points:
-        bucket_index = int((timestamp - start_time).total_seconds() // bucket_seconds)
-        buckets[bucket_index].append((timestamp, value))
-    
-    timestamps = []
-    throughputs = []
-    
-    # Calculate throughput for each bucket
-    for bucket_index in sorted(buckets.keys()):
-        bucket_data = buckets[bucket_index]
-        if len(bucket_data) < 2:
-            continue
-            
-        # Get first and last values in bucket
-        bucket_data.sort(key=lambda x: x[0])
-        start_ts, start_val = bucket_data[0]
-        end_ts, end_val = bucket_data[-1]
-        
-        # Calculate throughput (bytes per second)
-        time_diff = (end_ts - start_ts).total_seconds()
-        if time_diff > 0:
-            throughput = (end_val - start_val) / time_diff
-            # Use middle of bucket as timestamp
-            bucket_time = start_time + timedelta(seconds=(bucket_index + 0.5) * bucket_seconds)
-            timestamps.append(bucket_time)
-            throughputs.append(throughput)
-    
-    return timestamps, throughputs
+    return latency_values
 
 
 def normalize_filename(filename):
@@ -99,125 +64,8 @@ def normalize_filename(filename):
     return normalized
 
 
-def get_cache_filename(metric_file, bucket_seconds):
-    """Generate a cache filename based on the metric file path and parameters."""
-    # Create a hash of the file path and parameters for unique cache naming
-    cache_key = f"{metric_file}_{bucket_seconds}"
-    hash_obj = hashlib.md5(cache_key.encode())
-    cache_dir = Path(".cache")
-    cache_dir.mkdir(exist_ok=True)
-    return cache_dir / f"throughput_cache_{hash_obj.hexdigest()}.pkl"
-
-
-def load_cached_data(cache_file, metric_file):
-    """Load cached throughput data if it exists and is newer than the source file."""
-    if not cache_file.exists():
-        return None
-    
-    try:
-        # Check if cache is newer than source file
-        cache_mtime = cache_file.stat().st_mtime
-        source_mtime = metric_file.stat().st_mtime
-        
-        if cache_mtime < source_mtime:
-            print(f"  Cache expired for {metric_file.name}, regenerating...")
-            return None
-        
-        print(f"  Loading cached data for {metric_file.name}...")
-        with open(cache_file, 'rb') as f:
-            cached_data = pickle.load(f)
-        return cached_data
-        
-    except Exception as e:
-        print(f"  Error loading cache for {metric_file.name}: {e}")
-        return None
-
-
-def save_cached_data(cache_file, data):
-    """Save processed data to cache file."""
-    try:
-        cache_file.parent.mkdir(exist_ok=True)
-        with open(cache_file, 'wb') as f:
-            pickle.dump(data, f)
-        print(f"  Cached data saved to {cache_file}")
-    except Exception as e:
-        print(f"  Error saving cache: {e}")
-
-
-def process_metric_file_with_cache(metric_file, bucket_seconds, force_refresh=False):
-    """Process a metric file with caching support."""
-    cache_file = get_cache_filename(metric_file, bucket_seconds)
-    
-    # Try to load from cache first (unless force refresh is requested)
-    if not force_refresh:
-        cached_data = load_cached_data(cache_file, metric_file)
-        if cached_data is not None:
-            return cached_data
-    
-    print(f"  Processing {metric_file.name}...")
-    
-    # Read and process data points
-    data_points = []
-    try:
-        with open(metric_file, 'r') as f:
-            content = f.read()
-        
-        lines = content.strip().split('\n')
-        data_points = [None] * len(lines)  # Pre-allocate list size
-        valid_count = 0
-        
-        for line in lines:
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                timestamp = parse_timestamp(data['timestamp'])
-                value = float(data['fields']['value'])
-                data_points[valid_count] = (timestamp, value)
-                valid_count += 1
-            except (json.JSONDecodeError, KeyError, ValueError):
-                continue
-        
-        # Trim the list to actual valid data
-        data_points = data_points[:valid_count]
-    except Exception as e:
-        print(f"  Error reading {metric_file}: {e}")
-        return None
-    
-    if len(data_points) < 2:
-        print(f"  Not enough data points in {metric_file}")
-        return None
-    
-    # Calculate throughput
-    timestamps, throughputs = calculate_throughput(data_points, bucket_seconds)
-    
-    if not timestamps or not throughputs:
-        print(f"  No throughput data calculated for {metric_file}")
-        return None
-    
-    # Convert timestamps to minutes from start using numpy for speed
-    start_time = timestamps[0]
-    timestamps_array = np.array([(t - start_time).total_seconds() / 60 for t in timestamps])
-    throughputs_array = np.array(throughputs)
-    
-    # Create result data structure
-    result_data = {
-        'timestamps': timestamps_array,
-        'throughputs': throughputs_array,
-        'start_time': start_time,
-        'data_points_count': len(data_points),
-        'bucket_seconds': bucket_seconds,
-        'processed_time': datetime.now()
-    }
-    
-    # Save to cache
-    save_cached_data(cache_file, result_data)
-    
-    return result_data
-
-
-def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_dir, labels=None, force_refresh=False):
-    """Plot throughput for a specific metric, comparing across directories if multiple provided."""
+def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
+    """Plot latency boxplots for a specific metric, comparing across directories if multiple provided."""
     # Handle single directory case (backward compatibility)
     if isinstance(split_data_dirs, (str, Path)):
         split_data_dirs = [split_data_dirs]
@@ -252,7 +100,7 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
             if normalized in map_files:
                 all_data_dirs[normalized].append((data_dir, extract_experiment_info(map_files[normalized])))
 
-    all_throughputs_data = []  # Store all throughput data to determine common scale
+    all_latencies_data = []  # Store all latency data
         
     print(all_data_dirs)
 
@@ -265,56 +113,71 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
             print(f"Warning: {metric_file} not found, skipping")
             continue
 
-        # Use cached processing function
-        cached_result = process_metric_file_with_cache(metric_file, bucket_seconds, force_refresh)
-        
-        if cached_result is None:
+        print(f"Processing {metric_file}...")
+
+        # Read data points - optimized file reading
+        data_points = []
+        try:
+            with open(metric_file, 'r') as f:
+                content = f.read()
+            
+            lines = content.strip().split('\n')
+            data_points = [None] * len(lines)  # Pre-allocate list size
+            valid_count = 0
+            
+            for line in lines:
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    timestamp = parse_timestamp(data['timestamp'])
+                    value = float(data['fields']['value'])
+                    data_points[valid_count] = (timestamp, value)
+                    valid_count += 1
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
+            
+            # Trim the list to actual valid data
+            data_points = data_points[:valid_count]
+        except Exception as e:
+            print(f"Error reading {metric_file}: {e}")
+            continue
+
+        if len(data_points) < 2:
+            print(f"Not enough data points in {metric_file}")
+            continue
+
+        # Extract latency values (no calculation needed)
+        latency_values = extract_latency_values(data_points)
+
+        if not latency_values:
+            print(f"No latency values for {metric_file}")
             continue
         
-        timestamps_array = cached_result['timestamps']
-        throughputs_array = cached_result['throughputs']
-        all_throughputs_data.append((timestamps_array, throughputs_array, i, info))
+        # Convert to numpy array for efficiency
+        latency_array = np.array(latency_values)
+        all_latencies_data.append((None, latency_array, i, info))  # No timestamps needed
         
-    # Determine common scale based on maximum throughput across all datasets - optimized
-    max_throughput = max(np.max(throughputs) for _, throughputs, _, _ in all_throughputs_data)
-
-    ylabel=""
-    unit_divisor=1
-    if 'bytes' in metric_name.lower():
-        # Determine best common unit based on overall maximum
-        if max_throughput >= 1024 * 1024 * 1024:  # >= 1 GiB/s
-            unit_divisor = 1024 * 1024 * 1024
-            ylabel = "Throughput (GiB/s)"
-        elif max_throughput >= 1024 * 1024:  # >= 1 MiB/s
-            unit_divisor = 1024 * 1024
-            ylabel = "Throughput (MiB/s)"
-        elif max_throughput >= 1024:  # >= 1 KiB/s
-            unit_divisor = 1024
-            ylabel = "Throughput (KiB/s)"
-        else:
-            unit_divisor = 1
-            ylabel = "Throughput (B/s)"
-    else:
-        unit_divisor = 1
-        ylabel = "Throughput (units/s)"
-
+    # For latency, no scaling needed - keep in milliseconds
+    ylabel = "Latency (ms)"
     
-    scaled_throughputs = [(a, t / unit_divisor, c, d) for (a, t, c, d) in all_throughputs_data]
+    # No scaling needed for latency data
+    scaled_latencies = [(a, t, c, d) for (a, t, c, d) in all_latencies_data]
     
     # Organize data by experiment configuration (chunk_size, distribution, ratio)
     experiment_configs = {}
     
-    for (time, tp, i, info) in scaled_throughputs:
+    for (time, latencies, i, info) in scaled_latencies:
         # Create key from chunk size, distribution, and ratio
         key = (info['chunk_size_bytes'], info['distribution'], info['ratio'])
         if key not in experiment_configs:
             experiment_configs[key] = {'ZNS': [], 'Block': []}
         
-        # Add throughput data based on interface type - use numpy arrays
+        # Add latency data based on interface type
         if info['interface'] == 'ZNS':
-            experiment_configs[key]['ZNS'] = tp.tolist()  # Convert back to list for boxplot
+            experiment_configs[key]['ZNS'] = latencies.tolist()  # Convert back to list for boxplot
         elif info['interface'] == 'Block':
-            experiment_configs[key]['Block'] = tp.tolist()  # Convert back to list for boxplot
+            experiment_configs[key]['Block'] = latencies.tolist()  # Convert back to list for boxplot
 
     # Create subplots
     import matplotlib.patches as mpatches
@@ -394,10 +257,30 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
         frameon=False  # Remove legend frame
     )
     
-    plt.savefig(f'throughput_boxplots_{metric_name}.png', dpi=300, bbox_inches='tight')
+    # Set common y-label
+    # fig.text(0.04, 0.5, ylabel, va='center', rotation='vertical', fontsize=16)
+
+    plt.savefig(f'latency_boxplots_{metric_name}.png', dpi=300, bbox_inches='tight')
     plt.show()
     
     return
+
+    
+        #     plt.xlabel('Time (minutes)')
+        #     plt.ylabel(ylabel)
+        #     plt.grid(True, alpha=0.3)
+            
+        #     if len(dir_label_pairs) > 1:
+        #         plt.legend()
+            
+        #     plt.tight_layout()
+            
+        #     # Save plot
+        #     output_file = output_path / f"{normalized_name}_{metric_name}_throughput.png"
+        #     plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)
+        #     print(f"Saved plot to {output_file}")
+        
+        # plt.close()
 
 def extract_experiment_info(filename):
     """Extract experiment parameters from filename."""
@@ -524,31 +407,27 @@ def GenerateGraph(runfile, data, analysis, title, scale, genpdf_name):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Plot throughput metrics from split data')
+    parser = argparse.ArgumentParser(description='Create latency boxplots from split data')
     parser.add_argument('split_data_dirs', nargs='+', help='Directory(s) containing split data output')
-    parser.add_argument('--bucket-seconds', '-b', type=int, default=60,
-                       help='Time bucket size in seconds (default: 60)')
     parser.add_argument('--output-dir', '-o', default='plots',
                        help='Output directory for plots (default: plots)')
     parser.add_argument('--metrics', '-m', nargs='+', 
-                       default=['bytes_total'],
-                       help='Metrics to plot (default: bytes_total written_bytes_total)')
+                       default=['get_total_latency_ms', 'device_write_latency_ms', 'device_read_latency_ms'],
+                       help='Latency metrics to plot')
     parser.add_argument('--labels', '-l', nargs='+',
                        help='Labels for each directory (must match number of directories)')
-    parser.add_argument('--force-refresh', '--no-cache', action='store_true',
-                       help='Force refresh cache, ignore existing cached data')
     
     args = parser.parse_args()
     
     if len(args.split_data_dirs) == 1:
-        print(f"Plotting throughput metrics with {args.bucket_seconds}s buckets...")
+        print(f"Plotting latency metrics...")
     else:
-        print(f"Comparing throughput metrics across {len(args.split_data_dirs)} datasets with {args.bucket_seconds}s buckets...")
+        print(f"Comparing latency metrics across {len(args.split_data_dirs)} datasets...")
     
     for metric in args.metrics:
         print(f"\nPlotting {metric}...")
 
-        plot_metric_throughput(args.split_data_dirs, metric, args.bucket_seconds, args.output_dir, args.labels, args.force_refresh)
+        plot_metric_latency(args.split_data_dirs, metric, args.output_dir, args.labels)
     
     print(f"\nAll plots saved to {args.output_dir}/")
 
