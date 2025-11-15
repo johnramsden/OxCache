@@ -68,7 +68,6 @@ pub enum SPCOperation {
 #[derive(Debug, Clone)]
 pub struct SPCTrace {
     pub records: Vec<SPCRecord>,
-    pub total_records: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +107,6 @@ impl SPCTrace {
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
-            total_records: 0,
         }
     }
 
