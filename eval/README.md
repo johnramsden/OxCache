@@ -151,7 +151,12 @@ All plotting scripts:
 For convenience, use the automated shell script to generate all plots:
 
 ```bash
-./generate_all_plots.sh
+./generate_all_plots.sh <zoned_dir> <block_dir>
+```
+
+Example:
+```bash
+./generate_all_plots.sh data/ZONED-PROMO data/BLOCK-PROMO
 ```
 
 This script will:

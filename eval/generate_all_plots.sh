@@ -5,15 +5,54 @@
 
 set -e  # Exit on any error
 
+# Display usage information
+usage() {
+    cat << EOF
+Usage: $0 <zoned_dir> <block_dir>
+
+Arguments:
+  zoned_dir    Path to the zoned (ZNS) data directory
+  block_dir    Path to the block interface data directory
+
+Example:
+  $0 data/ZONED-PROMO data/BLOCK-PROMO
+
+EOF
+    exit 1
+}
+
+# Check if required arguments are provided
+if [ $# -ne 2 ]; then
+    echo "Error: Missing required arguments"
+    echo ""
+    usage
+fi
+
+ZONED_DIR="$1"
+BLOCK_DIR="$2"
+
+# Validate that directories exist
+if [ ! -d "$ZONED_DIR" ]; then
+    echo "Error: Zoned directory does not exist: $ZONED_DIR"
+    exit 1
+fi
+
+if [ ! -d "$BLOCK_DIR" ]; then
+    echo "Error: Block directory does not exist: $BLOCK_DIR"
+    exit 1
+fi
+
 echo "=== OxCache Evaluation Plot Generation ==="
+echo ""
+echo "Configuration:"
+echo "  Zoned directory: $ZONED_DIR"
+echo "  Block directory: $BLOCK_DIR"
 echo ""
 
 # Configuration
 BUCKET_SECONDS=60
 WINDOW_SECONDS=60
 OUTPUT_DIR="plots"
-ZONED_DIR="data/ZONED-PROMO"
-BLOCK_DIR="data/BLOCK-PROMO"
 ZONED_SPLIT_DIR="${ZONED_DIR}/split_output"
 BLOCK_SPLIT_DIR="${BLOCK_DIR}/split_output"
 
