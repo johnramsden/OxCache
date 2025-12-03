@@ -440,10 +440,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
 
     # Add legend at bottom
     legend_patches = [
-        mpatches.Patch(facecolor='lightcoral', label='Zoned Zone-LRU', alpha=0.7),
-        mpatches.Patch(facecolor='lightcoral', hatch='///', label='Zoned Chunk-LRU', alpha=0.7),
-        mpatches.Patch(facecolor='lightblue', label='Block Zone-LRU', alpha=0.7),
-        mpatches.Patch(facecolor='lightblue', hatch='///', label='Block Chunk-LRU', alpha=0.7),
+        mpatches.Patch(facecolor='lightcoral', label='ZNS (Zone LRU)', alpha=0.7),
+        mpatches.Patch(facecolor='lightcoral', hatch='///', label='ZNS (Chunk LRU)', alpha=0.7),
+        mpatches.Patch(facecolor='lightblue', label='Block (Zone LRU)', alpha=0.7),
+        mpatches.Patch(facecolor='lightblue', hatch='///', label='Block (Chunk LRU)', alpha=0.7),
     ]
 
     fig.legend(
