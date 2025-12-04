@@ -51,13 +51,13 @@ def normalize_filename(filename):
     return normalized
 
 
-def filter_last_n_minutes(timestamps, values, minutes=2):
+def filter_last_n_minutes(timestamps, values, minutes=5):
     """Filter out the last N minutes of data from a workload.
 
     Args:
         timestamps: List of datetime objects
         values: List of values corresponding to timestamps
-        minutes: Number of minutes to filter from the end (default: 2)
+        minutes: Number of minutes to filter from the end (default: 5)
 
     Returns:
         tuple: (filtered_timestamps, filtered_values)
@@ -168,8 +168,8 @@ def calculate_chunk_global_max_latency(normalized_groups, metric_name):
                 continue
 
             if timestamps and values:
-                # Filter last 2 minutes
-                filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=2)
+                # Filter last 5 minutes
+                filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
                 if filtered_values:
                     all_values.extend(filtered_values)
 
@@ -223,8 +223,8 @@ def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir
             print(f"No valid data points in {metric_file}")
             continue
 
-        # Filter last 2 minutes
-        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=2)
+        # Filter last 5 minutes
+        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
 
         if not filtered_timestamps or not filtered_values:
             print(f"No data remaining after filtering for {metric_file}")

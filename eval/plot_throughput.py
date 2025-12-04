@@ -97,13 +97,13 @@ def normalize_filename(filename):
     return normalized
 
 
-def filter_last_n_minutes(timestamps, values, minutes=2):
+def filter_last_n_minutes(timestamps, values, minutes=5):
     """Filter out the last N minutes of data from a workload.
 
     Args:
         timestamps: List of datetime objects
         values: List of values corresponding to timestamps
-        minutes: Number of minutes to filter from the end (default: 2)
+        minutes: Number of minutes to filter from the end (default: 5)
 
     Returns:
         tuple: (filtered_timestamps, filtered_values)
@@ -239,8 +239,8 @@ def calculate_chunk_global_max_throughput(normalized_groups, metric_name, bucket
             timestamps = [t for t, v in data_points]
             values = [v for t, v in data_points]
 
-            # Filter last 2 minutes
-            filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=2)
+            # Filter last 5 minutes
+            filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
 
             if len(filtered_timestamps) < 2:
                 continue
@@ -306,8 +306,8 @@ def plot_throughput_group(normalized_name, dir_label_pairs, metric_name,
         timestamps = [t for t, v in data_points]
         values = [v for t, v in data_points]
 
-        # Filter last 2 minutes
-        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=2)
+        # Filter last 5 minutes
+        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
 
         if len(filtered_timestamps) < 2:
             print(f"Not enough data points after filtering in {metric_file}")

@@ -107,6 +107,52 @@ def parse_directory_name(dirname):
         return None
 
 
+def filter_last_n_minutes(timestamps, values, minutes=5):
+    """Filter out the last N minutes of data from a workload.
+
+    Args:
+        timestamps: List of datetime strings (ISO format)
+        values: List of values corresponding to timestamps
+        minutes: Number of minutes to filter from the end (default: 5)
+
+    Returns:
+        tuple: (filtered_timestamps, filtered_values)
+    """
+    from datetime import datetime, timedelta
+
+    if not timestamps or not values:
+        return timestamps, values
+
+    # Parse timestamps to datetime objects
+    parsed_times = []
+    for ts in timestamps:
+        try:
+            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            parsed_times.append(dt)
+        except:
+            parsed_times.append(None)
+
+    # Find the last valid timestamp
+    valid_times = [t for t in parsed_times if t is not None]
+    if not valid_times:
+        return timestamps, values
+
+    max_time = max(valid_times)
+    cutoff_time = max_time - timedelta(minutes=minutes)
+
+    # Filter data points before cutoff
+    filtered_data = []
+    for ts, parsed_ts, val in zip(timestamps, parsed_times, values):
+        if parsed_ts is not None and parsed_ts <= cutoff_time:
+            filtered_data.append((ts, val))
+
+    if not filtered_data:
+        return [], []
+
+    filtered_timestamps, filtered_values = zip(*filtered_data)
+    return list(filtered_timestamps), list(filtered_values)
+
+
 def load_json_data(filepath, sample_size=None, include_timestamps=False):
     """
     Load JSON Lines data and extract values.
@@ -309,10 +355,15 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
                             if metric == "throughput":
                                 # Load with timestamps and calculate throughput in 60-second bins
                                 ts, vals = load_json_data(data_file, sample_size, include_timestamps=True)
+                                # Filter last 5 minutes BEFORE calculating throughput
+                                ts, vals = filter_last_n_minutes(ts, vals, minutes=5)
                                 throughput = calculate_throughput_bins(ts, vals, bin_seconds=60)
                                 current_data.append([v * scale for v in throughput])
                             else:
-                                vals = load_json_data(data_file, sample_size)
+                                # Load latency data with timestamps
+                                ts, vals = load_json_data(data_file, sample_size, include_timestamps=True)
+                                # Filter last 5 minutes
+                                ts, vals = filter_last_n_minutes(ts, vals, minutes=5)
                                 current_data.append([v * scale for v in vals])
 
                             # Add styling info
