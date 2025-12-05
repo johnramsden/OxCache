@@ -18,46 +18,48 @@ cleanup() {
         kill "$SERVER_PID"
         wait "$SERVER_PID" 2>/dev/null || true
     fi
-    if [ -n "$PIDSTAT_PID" ] && kill -0 "$PIDSTAT_PID" 2>/dev/null; then
-        echo "Cleaning up pidstat PID $PIDSTAT_PID"
-        kill "$PIDSTAT_PID"
-        wait "$PIDSTAT_PID" 2>/dev/null || true
-    fi
+#    if [ -n "$PIDSTAT_PID" ] && kill -0 "$PIDSTAT_PID" 2>/dev/null; then
+#        echo "Cleaning up pidstat PID $PIDSTAT_PID"
+#        kill "$PIDSTAT_PID"
+#        wait "$PIDSTAT_PID" 2>/dev/null || true
+#    fi
 }
 
 # Set trap to cleanup on script exit
 trap cleanup EXIT INT TERM
 
 usage() {
-    printf "Usage: %s CONFIGFILE DEVICE\n" "$(basename "$0")"
+    printf "Usage: %s TRACE CONFIGFILE DEVICE\n" "$(basename "$0")"
     exit 1
 }
 
 # Check that exactly 4 positional arguments remain
-if [ "$#" -ne 4 ]; then
-    echo "Illegal number of parameters $#, should be 3"
+if [ "$#" -ne 3 ]; then
+    echo "Illegal number of parameters $#, should be 2"
     usage
 fi
 
-configfile="$1"
-device="$2"
+trace="$(realpath "$1")"
+configfile="$2"
+device="$3"
 
 echo "Logging to: ./logs"
 echo "Configfile: $configfile"
+echo "Trace: $trace"
 echo "Device: $device"
+
+if ! [ -f "$trace" ]; then
+    echo "ERROR: Trace '$trace' not found"
+    exit 1
+fi
 
 ret=0
 
 # Loop through all files in the directory
-for file in "$directory"/*.bin; do
-    # Check if it's a file (not a directory)
-    if ! [ -f "$file" ]; then
-        echo "ERROR: no such file '$file', skipping"
-        continue
-    fi
-    filename=$(basename ${file})
+for tracecfg in "${workloads[@]}"; do
+
     # Split the filename into an array using comma as the delimiter
-    IFS=, read -ra params <<< "${filename%.*}"
+    IFS=, read -ra params <<< "${tracecfg%.*}"
 
     # Iterate over each key-value pair
     for param in "${params[@]}"; do
@@ -120,7 +122,7 @@ for file in "$directory"/*.bin; do
         --low-water-evict="$evict_low" \
         --log-level=info \
         "$([ "$latency" -ne 0 ] && echo "--remote-artificial-delay-microsec=$latency")" \
-        --disk="$device" $clean_args | tee -a "evict_bench.log"
+        --disk="$device" $clean_args
 
     # --max-zones="${n_zones}" \
      ./target/release/oxcache --config="$configfile" \
@@ -135,23 +137,22 @@ for file in "$directory"/*.bin; do
 
      sleep 30s
 
-    # Start pidstat to monitor CPU and memory usage
-    pidstat -u -r 1 -p "${SERVER_PID}" > "$runfile.pidstat" &
-    PIDSTAT_PID=$!
+#    # Start pidstat to monitor CPU and memory usage
+#    pidstat -u -r 1 -p "${SERVER_PID}" > "$runfile.pidstat" &
+#    PIDSTAT_PID=$!
 
-    ./target/release/spcclient \
-      --trace-file="$file" \
-      --chunk-size="$chunk_size" \
+    ./target/release/spclient \
+      --trace-file="$trace" \
       --mode="real" \
       --socket /tmp/oxcache.sock \
       --max-requests=100 \
       --num-clients="$t" \
-      --query-size="$chunk_size" >> "$runfile.client"
+      --chunk-size="$chunk_size" >> "$runfile.client"
     ret=$?
 
-    # Stop pidstat monitoring
-    kill "$PIDSTAT_PID" 2>/dev/null || true
-    wait "$PIDSTAT_PID" 2>/dev/null || true
+#    # Stop pidstat monitoring
+#    kill "$PIDSTAT_PID" 2>/dev/null || true
+#    wait "$PIDSTAT_PID" 2>/dev/null || true
 
     kill -9 "$(pidof oxcache)" || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -166,8 +167,8 @@ for file in "$directory"/*.bin; do
 
     sleep 10s
 
-    tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
-    rm -rf ./logs/*
+#    tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
+#    rm -rf ./logs/*
 
 done
 
