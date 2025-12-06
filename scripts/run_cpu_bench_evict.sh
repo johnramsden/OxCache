@@ -3,6 +3,8 @@
 
 set -e
 
+ulimit -n 65535
+
 # Get the directory in which this script is located:
 SCRIPT_DIR="$(cd "$(dirname "$0")" || exit 1; pwd)"
 
@@ -24,21 +26,23 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 usage() {
-    printf "Usage: %s WORKLOAD_DIR CONFIGFILE DEVICE\n" "$(basename "$0")"
+    printf "Usage: %s WORKLOAD_DIR NR_THREADS CONFIGFILE DEVICE\n" "$(basename "$0")"
     exit 1
 }
 
 # Check that exactly 4 positional arguments remain
-if [ "$#" -ne 3 ]; then
-    echo "Illegal number of parameters $#, should be 2"
+if [ "$#" -ne 4 ]; then
+    echo "Illegal number of parameters $#, should be 3"
     usage
 fi
 
 directory="$1"
-configfile="$2"
-device="$3"
+threads="$2"
+configfile="$3"
+device="$4"
 
 echo "Workload Directory: $directory"
+echo "Threads: $threads"
 echo "Logging to: ./logs"
 echo "Configfile: $configfile"
 echo "Device: $device"
@@ -80,7 +84,6 @@ for file in "$directory"/*.bin; do
         echo "Low water: $evict_low"
         echo "Eviction $eviction"
         echo "Device $device"
-        echo "Threads $t"
         if [ -n "$clean_high" ]; then
             echo "Clean High Water: $clean_high"
         fi
@@ -96,7 +99,7 @@ for file in "$directory"/*.bin; do
 
     if [ "$device" = "/dev/nvme1n1" ]; then
         echo "Pre-conditioning SSD"
-         "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
+        #  "${SCRIPT_DIR}/precondition-nvme1n1.sh" "${n_zones}"
     #    sudo blkdiscard -f /dev/nvme1n1
     fi
 
@@ -116,7 +119,7 @@ for file in "$directory"/*.bin; do
         --low-water-evict="$evict_low" \
         --log-level=info \
         "$([ "$latency" -ne 0 ] && echo "--remote-artificial-delay-microsec=$latency")" \
-        --disk="$device" $clean_args
+        --disk="$device" $clean_args | tee -a "evict_bench.log"
 
 #     --max-zones="${n_zones}" \
       ./target/release/oxcache --config="$configfile" \
@@ -125,6 +128,8 @@ for file in "$directory"/*.bin; do
           --high-water-evict="$evict_high" \
           --low-water-evict="$evict_low" \
           --log-level=info \
+          --benchmark-mode \
+          --benchmark-duration-secs=1800 \
           "$([ "$latency" -ne 0 ] && echo "--remote-artificial-delay-microsec=$latency")" \
           --disk="$device" $clean_args &>> "$runfile.server" &
       SERVER_PID=$!
@@ -138,7 +143,7 @@ for file in "$directory"/*.bin; do
     ./target/release/evaluationclient \
       --data-file="$file" \
       --socket /tmp/oxcache.sock \
-      --num-clients="$t" \
+      --num-clients="$threads" \
       --query-size="$chunk_size" >> "$runfile.client"
     ret=$?
 
@@ -155,11 +160,12 @@ for file in "$directory"/*.bin; do
         ret=1
     else
         tail -n3 "$runfile.client"
+        tail -n10 "$runfile.server" | tee -a "evict_bench.log"
     fi
 
     sleep 10s
 
-     tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
+    #  tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
      rm -rf ./logs/*
 
 done
