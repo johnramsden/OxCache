@@ -3,8 +3,8 @@ log_level = "info"
 [server]
 socket = "/tmp/oxcache.sock"
 disk = "/dev/nvme1n1"
-writer_threads = 14
-reader_threads = 14
+writer_threads = 64
+reader_threads = 64
 chunk_size = 65536
 block_zone_capacity = 1129316352
 max_write_size = 262144

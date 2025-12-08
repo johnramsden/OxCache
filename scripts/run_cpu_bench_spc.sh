@@ -8,9 +8,6 @@ ulimit -n 65535
 # Get the directory in which this script is located:
 SCRIPT_DIR="$(cd "$(dirname "$0")" || exit 1; pwd)"
 
-# Source workloads
-. "${SCRIPT_DIR}/spcconfigspace.sh"
-
 # Cleanup function to kill server if it's running
 cleanup() {
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -18,30 +15,29 @@ cleanup() {
         kill "$SERVER_PID"
         wait "$SERVER_PID" 2>/dev/null || true
     fi
-#    if [ -n "$PIDSTAT_PID" ] && kill -0 "$PIDSTAT_PID" 2>/dev/null; then
-#        echo "Cleaning up pidstat PID $PIDSTAT_PID"
-#        kill "$PIDSTAT_PID"
-#        wait "$PIDSTAT_PID" 2>/dev/null || true
-#    fi
 }
 
 # Set trap to cleanup on script exit
 trap cleanup EXIT INT TERM
 
 usage() {
-    printf "Usage: %s TRACE CONFIGFILE DEVICE\n" "$(basename "$0")"
+    printf "Usage: %s TRACE SPCCONFIGSPACE CONFIGFILE DEVICE\n" "$(basename "$0")"
     exit 1
 }
 
 # Check that exactly 4 positional arguments remain
-if [ "$#" -ne 3 ]; then
-    echo "Illegal number of parameters $#, should be 2"
+if [ "$#" -ne 4 ]; then
+    echo "Illegal number of parameters $#, should be 3"
     usage
 fi
 
 trace="$(realpath "$1")"
 configfile="$2"
-device="$3"
+spcconfigspace="$3"
+device="$4"
+
+# Source workloads
+. "${spcconfigspace}"
 
 echo "Logging to: ./logs"
 echo "Configfile: $configfile"
@@ -70,17 +66,13 @@ for tracecfg in "${workloads[@]}"; do
         declare -g "$key"="$value"
     done
 
-    runfile="./logs/$chunk_size,L=$latency,$distr,R=$ratio,I=$iterations,NZ=$n_zones,$eviction,${device##*/}-$(date '+%d_%H:%M:%S')-run"
+    runfile="./logs/$chunk_size,L=$latency,NZ=$n_zones,$eviction,${device##*/}-$(date '+%d_%H:%M:%S')-run"
     # Now you can access the variables
     {
         echo "Chunk Size: $chunk_size"
         echo "Latency: $latency"
-        echo "Distribution Type: $distr"
-        echo "Working Set Ratio: $ratio"
         echo "Zone Size: $zone_size"
-        echo "Iterations: $iterations"
         echo "Number of Zones: $n_zones"
-        echo "Total Chunks: $chunks"
         echo "High Water: $evict_high"
         echo "Low water: $evict_low"
         echo "Eviction $eviction"
@@ -165,11 +157,15 @@ for tracecfg in "${workloads[@]}"; do
         tail -n3 "$runfile.client"
     fi
 
-    sleep 10s
-
-#    tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
-#    rm -rf ./logs/*
+   tar -czf "./logs-compressed/$(basename "$runfile.tar.gz")" ./logs
+   rm -rf ./logs/*
 
 done
+
+logsdir="./logs-compressed-$(date '+%d_%H:%M:%S')"
+
+mkdir -p "${logsdir}"
+
+mv ./logs-compressed/* "${logsdir}"
 
 exit $ret
