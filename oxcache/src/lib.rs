@@ -2,6 +2,8 @@ pub mod cache;
 pub mod cli;
 pub mod device;
 pub mod eviction;
+#[cfg(feature = "eviction-metrics")]
+pub mod eviction_metrics;
 pub mod readerpool;
 pub mod remote;
 pub mod request;

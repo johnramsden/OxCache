@@ -62,6 +62,8 @@ pub struct ServerMetricsConfig {
     pub metrics_exporter_addr: Option<SocketAddr>,
     pub benchmark_mode: bool,
     pub benchmark_duration_secs: u64,
+    pub eviction_metrics: bool,
+    pub eviction_metrics_interval: u64,
 }
 
 #[derive(Debug)]
@@ -166,6 +168,19 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             self.device.get_chunks_per_zone(),
             self.config.eviction.low_water_clean,
         )?));
+
+        #[cfg(feature = "eviction-metrics")]
+        {
+            if self.config.metrics.eviction_metrics {
+                if let Some(metrics) = self.device.get_eviction_metrics() {
+                    eviction_policy.lock().unwrap().set_metrics(metrics);
+                    tracing::info!(
+                        "Eviction metrics enabled with {} second interval",
+                        self.config.metrics.eviction_metrics_interval
+                    );
+                }
+            }
+        }
 
         let writerpool = Arc::new(WriterPool::start(
             self.config.writer_threads,
@@ -284,6 +299,21 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
         }
 
         // Cleanup (last)
+        #[cfg(feature = "eviction-metrics")]
+        {
+            if self.config.metrics.eviction_metrics {
+                if let Ok(policy) = eviction_policy.lock() {
+                    if let Some(metrics) = policy.get_metrics() {
+                        let policy_name = match &*policy {
+                            crate::eviction::EvictionPolicyWrapper::Promotional(_) => "Promotional",
+                            crate::eviction::EvictionPolicyWrapper::Chunk(_) => "Chunk",
+                        };
+                        tracing::info!("\n=== FINAL EVICTION METRICS SUMMARY ===\n{}", metrics.generate_report(policy_name));
+                    }
+                }
+            }
+        }
+
         evictor.stop();
         // writerpool.stop(); // Cannot move
         // readerpool.stop(); // Cannot move

@@ -85,6 +85,22 @@ impl EvictionPolicyWrapper {
             },
         }
     }
+
+    #[cfg(feature = "eviction-metrics")]
+    pub fn set_metrics(&mut self, metrics: Arc<crate::eviction_metrics::EvictionMetrics>) {
+        match self {
+            EvictionPolicyWrapper::Promotional(p) => p.metrics = Some(metrics),
+            EvictionPolicyWrapper::Chunk(c) => c.metrics = Some(metrics),
+        }
+    }
+
+    #[cfg(feature = "eviction-metrics")]
+    pub fn get_metrics(&self) -> Option<Arc<crate::eviction_metrics::EvictionMetrics>> {
+        match self {
+            EvictionPolicyWrapper::Promotional(p) => p.metrics.clone(),
+            EvictionPolicyWrapper::Chunk(c) => c.metrics.clone(),
+        }
+    }
 }
 
 pub trait EvictionPolicy: Send + Sync {
@@ -105,6 +121,8 @@ pub struct PromotionalEvictionPolicy {
     nr_zones: Zone,
     nr_chunks_per_zone: Chunk,
     lru: LruCache<Zone, ()>,
+    #[cfg(feature = "eviction-metrics")]
+    pub metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
 }
 
 impl PromotionalEvictionPolicy {
@@ -121,6 +139,8 @@ impl PromotionalEvictionPolicy {
             nr_zones,
             nr_chunks_per_zone,
             lru,
+            #[cfg(feature = "eviction-metrics")]
+            metrics: None,
         }
     }
 }
@@ -132,6 +152,11 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     type CleanTarget = ();
 
     fn write_update(&mut self, chunk: ChunkLocation) {
+        #[cfg(feature = "eviction-metrics")]
+        if let Some(ref metrics) = self.metrics {
+            metrics.record_write(&chunk);
+        }
+
         // assert!(!self.lru.contains(&chunk.zone)); // We cannot assert this because we allow out of order writes
 
         // We only want to put it in the LRU once the zone is full
@@ -141,6 +166,11 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
+        #[cfg(feature = "eviction-metrics")]
+        if let Some(ref metrics) = self.metrics {
+            metrics.record_read(&chunk);
+        }
+
         // We only want to put it in the LRU once the zone is full
         // If it has filled before we want to update every time "promoting" it
         // Following this, only zones that have filled prior are updated
@@ -171,6 +201,13 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
             targets.push(self.lru.remove_lru().unwrap().0)
         }
 
+        #[cfg(feature = "eviction-metrics")]
+        if let Some(ref metrics) = self.metrics {
+            for zone in &targets {
+                metrics.record_zone_eviction(*zone, self.nr_chunks_per_zone);
+            }
+        }
+
         targets
     }
 
@@ -184,7 +221,9 @@ pub struct ChunkEvictionPolicy {
     nr_zones: Zone,
     nr_chunks_per_zone: Chunk,
     lru: LruCache<ChunkLocation, ()>,
-    pq: ZonePriorityQueue
+    pq: ZonePriorityQueue,
+    #[cfg(feature = "eviction-metrics")]
+    pub metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
 }
 
 impl ChunkEvictionPolicy {
@@ -206,7 +245,9 @@ impl ChunkEvictionPolicy {
             nr_zones,
             nr_chunks_per_zone,
             lru: LruCache::new(usize::MAX), // Effectively unbounded
-            pq: ZonePriorityQueue::new(nr_zones, clean_low_water)
+            pq: ZonePriorityQueue::new(nr_zones, clean_low_water),
+            #[cfg(feature = "eviction-metrics")]
+            metrics: None,
         }
     }
 }
@@ -215,10 +256,20 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     type Target = Vec<ChunkLocation>;
     type CleanTarget = Vec<ZoneIndex>;
     fn write_update(&mut self, chunk: ChunkLocation) {
+        #[cfg(feature = "eviction-metrics")]
+        if let Some(ref metrics) = self.metrics {
+            metrics.record_write(&chunk);
+        }
+
         self.lru.insert(chunk, ()).ok();
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
+        #[cfg(feature = "eviction-metrics")]
+        if let Some(ref metrics) = self.metrics {
+            metrics.record_read(&chunk);
+        }
+
         if self.lru.contains(&chunk) {
             self.lru.insert(chunk, ()).ok();
         }
@@ -259,6 +310,11 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         // Batch update priority queue (far fewer operations)
         for (zone, count) in zone_counts {
             self.pq.modify_priority(zone, count);
+        }
+
+        #[cfg(feature = "eviction-metrics")]
+        if let Some(ref metrics) = self.metrics {
+            metrics.record_chunk_evictions(&targets);
         }
 
         targets
@@ -313,6 +369,9 @@ impl Evictor {
         let cache_clone = Arc::clone(&cache);
 
         let handle = thread::spawn(move || {
+            #[cfg(feature = "eviction-metrics")]
+            let mut last_metrics_log = std::time::Instant::now();
+
             while !shutdown_clone.load(Ordering::Relaxed) {
                 let (sender, always_evict) = match evict_rx.recv_timeout(evict_interval) {
                     Ok(s) => {
@@ -350,7 +409,24 @@ impl Evictor {
                 evict_rx.drain().into_iter().for_each(|recv| {
                     tracing::debug!("Sending eviction response to drained sender: {:?}", result);
                     recv.sender.send(result.clone()).unwrap();
-                })
+                });
+
+                #[cfg(feature = "eviction-metrics")]
+                {
+                    let now = std::time::Instant::now();
+                    if now.duration_since(last_metrics_log).as_secs() >= 60 {
+                        if let Ok(policy) = eviction_policy_clone.lock() {
+                            if let Some(metrics) = policy.get_metrics() {
+                                let policy_name = match &*policy {
+                                    EvictionPolicyWrapper::Promotional(_) => "Promotional",
+                                    EvictionPolicyWrapper::Chunk(_) => "Chunk",
+                                };
+                                tracing::info!("\n{}", metrics.generate_report(policy_name));
+                            }
+                        }
+                        last_metrics_log = now;
+                    }
+                }
             }
 
             tracing::debug!("Evictor thread exiting");

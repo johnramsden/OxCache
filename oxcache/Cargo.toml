@@ -3,6 +3,10 @@ name = "oxcache"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+eviction-metrics = []
+
 [dependencies]
 libnvme-sys = { path = "../libnvme-sys" }
 nvme = { path = "../nvme" }

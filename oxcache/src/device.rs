@@ -29,6 +29,8 @@ pub struct Zoned {
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
     zone_append_lock: Vec<RwLock<()>>,
+    #[cfg(feature = "eviction-metrics")]
+    pub eviction_metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
 }
 
 // Information about each zone
@@ -63,6 +65,8 @@ pub struct BlockInterface {
     state: Arc<Mutex<BlockDeviceState>>,
     eviction_channel: Sender<EvictorMessage>,
     max_write_size: Byte,
+    #[cfg(feature = "eviction-metrics")]
+    pub eviction_metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
 }
 
 pub trait Device: Send + Sync {
@@ -130,6 +134,11 @@ pub trait Device: Send + Sync {
 
     fn get_fd(&self) -> RawFd;
     fn get_nsid(&self) -> u32;
+
+    #[cfg(feature = "eviction-metrics")]
+    fn get_eviction_metrics(&self) -> Option<Arc<crate::eviction_metrics::EvictionMetrics>> {
+        None
+    }
 }
 
 pub fn get_device(
@@ -299,6 +308,9 @@ impl Zoned {
                 let zone_append_lock: Vec<RwLock<()>> =
                     (0..restricted_num_zones).map(|_| RwLock::new(())).collect();
 
+                #[cfg(feature = "eviction-metrics")]
+                let eviction_metrics = Some(crate::eviction_metrics::EvictionMetrics::new(restricted_num_zones));
+
                 // Update config to reflect the restricted number of zones
                 config.num_zones = restricted_num_zones;
 
@@ -309,6 +321,8 @@ impl Zoned {
                     zones: Arc::new((Mutex::new(zone_list), Condvar::new())),
                     max_write_size,
                     zone_append_lock,
+                    #[cfg(feature = "eviction-metrics")]
+                    eviction_metrics,
                 })
             }
             Err(err) => Err(err.try_into().unwrap()),
@@ -773,6 +787,11 @@ impl Device for Zoned {
     fn get_nsid(&self) -> u32 {
         self.nvme_config.nsid
     }
+
+    #[cfg(feature = "eviction-metrics")]
+    fn get_eviction_metrics(&self) -> Option<Arc<crate::eviction_metrics::EvictionMetrics>> {
+        self.eviction_metrics.clone()
+    }
 }
 
 impl BlockInterface {
@@ -817,6 +836,9 @@ impl BlockInterface {
 
         let chunk_size_in_lbas = nvme_config.byte_address_to_lba(chunk_size);
 
+        #[cfg(feature = "eviction-metrics")]
+        let eviction_metrics = Some(crate::eviction_metrics::EvictionMetrics::new(restricted_num_zones));
+
         Ok(Self {
             nvme_config,
             state: Arc::new(Mutex::new(BlockDeviceState::new(
@@ -830,6 +852,8 @@ impl BlockInterface {
             num_zones: restricted_num_zones,
             eviction_channel,
             max_write_size,
+            #[cfg(feature = "eviction-metrics")]
+            eviction_metrics,
         })
     }
 
@@ -1066,6 +1090,11 @@ impl Device for BlockInterface {
     }
     fn get_nsid(&self) -> u32 {
         self.nvme_config.nsid
+    }
+
+    #[cfg(feature = "eviction-metrics")]
+    fn get_eviction_metrics(&self) -> Option<Arc<crate::eviction_metrics::EvictionMetrics>> {
+        self.eviction_metrics.clone()
     }
 }
 
