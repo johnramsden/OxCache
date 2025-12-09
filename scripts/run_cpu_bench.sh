@@ -3,6 +3,8 @@
 
 set -e
 
+ulimit -n 65535
+
 # Get the directory in which this script is located:
 SCRIPT_DIR="$(cd "$(dirname "$0")" || exit 1; pwd)"
 
