@@ -166,4 +166,10 @@ for file in "$directory"/*.bin; do
 
 done
 
+logsdir="./logs-compressed-$(date '+%d_%H:%M:%S')"
+
+mkdir -p "${logsdir}"
+
+mv ./logs-compressed/* "${logsdir}"
+
 exit $ret
