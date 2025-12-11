@@ -80,9 +80,13 @@ pub struct CliArgs {
     #[arg(long)]
     pub benchmark_mode: bool,
 
-    /// Duration in seconds to run benchmark after first eviction (default: 1800 = 30 min)
+    /// Duration in seconds to run benchmark after first eviction (optional, default: unset)
     #[arg(long)]
     pub benchmark_duration_secs: Option<u64>,
+
+    /// Target bytes to process in benchmark mode before stopping (optional, default: unset)
+    #[arg(long)]
+    pub benchmark_target_bytes: Option<u64>,
 
     /// Enable detailed eviction metrics tracking (requires compilation with --features eviction-metrics)
     #[arg(long)]
@@ -128,6 +132,7 @@ pub struct ParsedMetricsConfig {
     pub file_metrics_directory: Option<String>,
     pub benchmark_mode: Option<bool>,
     pub benchmark_duration_secs: Option<u64>,
+    pub benchmark_target_bytes: Option<u64>,
     pub eviction_metrics: Option<bool>,
     pub eviction_metrics_interval: Option<u64>,
 }
@@ -306,8 +311,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
     // Benchmark mode settings
     let benchmark_mode = cli.benchmark_mode || config.as_ref().and_then(|c| c.metrics.benchmark_mode).unwrap_or(false);
     let benchmark_duration_secs = cli.benchmark_duration_secs
-        .or_else(|| config.as_ref().and_then(|c| c.metrics.benchmark_duration_secs))
-        .unwrap_or(1800); // Default to 30 minutes
+        .or_else(|| config.as_ref().and_then(|c| c.metrics.benchmark_duration_secs));
+    let benchmark_target_bytes = cli.benchmark_target_bytes
+        .or_else(|| config.as_ref().and_then(|c| c.metrics.benchmark_target_bytes));
 
     let eviction_metrics = cli.eviction_metrics || config.as_ref().and_then(|c| c.metrics.eviction_metrics).unwrap_or(false);
     let eviction_metrics_interval = cli.eviction_metrics_interval
@@ -341,6 +347,7 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
             metrics_exporter_addr,
             benchmark_mode,
             benchmark_duration_secs,
+            benchmark_target_bytes,
             eviction_metrics,
             eviction_metrics_interval,
         }

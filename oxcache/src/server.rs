@@ -61,7 +61,8 @@ pub struct ServerEvictionConfig {
 pub struct ServerMetricsConfig {
     pub metrics_exporter_addr: Option<SocketAddr>,
     pub benchmark_mode: bool,
-    pub benchmark_duration_secs: u64,
+    pub benchmark_duration_secs: Option<u64>,
+    pub benchmark_target_bytes: Option<u64>,
     pub eviction_metrics: bool,
     pub eviction_metrics_interval: u64,
 }
@@ -219,46 +220,92 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         // Spawn benchmark timer task if benchmark mode is enabled
         if self.config.metrics.benchmark_mode {
+            let benchmark_duration_secs = self.config.metrics.benchmark_duration_secs;
+            let benchmark_target_bytes = self.config.metrics.benchmark_target_bytes;
+
+            // Initialize bytes-based tracking at server startup if bytes target is set
+            if benchmark_target_bytes.is_some() {
+                let initial_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                *METRICS.benchmark_state.bytes_initial_total.lock().unwrap() = Some(initial_bytes);
+                *METRICS.benchmark_state.bytes_benchmark_start_time.lock().unwrap() = Some(std::time::Instant::now());
+                tracing::info!("=== BENCHMARK: Bytes tracking started from server startup - target: {} bytes ({} MB) ===",
+                    benchmark_target_bytes.unwrap(), benchmark_target_bytes.unwrap() / 1_048_576);
+            }
+
+            // Enable and log duration-based benchmark if configured (will start on first eviction)
+            if benchmark_duration_secs.is_some() {
+                METRICS.benchmark_state.duration_benchmark_enabled.store(true, Ordering::SeqCst);
+                tracing::info!("=== BENCHMARK: Duration tracking will start on first eviction - target: {} seconds ===",
+                    benchmark_duration_secs.unwrap());
+            }
+
             let shutdown_benchmark = self.shutdown.clone();
-            let benchmark_duration = self.config.metrics.benchmark_duration_secs;
+
             tokio::spawn(async move {
+                // Poll for completion conditions
+                let check_interval_ms = 1000; // Check every 1 second
+                let mut completion_reason = String::new();
+
                 loop {
-                    // Check if first eviction has been triggered
-                    use std::sync::atomic::Ordering;
-                    if METRICS.benchmark_state.first_eviction_triggered.load(Ordering::SeqCst) {
-                        tracing::info!("=== BENCHMARK: Timer started for {} seconds ===", benchmark_duration);
+                    tokio::time::sleep(Duration::from_millis(check_interval_ms)).await;
 
-                        // Wait for the benchmark duration
-                        tokio::time::sleep(Duration::from_secs(benchmark_duration)).await;
+                    // Check bytes threshold (started from server startup)
+                    if let Some(target_bytes) = benchmark_target_bytes {
+                        if let Some(bytes_initial) = *METRICS.benchmark_state.bytes_initial_total.lock().unwrap() {
+                            let final_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                            let bytes_transferred = final_bytes.saturating_sub(bytes_initial);
 
-                        // Calculate and print throughput
-                        let initial_bytes = METRICS.benchmark_state.initial_bytes_total.lock().unwrap().unwrap_or(0);
-                        let final_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
-                        let start_time = METRICS.benchmark_state.benchmark_start_time.lock().unwrap().unwrap();
-                        let elapsed = start_time.elapsed().as_secs_f64();
-
-                        let bytes_transferred = final_bytes.saturating_sub(initial_bytes);
-                        let throughput = bytes_transferred as f64 / elapsed;
-
-                        tracing::info!("========================================");
-                        tracing::info!("=== THROUGHPUT BENCHMARK RESULTS ===");
-                        tracing::info!("========================================");
-                        tracing::info!("Duration: {:.2} seconds", elapsed);
-                        tracing::info!("Initial bytes_total: {}", initial_bytes);
-                        tracing::info!("Final bytes_total: {}", final_bytes);
-                        tracing::info!("Bytes transferred: {}", bytes_transferred);
-                        tracing::info!("Throughput: {:.2} bytes/sec", throughput);
-                        tracing::info!("Throughput: {:.2} MB/sec", throughput / 1_048_576.0);
-                        tracing::info!("========================================");
-
-                        // Trigger shutdown
-                        shutdown_benchmark.notify_waiters();
-                        break;
+                            if bytes_transferred >= target_bytes {
+                                completion_reason = format!("Bytes threshold reached: {} >= {} bytes", bytes_transferred, target_bytes);
+                                break;
+                            }
+                        }
                     }
 
-                    // Check every 100ms if eviction has started
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Check duration threshold (starts after first eviction)
+                    if let Some(duration_secs) = benchmark_duration_secs {
+                        if let Some(start_time) = *METRICS.benchmark_state.benchmark_start_time.lock().unwrap() {
+                            let elapsed = start_time.elapsed();
+                            if elapsed.as_secs() >= duration_secs {
+                                completion_reason = format!("Duration threshold reached: {:.2} >= {} seconds", elapsed.as_secs_f64(), duration_secs);
+                                break;
+                            }
+                        }
+                    }
                 }
+
+                // Calculate and print throughput based on which mode completed
+                let final_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                let (initial_bytes, start_time) = if benchmark_target_bytes.is_some() {
+                    // Use bytes-based tracking (from startup)
+                    let bytes_initial = METRICS.benchmark_state.bytes_initial_total.lock().unwrap().unwrap_or(0);
+                    let bytes_start = METRICS.benchmark_state.bytes_benchmark_start_time.lock().unwrap().unwrap();
+                    (bytes_initial, bytes_start)
+                } else {
+                    // Use duration-based tracking (from first eviction)
+                    let duration_initial = METRICS.benchmark_state.initial_bytes_total.lock().unwrap().unwrap_or(0);
+                    let duration_start = METRICS.benchmark_state.benchmark_start_time.lock().unwrap().unwrap();
+                    (duration_initial, duration_start)
+                };
+
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let bytes_transferred = final_bytes.saturating_sub(initial_bytes);
+                let throughput = bytes_transferred as f64 / elapsed;
+
+                tracing::info!("========================================");
+                tracing::info!("=== THROUGHPUT BENCHMARK RESULTS ===");
+                tracing::info!("========================================");
+                tracing::info!("Completion reason: {}", completion_reason);
+                tracing::info!("Duration: {:.2} seconds", elapsed);
+                tracing::info!("Initial bytes_total: {}", initial_bytes);
+                tracing::info!("Final bytes_total: {}", final_bytes);
+                tracing::info!("Bytes transferred: {}", bytes_transferred);
+                tracing::info!("Throughput: {:.2} bytes/sec", throughput);
+                tracing::info!("Throughput: {:.2} MB/sec", throughput / 1_048_576.0);
+                tracing::info!("========================================");
+
+                // Trigger shutdown
+                shutdown_benchmark.notify_waiters();
             });
         }
 
@@ -359,7 +406,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
             Ok((request, _)) => {
                 let request_id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
                 tracing::debug!("REQ[{}] Started processing request", request_id);
-                
+
                 match request {
                     request::Request::Get(req) => {
                         tracing::debug!("REQ[{}] Processing GET request for key={}, offset={}, size={}",

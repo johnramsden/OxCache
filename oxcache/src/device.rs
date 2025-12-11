@@ -173,9 +173,14 @@ pub fn get_device(
 }
 
 fn check_first_evict_bench() {
-    // Check if this is the first eviction for benchmark mode
+    // Only run if duration-based benchmark is enabled
+    if !METRICS.benchmark_state.duration_benchmark_enabled.load(Ordering::SeqCst) {
+        return;
+    }
+
+    // Check if this is the first eviction for benchmark mode (duration-based)
     if !METRICS.benchmark_state.first_eviction_triggered.swap(true, Ordering::SeqCst) {
-        // This is the first eviction
+        // This is the first eviction - start duration-based benchmark timer
         let current_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
         *METRICS.benchmark_state.initial_bytes_total.lock().unwrap() = Some(current_bytes);
         *METRICS.benchmark_state.benchmark_start_time.lock().unwrap() = Some(std::time::Instant::now());

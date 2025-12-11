@@ -382,22 +382,39 @@ async fn run_real_mode(
                 writer.send(Bytes::from(encoded)).await?;
 
                 // Wait for response
-                if let Some(frame) = reader.next().await {
-                    let f = frame?;
-                    let bytes = f.as_ref();
-                    let msg: Result<(request::GetResponse, usize), DecodeError> =
-                        bincode::serde::decode_from_slice(bytes, bincode::config::standard());
+                match reader.next().await {
+                    Some(Ok(frame)) => {
+                        let bytes = frame.as_ref();
+                        let msg: Result<(request::GetResponse, usize), DecodeError> =
+                            bincode::serde::decode_from_slice(bytes, bincode::config::standard());
 
-                    match msg.unwrap().0 {
-                        request::GetResponse::Error(e) => {
-                            return Err(std::io::Error::new(
-                                ErrorKind::Other,
-                                format!("[Client {}] Error: {}", client_id, e),
-                            ));
+                        match msg.unwrap().0 {
+                            request::GetResponse::Error(e) => {
+                                return Err(std::io::Error::new(
+                                    ErrorKind::Other,
+                                    format!("[Client {}] Error: {}", client_id, e),
+                                ));
+                            }
+                            request::GetResponse::Response(_) => {
+                                // Success - continue
+                            }
                         }
-                        request::GetResponse::Response(_) => {
-                            // Success - continue
-                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(std::io::Error::new(
+                            ErrorKind::Other,
+                            format!("[Client {}] Frame read error: {}", client_id, e),
+                        ));
+                    }
+                    None => {
+                        // Server closed connection gracefully - this is expected behavior
+                        // when server reaches benchmark target and shuts down
+                        let completed_reqs = counter.load(Ordering::Relaxed);
+                        println!("[Client {}] Server closed connection gracefully after {} requests",
+                                 client_id, completed_reqs);
+                        println!("[Client {}] This is expected when server reaches benchmark target",
+                                 client_id);
+                        return Ok(());
                     }
                 }
             }
@@ -405,13 +422,16 @@ async fn run_real_mode(
     }
 
     // Wait for all clients to complete
+    let mut had_errors = false;
     for handle in handles {
         match handle.await {
             Err(join_err) => {
                 eprintln!("Task panicked or was cancelled: {}", join_err);
+                had_errors = true;
             }
             Ok(Err(io_err)) => {
                 eprintln!("Task exited with error: {}", io_err);
+                had_errors = true;
             }
             Ok(Ok(())) => {
                 // Success
@@ -420,17 +440,29 @@ async fn run_real_mode(
     }
 
     let duration = start.elapsed();
+    let completed_requests = counter.load(Ordering::Relaxed);
 
     println!("\n=== Execution Complete ===");
-    println!("Executed {} requests", nr_requests);
+    if completed_requests < nr_requests {
+        println!("NOTE: Server shutdown before all requests completed (expected for byte-target benchmarks)");
+        println!("Completed {} of {} requests ({:.1}%)",
+                 completed_requests, nr_requests,
+                 (completed_requests as f64 / nr_requests as f64) * 100.0);
+    } else {
+        println!("Completed all {} requests", nr_requests);
+    }
     println!("Clients: {}", num_clients);
     println!("Total time: {:.2?}", duration);
     println!(
         "Throughput: {:.2} req/sec",
-        nr_requests as f64 / duration.as_secs_f64()
+        completed_requests as f64 / duration.as_secs_f64()
     );
 
-    Ok(())
+    if had_errors {
+        Err("One or more clients exited with errors".into())
+    } else {
+        Ok(())
+    }
 }
 
 #[tokio::main]

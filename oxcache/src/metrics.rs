@@ -75,17 +75,24 @@ pub fn init_metrics_exporter(addr: SocketAddr) {
 }
 
 pub struct BenchmarkState {
+    pub duration_benchmark_enabled: AtomicBool,
     pub first_eviction_triggered: AtomicBool,
     pub benchmark_start_time: Mutex<Option<std::time::Instant>>,
     pub initial_bytes_total: Mutex<Option<u64>>,
+    // Separate tracking for bytes-based benchmarks that start from server startup
+    pub bytes_benchmark_start_time: Mutex<Option<std::time::Instant>>,
+    pub bytes_initial_total: Mutex<Option<u64>>,
 }
 
 impl BenchmarkState {
     pub fn new() -> Self {
         Self {
+            duration_benchmark_enabled: AtomicBool::new(false),
             first_eviction_triggered: AtomicBool::new(false),
             benchmark_start_time: Mutex::new(None),
             initial_bytes_total: Mutex::new(None),
+            bytes_benchmark_start_time: Mutex::new(None),
+            bytes_initial_total: Mutex::new(None),
         }
     }
 }
