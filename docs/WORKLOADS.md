@@ -6,30 +6,38 @@
 sudo apt install maven meson
 ```
 
-To generate workloads run:
+To generate ZNS workloads run:
 
 ```shell
 cd vendor/workloadgen/core
 mvn -Dtest=site.ycsb.generator.TestZipfianGeneratorZNS test
 ```
 
-Workloads will be located in `target/workloads`.
 
-Workloads can be tuned according to hardware availible by modifying paramaters in `core/src/test/java/site/ycsb/generator/TestZipfianGeneratorZNS.java`:
-
-```java
-final int zone_size = 1024 * 1024;
-final int num_zones = 28;
-final int iterations = 1500;
-```
-
-To run all workloads, run (replacing $DEVICE and $NUM_THREADS):
+To generate block-interface workloads run:
 
 ```shell
-sudo ./scripts/run_workloads.sh $DEVICE vendor/workloadgen/core/target/workloads $NUM_THREADS
+cd vendor/workloadgen/core
+mvn -Dtest=site.ycsb.generator.TestZipfianGeneratorBLOCK test
 ```
 
-Output will be in `./logs/$DATE.json` files
+Workloads will be located in `target/workloads`.
+
+THESE SCRIPTS WILL WIPE THE DISK!
+
+To run ZNS workloads, run (replacing $DEVICE and $CONFIGFILE):
+
+```shell
+sudo  ./scripts/run_cpu_bench.sh vendor/workloadgen/core/target/workloadszoned $CONFIGFILE $DEVICE
+```
+
+To run block-interface workloads, run (replacing $DEVICE and $CONFIGFILE):
+
+```shell
+sudo  ./scripts/run_cpu_bench.sh vendor/workloadgen/core/target/workloadszoned $CONFIGFILE $DEVICE
+```
+
+Output will be in `./logs/*` files
 
 ## Cortes
 
@@ -101,18 +109,4 @@ fio --name=precondition --filename=/dev/nvme1n1 --direct=1 \
     --rw=randwrite --bs=64k --size=100% --loops=2 \
     --randrepeat=0 --ioengine=libaio \
     --numjobs=1 --group_reporting
-```
-
-## Partitioning
-
-Create a partition from 2948B to `(1077*100)+1`MiB, another partition on remainder
-
-```shell
-sgdisk -n 1:2048B:107701MiB -n 2:0:0 /dev/nvme1n1
-```
-
-To delete:
-
-```
-sgdisk --zap-all /dev/nvme1n1
 ```
