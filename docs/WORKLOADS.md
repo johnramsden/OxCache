@@ -110,3 +110,42 @@ fio --name=precondition --filename=/dev/nvme1n1 --direct=1 \
     --randrepeat=0 --ioengine=libaio \
     --numjobs=1 --group_reporting
 ```
+
+## Graphing
+
+### Pre-processing
+
+Data will be found in `logs-compressed` with each workload in a `tar.gz`
+
+Move the data to `$DATA_DIR`
+
+First extract:
+
+```shell
+for f in *.tar.gz; do dir="${f%%.tar*}"; mkdir -p -- "$dir"; tar --force-local -xzf "$f" -C "$dir"; done
+```
+
+Then consolidate which groups data:
+
+```shell
+python3 consolidate_metrics.py $DATA_DIR
+```
+
+This will create `${DATA_DIR}-consolidated`
+
+Repeat for ZNS and Block, putting data in separate dirs.
+
+Then plot via:
+
+```shell
+./generate_all_plots.sh <zoned_dir>-consolidated <block_dir>-consolidated
+```
+
+To create boxplots:
+
+```shell
+python3 distribution_comparison_boxplots.py \
+  --block-dir <block_dir>-consolidated \
+  --zns-dir <zoned_dir>-consolidated \
+  --output-dir plots/
+```
