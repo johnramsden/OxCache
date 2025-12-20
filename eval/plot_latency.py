@@ -11,6 +11,8 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import rcParams
+import numpy as np
+import data_cache
 
 # Increase all font sizes by 4 points
 rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
@@ -128,14 +130,19 @@ def collect_chunk_groups(split_data_dirs, labels):
 def calculate_chunk_global_max_latency(normalized_groups, metric_name):
     """Calculate global maximum latency for a chunk size group.
 
+    OPTIMIZED: Loads data once using data_cache module and returns both
+    the global min/max AND the loaded data for reuse in plotting.
+
     Args:
         normalized_groups: Dict of {normalized_name: [(path, label), ...]}
         metric_name: Name of the latency metric
 
     Returns:
-        tuple: (global_min, global_max) of latency values
+        tuple: (global_min, global_max, loaded_data_dict)
+               where loaded_data_dict = {metric_file_path: (timestamps_array, values_array)}
     """
     all_values = []
+    loaded_data = {}  # Cache loaded data for reuse in plotting
 
     for normalized_name, dir_label_pairs in normalized_groups.items():
         for data_dir, label in dir_label_pairs:
@@ -144,97 +151,72 @@ def calculate_chunk_global_max_latency(normalized_groups, metric_name):
             if not metric_file.exists():
                 continue
 
-            # Read latency values
-            timestamps = []
-            values = []
-
             try:
-                with open(metric_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
+                # Load data using optimized cache module (streaming + NumPy + disk caching)
+                # This filters last 5 minutes during load for efficiency
+                timestamps_unix, values = data_cache.load_metric_data(
+                    metric_file,
+                    filter_minutes=5,
+                    use_cache=True
+                )
 
-                        try:
-                            data = json.loads(line)
-                            timestamp = parse_timestamp(data['timestamp'])
-                            value = float(data['fields']['value'])
-                            timestamps.append(timestamp)
-                            values.append(value)
-                        except (json.JSONDecodeError, KeyError, ValueError):
-                            continue
+                if len(timestamps_unix) > 0 and len(values) > 0:
+                    # Store loaded data for reuse in plotting (avoids re-reading file)
+                    loaded_data[str(metric_file)] = (timestamps_unix, values)
+
+                    # Collect all values for global min/max calculation
+                    all_values.extend(values)
+
             except Exception as e:
-                print(f"Error reading {metric_file}: {e}")
+                print(f"Error processing {metric_file}: {e}")
                 continue
 
-            if timestamps and values:
-                # Filter last 5 minutes
-                filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
-                if filtered_values:
-                    all_values.extend(filtered_values)
-
     if not all_values:
-        return None, None
+        return None, None, loaded_data
 
-    return min(all_values), max(all_values)
+    return float(np.min(all_values)), float(np.max(all_values)), loaded_data
 
 
-def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir, y_min, y_max):
+def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir, y_min, y_max, loaded_data):
     """Create a single latency plot for a normalized group.
 
-    Uses pre-calculated y-axis limits from chunk-level min/max.
+    OPTIMIZED: Reuses pre-loaded data instead of re-reading files.
+
+    Args:
+        normalized_name: Normalized directory name
+        dir_label_pairs: List of (data_dir, label) tuples
+        metric_name: Name of metric
+        output_dir: Output directory path
+        y_min: Minimum y-axis value
+        y_max: Maximum y-axis value
+        loaded_data: Dict of pre-loaded data {file_path: (timestamps, values)}
     """
     plt.figure(figsize=(12, 4))
     has_data = False
 
     for data_dir, label in dir_label_pairs:
         metric_file = data_dir / f"{metric_name}.json"
+        metric_file_str = str(metric_file)
 
-        if not metric_file.exists():
-            print(f"Warning: {metric_file} not found, skipping")
+        # Check if data was already loaded
+        if metric_file_str not in loaded_data:
+            print(f"Warning: {metric_file} not found in loaded data, skipping")
             continue
 
         print(f"Processing {metric_file}...")
 
-        # Read data
-        timestamps = []
-        values = []
+        # Retrieve pre-loaded data (already filtered, as NumPy arrays)
+        timestamps_unix, values = loaded_data[metric_file_str]
 
-        try:
-            with open(metric_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    try:
-                        data = json.loads(line)
-                        timestamp = parse_timestamp(data['timestamp'])
-                        value = float(data['fields']['value'])
-                        timestamps.append(timestamp)
-                        values.append(value)
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        continue
-        except Exception as e:
-            print(f"Error reading {metric_file}: {e}")
-            continue
-
-        if not timestamps or not values:
+        if len(timestamps_unix) == 0 or len(values) == 0:
             print(f"No valid data points in {metric_file}")
             continue
 
-        # Filter last 5 minutes
-        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
+        # Convert Unix timestamps to minutes from start
+        start_time_unix = timestamps_unix[0]
+        time_minutes = (timestamps_unix - start_time_unix) / 60.0
 
-        if not filtered_timestamps or not filtered_values:
-            print(f"No data remaining after filtering for {metric_file}")
-            continue
-
-        # Convert to minutes
-        start_time = filtered_timestamps[0]
-        time_minutes = [(t - start_time).total_seconds() / 60 for t in filtered_timestamps]
-
-        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=0.8, label=label)
+        plt.plot(time_minutes, values, alpha=0.8, linewidth=0.8, label=label)
         has_data = True
 
     if has_data:
@@ -289,7 +271,8 @@ def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
         chunk_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Calculate global min/max for this chunk size
-        global_min, global_max = calculate_chunk_global_max_latency(
+        # OPTIMIZED: Returns both global min/max AND loaded_data for reuse
+        global_min, global_max, loaded_data = calculate_chunk_global_max_latency(
             normalized_groups, metric_name
         )
 
@@ -305,10 +288,11 @@ def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
         print(f"  Y-axis range for chunk size {chunk_size}: [{y_min:.2f}, {y_max:.2f}]")
 
         # Create plots for each normalized group within this chunk size
+        # OPTIMIZED: Pass loaded_data to avoid re-reading files
         for normalized_name, dir_label_pairs in normalized_groups.items():
             plot_latency_group(
                 normalized_name, dir_label_pairs, metric_name,
-                chunk_output_dir, y_min, y_max
+                chunk_output_dir, y_min, y_max, loaded_data
             )
 
 

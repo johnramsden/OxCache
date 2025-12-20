@@ -93,7 +93,7 @@ cloud-localds /tmp/cloud-init.iso user-data
 # Run the QEMU vm
 sudo qemu-system-x86_64 \
      -enable-kvm \
-     -m 12G \
+     -m 64G \
      -smp "$cores" \
      -cpu host \
      -drive file="$img",format=qcow2,if=virtio \

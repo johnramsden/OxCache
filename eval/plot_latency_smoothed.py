@@ -13,6 +13,7 @@ import matplotlib.dates as mdates
 from matplotlib import rcParams
 from collections import defaultdict
 import numpy as np
+import data_cache
 
 # Increase all font sizes by 4 points
 rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
@@ -82,40 +83,57 @@ def filter_last_n_minutes(timestamps, values, minutes=5):
     return list(filtered_timestamps), list(filtered_values)
 
 
-def smooth_data(timestamps, values, window_seconds):
-    """Smooth data by averaging over time windows."""
-    if len(timestamps) < 2:
-        return timestamps, values
-    
-    # Convert to sorted list of (timestamp, value) tuples
-    data_points = list(zip(timestamps, values))
-    data_points.sort(key=lambda x: x[0])
-    
-    start_time = data_points[0][0]
-    window_duration = timedelta(seconds=window_seconds)
-    
-    # Group data points into time windows
-    windows = defaultdict(list)
-    
-    for timestamp, value in data_points:
-        window_index = int((timestamp - start_time).total_seconds() // window_seconds)
-        windows[window_index].append((timestamp, value))
-    
+def smooth_data(timestamps_unix, values, window_seconds):
+    """Smooth data by averaging over time windows.
+
+    OPTIMIZED: Uses vectorized NumPy operations for faster processing.
+
+    Args:
+        timestamps_unix: NumPy array of Unix timestamps
+        values: NumPy array of values
+        window_seconds: Size of smoothing window in seconds
+
+    Returns:
+        tuple: (smoothed_timestamps, smoothed_values) as NumPy arrays
+    """
+    if len(timestamps_unix) < 2:
+        return timestamps_unix, values
+
+    # Calculate time span
+    start_time = timestamps_unix[0]
+    end_time = timestamps_unix[-1]
+    duration = end_time - start_time
+
+    if duration <= 0:
+        return timestamps_unix, values
+
+    # Create bin edges
+    num_bins = int(np.ceil(duration / window_seconds))
+    bin_edges = np.arange(num_bins + 1) * window_seconds + start_time
+
+    # Assign each timestamp to a bin using searchsorted (vectorized)
+    bin_indices = np.searchsorted(bin_edges[1:], timestamps_unix, side='left')
+
+    # Calculate average for each bin using vectorized operations
     smoothed_timestamps = []
     smoothed_values = []
-    
-    # Calculate average for each window
-    for window_index in sorted(windows.keys()):
-        window_data = windows[window_index]
-        
-        # Calculate average timestamp and value for the window
-        avg_timestamp = start_time + timedelta(seconds=(window_index + 0.5) * window_seconds)
-        avg_value = np.mean([value for _, value in window_data])
-        
+
+    for bin_idx in range(num_bins):
+        # Find all data points in this bin
+        mask = (bin_indices == bin_idx)
+        values_in_bin = values[mask]
+
+        if len(values_in_bin) == 0:
+            continue  # Skip empty bins
+
+        # Calculate average timestamp (center of bin) and average value
+        avg_timestamp = start_time + (bin_idx + 0.5) * window_seconds
+        avg_value = np.mean(values_in_bin)
+
         smoothed_timestamps.append(avg_timestamp)
         smoothed_values.append(avg_value)
-    
-    return smoothed_timestamps, smoothed_values
+
+    return np.array(smoothed_timestamps, dtype=np.float64), np.array(smoothed_values, dtype=np.float64)
 
 
 def collect_chunk_groups(split_data_dirs, labels):
@@ -164,15 +182,20 @@ def collect_chunk_groups(split_data_dirs, labels):
 def calculate_chunk_global_max_latency_smoothed(normalized_groups, metric_name, window_seconds):
     """Calculate global maximum smoothed latency for a chunk size group.
 
+    OPTIMIZED: Loads data once using data_cache module and returns both
+    the global min/max AND the loaded+smoothed data for reuse in plotting.
+
     Args:
         normalized_groups: Dict of {normalized_name: [(path, label), ...]}
         metric_name: Name of the latency metric
         window_seconds: Smoothing window size
 
     Returns:
-        tuple: (global_min, global_max) of smoothed latency values
+        tuple: (global_min, global_max, loaded_data_dict)
+               where loaded_data_dict = {metric_file_path: (smoothed_timestamps, smoothed_values)}
     """
     all_values = []
+    loaded_data = {}  # Cache loaded+smoothed data for reuse in plotting
 
     for normalized_name, dir_label_pairs in normalized_groups.items():
         for data_dir, label in dir_label_pairs:
@@ -181,114 +204,83 @@ def calculate_chunk_global_max_latency_smoothed(normalized_groups, metric_name, 
             if not metric_file.exists():
                 continue
 
-            # Read latency values
-            timestamps = []
-            values = []
-
             try:
-                with open(metric_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
+                # Load data using optimized cache module (streaming + NumPy + disk caching)
+                # This filters last 5 minutes during load for efficiency
+                timestamps_unix, values = data_cache.load_metric_data(
+                    metric_file,
+                    filter_minutes=5,
+                    use_cache=True
+                )
 
-                        try:
-                            data = json.loads(line)
-                            timestamp = parse_timestamp(data['timestamp'])
-                            value = float(data['fields']['value'])
-                            timestamps.append(timestamp)
-                            values.append(value)
-                        except (json.JSONDecodeError, KeyError, ValueError):
-                            continue
+                if len(timestamps_unix) < 2 or len(values) < 2:
+                    continue
+
+                # Apply smoothing using vectorized operations
+                smooth_timestamps, smooth_values = smooth_data(
+                    timestamps_unix, values, window_seconds
+                )
+
+                if len(smooth_values) > 0:
+                    # Store loaded+smoothed data for reuse in plotting (avoids re-reading and re-smoothing)
+                    loaded_data[str(metric_file)] = (smooth_timestamps, smooth_values)
+
+                    # Collect all smoothed values for global min/max calculation
+                    all_values.extend(smooth_values)
+
             except Exception as e:
-                print(f"Error reading {metric_file}: {e}")
+                print(f"Error processing {metric_file}: {e}")
                 continue
-
-            if not timestamps or not values:
-                continue
-
-            # Filter last 5 minutes
-            filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
-
-            if not filtered_timestamps or not filtered_values:
-                continue
-
-            # Apply smoothing
-            smooth_timestamps, smooth_values = smooth_data(
-                filtered_timestamps, filtered_values, window_seconds
-            )
-
-            if smooth_values:
-                all_values.extend(smooth_values)
 
     if not all_values:
-        return None, None
+        return None, None, loaded_data
 
-    return min(all_values), max(all_values)
+    return float(np.min(all_values)), float(np.max(all_values)), loaded_data
 
 
 def plot_latency_smoothed_group(normalized_name, dir_label_pairs, metric_name,
-                                window_seconds, output_dir, y_min, y_max):
+                                window_seconds, output_dir, y_min, y_max, loaded_data):
     """Create a single smoothed latency plot for a normalized group.
 
-    Uses pre-calculated y-axis limits from chunk-level min/max.
+    OPTIMIZED: Reuses pre-loaded and pre-smoothed data instead of re-reading and re-smoothing files.
+
+    Args:
+        normalized_name: Normalized directory name
+        dir_label_pairs: List of (data_dir, label) tuples
+        metric_name: Name of metric
+        window_seconds: Smoothing window size
+        output_dir: Output directory path
+        y_min: Minimum y-axis value
+        y_max: Maximum y-axis value
+        loaded_data: Dict of pre-loaded+smoothed data {file_path: (timestamps, values)}
     """
     plt.figure(figsize=(12, 4))
     has_data = False
 
     for data_dir, label in dir_label_pairs:
         metric_file = data_dir / f"{metric_name}.json"
+        metric_file_str = str(metric_file)
 
-        if not metric_file.exists():
-            print(f"Warning: {metric_file} not found, skipping")
+        # Check if data was already loaded and smoothed
+        if metric_file_str not in loaded_data:
+            print(f"Warning: {metric_file} not found in loaded data, skipping")
             continue
 
         print(f"Processing {metric_file}...")
 
-        # Read data
-        timestamps = []
-        values = []
+        # Retrieve pre-loaded and pre-smoothed data (as NumPy arrays)
+        smooth_timestamps_unix, smooth_values = loaded_data[metric_file_str]
 
-        try:
-            with open(metric_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    try:
-                        data = json.loads(line)
-                        timestamp = parse_timestamp(data['timestamp'])
-                        value = float(data['fields']['value'])
-                        timestamps.append(timestamp)
-                        values.append(value)
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        continue
-        except Exception as e:
-            print(f"Error reading {metric_file}: {e}")
-            continue
-
-        if not timestamps or not values:
+        if len(smooth_timestamps_unix) == 0 or len(smooth_values) == 0:
             print(f"No valid data points in {metric_file}")
             continue
 
-        # Filter last 5 minutes
-        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
+        # Convert Unix timestamps to minutes from start
+        start_time_unix = smooth_timestamps_unix[0]
+        time_minutes = (smooth_timestamps_unix - start_time_unix) / 60.0
 
-        if not filtered_timestamps or not filtered_values:
-            print(f"No data remaining after filtering for {metric_file}")
-            continue
-
-        # Smooth the data
-        smooth_timestamps, smooth_values = smooth_data(filtered_timestamps, filtered_values, window_seconds)
-
-        if smooth_timestamps and smooth_values:
-            # Convert to minutes from start
-            start_time = smooth_timestamps[0]
-            time_minutes = [(t - start_time).total_seconds() / 60 for t in smooth_timestamps]
-
-            plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=1.5, label=label)
-            has_data = True
+        plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=1.5, label=label)
+        has_data = True
 
     if has_data:
         plt.xlabel('Time (minutes)')
@@ -342,7 +334,8 @@ def plot_metric_latency_smoothed(split_data_dirs, metric_name, window_seconds, o
         chunk_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Calculate global min/max for smoothed data in this chunk size
-        global_min, global_max = calculate_chunk_global_max_latency_smoothed(
+        # OPTIMIZED: Returns both global min/max AND loaded+smoothed data for reuse
+        global_min, global_max, loaded_data = calculate_chunk_global_max_latency_smoothed(
             normalized_groups, metric_name, window_seconds
         )
 
@@ -358,10 +351,11 @@ def plot_metric_latency_smoothed(split_data_dirs, metric_name, window_seconds, o
         print(f"  Y-axis range for chunk size {chunk_size}: [{y_min:.2f}, {y_max:.2f}]")
 
         # Create plots for each normalized group within this chunk size
+        # OPTIMIZED: Pass loaded_data to avoid re-reading and re-smoothing files
         for normalized_name, dir_label_pairs in normalized_groups.items():
             plot_latency_smoothed_group(
                 normalized_name, dir_label_pairs, metric_name,
-                window_seconds, chunk_output_dir, y_min, y_max
+                window_seconds, chunk_output_dir, y_min, y_max, loaded_data
             )
 
 

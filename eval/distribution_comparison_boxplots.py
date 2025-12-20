@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 from matplotlib import patches as mpatches
 from matplotlib.patches import Rectangle
 from matplotlib import rcParams
+import numpy as np
+from datetime import datetime, timedelta
+import data_cache
 
 # Increase all font sizes by 8 points from their defaults
 rcParams.update({key: rcParams[key] + 8 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
@@ -105,147 +108,6 @@ def parse_directory_name(dirname):
         }
     except (ValueError, IndexError):
         return None
-
-
-def filter_last_n_minutes(timestamps, values, minutes=5):
-    """Filter out the last N minutes of data from a workload.
-
-    Args:
-        timestamps: List of datetime strings (ISO format)
-        values: List of values corresponding to timestamps
-        minutes: Number of minutes to filter from the end (default: 5)
-
-    Returns:
-        tuple: (filtered_timestamps, filtered_values)
-    """
-    from datetime import datetime, timedelta
-
-    if not timestamps or not values:
-        return timestamps, values
-
-    # Parse timestamps to datetime objects
-    parsed_times = []
-    for ts in timestamps:
-        try:
-            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            parsed_times.append(dt)
-        except:
-            parsed_times.append(None)
-
-    # Find the last valid timestamp
-    valid_times = [t for t in parsed_times if t is not None]
-    if not valid_times:
-        return timestamps, values
-
-    max_time = max(valid_times)
-    cutoff_time = max_time - timedelta(minutes=minutes)
-
-    # Filter data points before cutoff
-    filtered_data = []
-    for ts, parsed_ts, val in zip(timestamps, parsed_times, values):
-        if parsed_ts is not None and parsed_ts <= cutoff_time:
-            filtered_data.append((ts, val))
-
-    if not filtered_data:
-        return [], []
-
-    filtered_timestamps, filtered_values = zip(*filtered_data)
-    return list(filtered_timestamps), list(filtered_values)
-
-
-def load_json_data(filepath, sample_size=None, include_timestamps=False):
-    """
-    Load JSON Lines data and extract values.
-
-    Args:
-        filepath: Path to JSON Lines file
-        sample_size: If provided, sample every Nth line for faster testing
-        include_timestamps: If True, return (timestamps, values) tuple
-
-    Returns list of values or (timestamps, values) tuple if include_timestamps=True.
-    """
-    values = []
-    timestamps = []
-    with open(filepath, 'r') as f:
-        for line_num, line in enumerate(f):
-            # Skip lines if sampling
-            if sample_size and line_num % sample_size != 0:
-                continue
-
-            try:
-                data = json.loads(line.strip())
-                if "fields" in data and "value" in data["fields"]:
-                    values.append(data["fields"]["value"])
-                    if include_timestamps and "timestamp" in data:
-                        timestamps.append(data["timestamp"])
-            except json.JSONDecodeError:
-                continue
-
-    if include_timestamps:
-        return timestamps, values
-    return values
-
-
-def calculate_throughput_bins(timestamps, cumulative_bytes, bin_seconds=60):
-    """
-    Calculate throughput by binning cumulative bytes over time intervals.
-
-    Args:
-        timestamps: List of ISO timestamp strings
-        cumulative_bytes: List of cumulative byte counts
-        bin_seconds: Size of time bins in seconds (default: 60)
-
-    Returns list of throughput values (bytes per second) for each bin.
-    """
-    from datetime import datetime
-
-    if len(timestamps) == 0 or len(cumulative_bytes) == 0:
-        return []
-
-    # Parse timestamps
-    parsed_times = []
-    for ts in timestamps:
-        try:
-            # Parse ISO format timestamp
-            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            parsed_times.append(dt)
-        except:
-            continue
-
-    if len(parsed_times) == 0:
-        return []
-
-    # Get start time and create bins
-    start_time = parsed_times[0]
-    throughputs = []
-
-    i = 0
-    while i < len(parsed_times):
-        # Find all data points in this bin
-        bin_start_time = start_time.timestamp() + (len(throughputs) * bin_seconds)
-        bin_end_time = bin_start_time + bin_seconds
-
-        bin_start_bytes = None
-        bin_end_bytes = None
-
-        # Find measurements within this bin
-        while i < len(parsed_times) and parsed_times[i].timestamp() < bin_end_time:
-            if bin_start_bytes is None:
-                bin_start_bytes = cumulative_bytes[i]
-            bin_end_bytes = cumulative_bytes[i]
-            i += 1
-
-        # Calculate throughput for this bin
-        if bin_start_bytes is not None and bin_end_bytes is not None:
-            bytes_in_bin = bin_end_bytes - bin_start_bytes
-            throughput = bytes_in_bin / bin_seconds
-            throughputs.append(throughput)
-
-        # If we didn't find any data in this bin, stop
-        if bin_start_bytes is None:
-            break
-
-    return throughputs
 
 
 def collect_runs(split_output_dir):
@@ -352,19 +214,27 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
                     if matching_run:
                         data_file = matching_run["path"] / metric_file
                         if data_file.exists():
+                            print(f"  Loading {metric_file} for {device} {EVICTION_TYPE_LABELS[eviction_type]}...")
                             if metric == "throughput":
-                                # Load with timestamps and calculate throughput in 60-second bins
-                                ts, vals = load_json_data(data_file, sample_size, include_timestamps=True)
-                                # Filter last 5 minutes BEFORE calculating throughput
-                                ts, vals = filter_last_n_minutes(ts, vals, minutes=5)
-                                throughput = calculate_throughput_bins(ts, vals, bin_seconds=60)
-                                current_data.append([v * scale for v in throughput])
+                                # Load with timestamps and filter in one pass using shared cache
+                                # Returns NumPy arrays for efficient processing
+                                ts, vals = data_cache.load_metric_data(data_file,
+                                                                       filter_minutes=5,
+                                                                       use_cache=True,
+                                                                       sample_size=sample_size)
+                                # Calculate throughput in 60-second bins (vectorized)
+                                throughput = data_cache.calculate_throughput_bins(ts, vals, bin_seconds=60)
+                                # Scale and convert to list for matplotlib
+                                current_data.append((throughput * scale).tolist())
                             else:
-                                # Load latency data with timestamps
-                                ts, vals = load_json_data(data_file, sample_size, include_timestamps=True)
-                                # Filter last 5 minutes
-                                ts, vals = filter_last_n_minutes(ts, vals, minutes=5)
-                                current_data.append([v * scale for v in vals])
+                                # Load latency data with filtering in one pass using shared cache
+                                # Returns NumPy arrays
+                                ts, vals = data_cache.load_metric_data(data_file,
+                                                                       filter_minutes=5,
+                                                                       use_cache=True,
+                                                                       sample_size=sample_size)
+                                # Scale and convert to list for matplotlib
+                                current_data.append((vals * scale).tolist())
 
                             # Add styling info
                             labels.append(f"{device}-{EVICTION_TYPE_LABELS[eviction_type]}")
@@ -565,9 +435,9 @@ def main():
     # Generate all 4 graphs (2 distributions × 2 metrics)
     graphs = [
         ("ZIPFIAN", "latency", "zipfian_latency.png"),
-        ("ZIPFIAN", "throughput", "zipfian_throughput.png"),
+        # ("ZIPFIAN", "throughput", "zipfian_throughput.png"),
         ("UNIFORM", "latency", "uniform_latency.png"),
-        ("UNIFORM", "throughput", "uniform_throughput.png"),
+        # ("UNIFORM", "throughput", "uniform_throughput.png"),
     ]
 
     for distribution, metric, filename in graphs:

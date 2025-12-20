@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import rcParams
 from collections import defaultdict
+import numpy as np
+import data_cache
 
 # Increase all font sizes by 4 points
 rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
@@ -195,15 +197,20 @@ def determine_throughput_unit(max_throughput, metric_name):
 def calculate_chunk_global_max_throughput(normalized_groups, metric_name, bucket_seconds):
     """Calculate global maximum throughput for a chunk size group.
 
+    OPTIMIZED: Loads data once using data_cache module and returns both
+    the global max AND the loaded data for reuse in plotting.
+
     Args:
         normalized_groups: Dict of {normalized_name: [(path, label), ...]}
         metric_name: Name of the metric (e.g., 'bytes_total')
         bucket_seconds: Bucket size for throughput calculation
 
     Returns:
-        float: Global maximum throughput value across all directories in this chunk size
+        tuple: (global_max_throughput, loaded_data_dict)
+               where loaded_data_dict = {metric_file_path: (timestamps_array, values_array)}
     """
     all_throughputs = []
+    loaded_data = {}  # Cache loaded data for reuse in plotting
 
     for normalized_name, dir_label_pairs in normalized_groups.items():
         for data_dir, label in dir_label_pairs:
@@ -212,118 +219,96 @@ def calculate_chunk_global_max_throughput(normalized_groups, metric_name, bucket
             if not metric_file.exists():
                 continue
 
-            # Read data points
-            data_points = []
             try:
-                with open(metric_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
+                # Load data using optimized cache module (streaming + NumPy + disk caching)
+                # This filters last 5 minutes during load for efficiency
+                timestamps_unix, values = data_cache.load_metric_data(
+                    metric_file,
+                    filter_minutes=5,
+                    use_cache=True
+                )
 
-                        try:
-                            data = json.loads(line)
-                            timestamp = parse_timestamp(data['timestamp'])
-                            value = float(data['fields']['value'])
-                            data_points.append((timestamp, value))
-                        except (json.JSONDecodeError, KeyError, ValueError):
-                            continue
+                if len(timestamps_unix) < 2 or len(values) < 2:
+                    continue
+
+                # Store loaded data for reuse in plotting (avoids re-reading file)
+                loaded_data[str(metric_file)] = (timestamps_unix, values)
+
+                # Calculate throughput using vectorized NumPy operations
+                throughputs = data_cache.calculate_throughput_bins(
+                    timestamps_unix,
+                    values,
+                    bin_seconds=bucket_seconds
+                )
+
+                if len(throughputs) > 0:
+                    all_throughputs.extend(throughputs)
+
             except Exception as e:
-                print(f"Error reading {metric_file}: {e}")
+                print(f"Error processing {metric_file}: {e}")
                 continue
-
-            if len(data_points) < 2:
-                continue
-
-            # Extract timestamps and values for filtering
-            timestamps = [t for t, v in data_points]
-            values = [v for t, v in data_points]
-
-            # Filter last 5 minutes
-            filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
-
-            if len(filtered_timestamps) < 2:
-                continue
-
-            # Reconstruct filtered data points
-            filtered_data_points = list(zip(filtered_timestamps, filtered_values))
-
-            # Calculate throughput from filtered data
-            timestamps, throughputs = calculate_throughput(filtered_data_points, bucket_seconds)
-
-            if throughputs:
-                all_throughputs.extend(throughputs)
 
     if not all_throughputs:
-        return 0
+        return 0, loaded_data
 
-    return max(all_throughputs)
+    return max(all_throughputs), loaded_data
 
 
 def plot_throughput_group(normalized_name, dir_label_pairs, metric_name,
-                          bucket_seconds, output_dir, ylabel, unit_divisor, y_max):
+                          bucket_seconds, output_dir, ylabel, unit_divisor, y_max, loaded_data):
     """Create a single throughput plot for a normalized group.
 
-    Uses pre-calculated unit_divisor and ylabel from chunk-level max.
+    OPTIMIZED: Reuses pre-loaded data instead of re-reading files.
+
+    Args:
+        normalized_name: Normalized directory name
+        dir_label_pairs: List of (data_dir, label) tuples
+        metric_name: Name of metric
+        bucket_seconds: Bucket size for throughput
+        output_dir: Output directory path
+        ylabel: Y-axis label
+        unit_divisor: Divisor for unit scaling
+        y_max: Maximum y-axis value
+        loaded_data: Dict of pre-loaded data {file_path: (timestamps, values)}
     """
     plt.figure(figsize=(12, 4))
     has_data = False
 
     for data_dir, label in dir_label_pairs:
         metric_file = data_dir / f"{metric_name}.json"
+        metric_file_str = str(metric_file)
 
-        if not metric_file.exists():
-            print(f"Warning: {metric_file} not found, skipping")
+        # Check if data was already loaded
+        if metric_file_str not in loaded_data:
+            print(f"Warning: {metric_file} not found in loaded data, skipping")
             continue
 
         print(f"Processing {metric_file}...")
 
-        # Read data points
-        data_points = []
-        try:
-            with open(metric_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
+        # Retrieve pre-loaded data (already filtered, as NumPy arrays)
+        timestamps_unix, values = loaded_data[metric_file_str]
 
-                    try:
-                        data = json.loads(line)
-                        timestamp = parse_timestamp(data['timestamp'])
-                        value = float(data['fields']['value'])
-                        data_points.append((timestamp, value))
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        continue
-        except Exception as e:
-            print(f"Error reading {metric_file}: {e}")
-            continue
-
-        if len(data_points) < 2:
+        if len(timestamps_unix) < 2:
             print(f"Not enough data points in {metric_file}")
             continue
 
-        # Extract timestamps and values for filtering
-        timestamps = [t for t, v in data_points]
-        values = [v for t, v in data_points]
+        # Calculate throughput using vectorized operations
+        throughputs = data_cache.calculate_throughput_bins(
+            timestamps_unix,
+            values,
+            bin_seconds=bucket_seconds
+        )
 
-        # Filter last 5 minutes
-        filtered_timestamps, filtered_values = filter_last_n_minutes(timestamps, values, minutes=5)
+        if len(throughputs) > 0:
+            # Convert Unix timestamps to minutes from start
+            start_time_unix = timestamps_unix[0]
 
-        if len(filtered_timestamps) < 2:
-            print(f"Not enough data points after filtering in {metric_file}")
-            continue
+            # For throughput bins, we need to reconstruct time points
+            # Each bin represents bucket_seconds interval starting from start_time
+            time_minutes = np.arange(len(throughputs)) * bucket_seconds / 60.0
 
-        # Reconstruct filtered data points
-        filtered_data_points = list(zip(filtered_timestamps, filtered_values))
-
-        # Calculate throughput from filtered data
-        timestamps, throughputs = calculate_throughput(filtered_data_points, bucket_seconds)
-
-        if timestamps and throughputs:
-            # Convert to minutes and scale using chunk-level unit
-            start_time = timestamps[0]
-            time_minutes = [(t - start_time).total_seconds() / 60 for t in timestamps]
-            scaled_throughputs = [t / unit_divisor for t in throughputs]
+            # Scale throughputs using chunk-level unit
+            scaled_throughputs = throughputs / unit_divisor
 
             plt.plot(time_minutes, scaled_throughputs, label=label)
             has_data = True
@@ -380,7 +365,8 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
         chunk_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Calculate global max for this chunk size
-        chunk_global_max = calculate_chunk_global_max_throughput(
+        # OPTIMIZED: Returns both global_max AND loaded_data for reuse
+        chunk_global_max, loaded_data = calculate_chunk_global_max_throughput(
             normalized_groups, metric_name, bucket_seconds
         )
 
@@ -397,10 +383,11 @@ def plot_metric_throughput(split_data_dirs, metric_name, bucket_seconds, output_
         print(f"  Y-axis range for chunk size {chunk_size}: [0, {y_max:.2f}] {ylabel.split('(')[1].strip(')')}")
 
         # Create plots for each normalized group within this chunk size
+        # OPTIMIZED: Pass loaded_data to avoid re-reading files
         for normalized_name, dir_label_pairs in normalized_groups.items():
             plot_throughput_group(
                 normalized_name, dir_label_pairs, metric_name,
-                bucket_seconds, chunk_output_dir, ylabel, unit_divisor, y_max
+                bucket_seconds, chunk_output_dir, ylabel, unit_divisor, y_max, loaded_data
             )
 
 
