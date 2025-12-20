@@ -351,13 +351,16 @@ impl ZoneList {
 
             if finish_zone {
                 let res = device.finish_zone(zone_index);
-                let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
-                assert!(
-                    zones[zone_index as usize].zone_state == ZoneState::Closed
-                        || zones[zone_index as usize].zone_state == ZoneState::Full,
-                    "{:?} got instead",
-                    zones[zone_index as usize].zone_state
-                );
+                #[cfg(debug_assertions)]
+                {
+                    let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
+                    assert!(
+                        zones[zone_index as usize].zone_state == ZoneState::Closed
+                            || zones[zone_index as usize].zone_state == ZoneState::Full,
+                        "{:?} got instead",
+                        zones[zone_index as usize].zone_state
+                    );
+                }
                 if res.is_err() {
                     panic!("{:?}", res);
                 }
@@ -430,7 +433,7 @@ impl ZoneList {
         let zone = self.zones.get_mut(&chunk.zone).unwrap();
         tracing::debug!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
 
-        assert!(
+        debug_assert!(
             !zone.chunks_available.contains(&chunk.index),
             "Zone {} should not contain chunk {} we are trying to return",
             chunk.zone, chunk.index
