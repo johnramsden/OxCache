@@ -4,27 +4,27 @@ use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::Notify;
 use lru_mem::HeapSize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Chunk {
     pub uuid: String,
     pub offset: Byte,
     pub size: Byte,
 }
 
-// Only hash and compare based on uuid - offset/size are just read parameters
-impl PartialEq for Chunk {
-    fn eq(&self, other: &Self) -> bool {
-        self.uuid == other.uuid
-    }
-}
-
-impl Eq for Chunk {}
-
-impl std::hash::Hash for Chunk {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.uuid.hash(state);
-    }
-}
+// // Only hash and compare based on uuid - offset/size are just read parameters
+// impl PartialEq for Chunk {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.uuid == other.uuid
+//     }
+// }
+//
+// impl Eq for Chunk {}
+//
+// impl std::hash::Hash for Chunk {
+//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+//         self.uuid.hash(state);
+//     }
+// }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct ChunkLocation {
