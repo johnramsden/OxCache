@@ -3,6 +3,7 @@ use crate::{cache, device};
 use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 use std::thread::{self, JoinHandle};
 use crate::metrics::{MetricType, METRICS};
 use crate::cache::bucket::PinGuard;
@@ -53,8 +54,33 @@ impl Reader {
             METRICS.update_metric_histogram_latency("device_read_latency_ms", start.elapsed(), MetricType::MsLatency);
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);
-                let mut policy = mtx.lock().unwrap();
-                policy.read_update(msg.location);
+                let policy = mtx.lock().unwrap();
+
+                match &*policy {
+                    EvictionPolicyWrapper::Promotional(p) => {
+                        // Clone Arc references before dropping lock
+                        let zone_idx = msg.location.zone as usize;
+                        let nr_chunks = p.nr_chunks_per_zone;
+                        let counters = Arc::clone(&p.zone_chunk_counts);
+                        drop(policy);
+
+                        // Check atomically if zone is full (outside lock)
+                        if zone_idx < counters.len() {
+                            let count = counters[zone_idx].load(Ordering::Relaxed);
+
+                            // Only acquire lock if zone is full
+                            if count >= nr_chunks {
+                                let mut policy = mtx.lock().unwrap();
+                                policy.read_update(msg.location);
+                            }
+                        }
+                    }
+                    EvictionPolicyWrapper::Chunk(_) => {
+                        drop(policy);
+                        let mut policy = mtx.lock().unwrap();
+                        policy.read_update(msg.location);
+                    }
+                }
             }
             let resp = ReadResponse { data: result };
             let snd = msg.responder.send(resp);

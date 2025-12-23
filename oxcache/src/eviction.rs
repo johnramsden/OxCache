@@ -8,7 +8,7 @@ use lru_mem::{LruCache, MemSize};
 use nvme::types::{Chunk, Zone};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -119,7 +119,8 @@ pub struct PromotionalEvictionPolicy {
     high_water: Zone,
     low_water: Zone,
     nr_zones: Zone,
-    nr_chunks_per_zone: Chunk,
+    pub nr_chunks_per_zone: Chunk,
+    pub zone_chunk_counts: Arc<Vec<AtomicU64>>,
     lru: LruCache<Zone, ()>,
     #[cfg(feature = "eviction-metrics")]
     pub metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
@@ -133,11 +134,17 @@ impl PromotionalEvictionPolicy {
         nr_chunks_per_zone: Chunk,
     ) -> Self {
         let lru = LruCache::new(usize::MAX); // Effectively unbounded
+        let zone_chunk_counts = Arc::new(
+            (0..nr_zones)
+                .map(|_| AtomicU64::new(0))
+                .collect()
+        );
         Self {
             high_water,
             low_water,
             nr_zones,
             nr_chunks_per_zone,
+            zone_chunk_counts,
             lru,
             #[cfg(feature = "eviction-metrics")]
             metrics: None,
@@ -157,12 +164,9 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
             metrics.record_write(&chunk);
         }
 
-        // assert!(!self.lru.contains(&chunk.zone)); // We cannot assert this because we allow out of order writes
-
-        // We only want to put it in the LRU once the zone is full
-        if chunk.index == self.nr_chunks_per_zone - 1 {
-            self.lru.insert(chunk.zone, ()).ok();
-        }
+        // This is now only called when zone is full (atomic check done outside lock)
+        // Just insert the zone into the LRU
+        self.lru.insert(chunk.zone, ()).ok();
     }
 
     fn read_update(&mut self, chunk: ChunkLocation) {
@@ -171,9 +175,8 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
             metrics.record_read(&chunk);
         }
 
-        // We only want to put it in the LRU once the zone is full
-        // If it has filled before we want to update every time "promoting" it
-        // Following this, only zones that have filled prior are updated
+        // This is now only called when zone is full (atomic check done outside lock)
+        // Promote the zone in the LRU if it's already there
         if self.lru.contains(&chunk.zone) {
             self.lru.insert(chunk.zone, ()).ok();
         }

@@ -123,11 +123,35 @@ impl Writer {
         let start = std::time::Instant::now();
 
         let result = self.device.append(msg.data).inspect(|loc| {
-            let mtx = Arc::clone(&self.eviction);
-
             if msg.update_lru {
-                let mut policy = mtx.lock().unwrap();
-                policy.write_update(loc.clone());
+                let mtx = Arc::clone(&self.eviction);
+                let policy = mtx.lock().unwrap();
+
+                match &*policy {
+                    EvictionPolicyWrapper::Promotional(p) => {
+                        // Clone Arc references before dropping lock
+                        let zone_idx = loc.zone as usize;
+                        let nr_chunks = p.nr_chunks_per_zone;
+                        let counters = Arc::clone(&p.zone_chunk_counts);
+                        drop(policy);
+
+                        // Do atomic increment outside lock
+                        if zone_idx < counters.len() {
+                            let count = counters[zone_idx].fetch_add(1, Ordering::Relaxed);
+
+                            // Only re-acquire lock when zone becomes full
+                            if count + 1 == nr_chunks {
+                                let mut policy = mtx.lock().unwrap();
+                                policy.write_update(loc.clone());
+                            }
+                        }
+                    }
+                    EvictionPolicyWrapper::Chunk(_) => {
+                        drop(policy);
+                        let mut policy = mtx.lock().unwrap();
+                        policy.write_update(loc.clone());
+                    }
+                }
             }
         });
         METRICS.update_metric_histogram_latency("device_write_latency_ms", start.elapsed(), MetricType::MsLatency);
@@ -153,9 +177,33 @@ impl Writer {
 
             if let Ok(ref loc) = result {
                 let mtx = Arc::clone(&self.eviction);
-                let mut policy = mtx.lock().unwrap();
-                policy.write_update(loc.clone());
-                drop(policy);
+                let policy = mtx.lock().unwrap();
+
+                match &*policy {
+                    EvictionPolicyWrapper::Promotional(p) => {
+                        // Clone Arc references before dropping lock
+                        let zone_idx = loc.zone as usize;
+                        let nr_chunks = p.nr_chunks_per_zone;
+                        let counters = Arc::clone(&p.zone_chunk_counts);
+                        drop(policy);
+
+                        // Do atomic increment outside lock
+                        if zone_idx < counters.len() {
+                            let count = counters[zone_idx].fetch_add(1, Ordering::Relaxed);
+
+                            // Only re-acquire lock when zone becomes full
+                            if count + 1 == nr_chunks {
+                                let mut policy = mtx.lock().unwrap();
+                                policy.write_update(loc.clone());
+                            }
+                        }
+                    }
+                    EvictionPolicyWrapper::Chunk(_) => {
+                        drop(policy);
+                        let mut policy = mtx.lock().unwrap();
+                        policy.write_update(loc.clone());
+                    }
+                }
             } else {
                 tracing::error!("Failed to append: {:?}", result);
             }
