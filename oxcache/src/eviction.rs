@@ -561,7 +561,10 @@ mod tests {
 
         // zone=[_,_,_,_], lru=()
         let mut order: VecDeque<Zone> = VecDeque::new();
-        policy.write_update(ChunkLocation::new(3, 0));
+        let count = policy.zone_chunk_counts[3].fetch_add(1, Ordering::Relaxed);
+        if count + 1 == policy.nr_chunks_per_zone {
+            policy.write_update(ChunkLocation::new(3, 0));
+        }
         compare_order(&mut policy.lru, &order);
         let et = policy.get_evict_targets(false);
         let expect_none: Vec<Zone> = vec![];
@@ -572,7 +575,10 @@ mod tests {
         );
 
         // zone=[_,_,_,_], lru=()
-        policy.write_update(ChunkLocation::new(3, 1));
+        let count = policy.zone_chunk_counts[3].fetch_add(1, Ordering::Relaxed);
+        if count + 1 == policy.nr_chunks_per_zone {
+            policy.write_update(ChunkLocation::new(3, 1));
+        }
         // zone=[_,_,_,3], lru=(3)
         order.push_back(3);
         compare_order(&mut policy.lru, &order);
@@ -583,12 +589,18 @@ mod tests {
             expect_none, et
         );
 
-        policy.write_update(ChunkLocation::new(1, 0));
+        let count = policy.zone_chunk_counts[1].fetch_add(1, Ordering::Relaxed);
+        if count + 1 == policy.nr_chunks_per_zone {
+            policy.write_update(ChunkLocation::new(1, 0));
+        }
         // There should be no change
         // zone=[_,_,_,3], lru=(3)
         compare_order(&mut policy.lru, &order);
 
-        policy.write_update(ChunkLocation::new(1, 1));
+        let count = policy.zone_chunk_counts[1].fetch_add(1, Ordering::Relaxed);
+        if count + 1 == policy.nr_chunks_per_zone {
+            policy.write_update(ChunkLocation::new(1, 1));
+        }
         // zone=[_,1,_,3], lru=(3, 1)
         order.push_front(1);
         compare_order(&mut policy.lru, &order);
@@ -598,15 +610,22 @@ mod tests {
             "Expected = {:?}, but got {:?}",
             expect_none, et
         );
-
-        policy.write_update(ChunkLocation::new(2, 0));
-        policy.write_update(ChunkLocation::new(2, 1));
+        let count = policy.zone_chunk_counts[2].fetch_add(1, Ordering::Relaxed);
+        if count + 1 == policy.nr_chunks_per_zone {
+            policy.write_update(ChunkLocation::new(2, 0));
+        }
+        let count = policy.zone_chunk_counts[2].fetch_add(1, Ordering::Relaxed);
+        if count + 1 == policy.nr_chunks_per_zone {
+            policy.write_update(ChunkLocation::new(2, 1));
+        }
         order.push_front(2);
         // zone=[_,1,2,3], lru=(3, 1, 2)
         compare_order(&mut policy.lru, &order);
 
         // Should update in place, and adjust order
-        policy.read_update(ChunkLocation::new(3, 1));
+        if policy.zone_chunk_counts[3].load(Ordering::Relaxed) >= policy.nr_chunks_per_zone {
+            policy.read_update(ChunkLocation::new(3, 1));
+        }
         let c = order.pop_back().unwrap();
         order.push_front(c);
         // zone=[_,1,2,3], lru=(1, 2, 3)
