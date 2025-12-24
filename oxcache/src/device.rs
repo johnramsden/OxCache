@@ -707,6 +707,17 @@ impl Device for Zoned {
                 let mut zones = zone_mtx.lock().unwrap();
                 zones.reset_zones(&zones_to_evict, &*self)?;
 
+                // Reset atomic counters for evicted zones
+                let mut policy = eviction_policy.lock().unwrap();
+                if let EvictionPolicyWrapper::Promotional(p) = &*policy {
+                    for &zone in &zones_to_evict {
+                        if (zone as usize) < p.zone_chunk_counts.len() {
+                            p.zone_chunk_counts[zone as usize].store(0, Ordering::Relaxed);
+                        }
+                    }
+                }
+                drop(policy);
+
                 Ok(())
             }
         }
@@ -1051,6 +1062,18 @@ impl Device for BlockInterface {
                 let state_mtx = Arc::clone(&self.state);
                 let mut state = state_mtx.lock().unwrap();
                 state.active_zones.reset_zones(&locations, &*self)?;
+
+                // Reset atomic counters for evicted zones
+                let mut policy = eviction_policy.lock().unwrap();
+                if let EvictionPolicyWrapper::Promotional(p) = &*policy {
+                    for &zone in &locations {
+                        if (zone as usize) < p.zone_chunk_counts.len() {
+                            p.zone_chunk_counts[zone as usize].store(0, Ordering::Relaxed);
+                        }
+                    }
+                }
+                drop(policy);
+
                 Ok(())
             }
         }
