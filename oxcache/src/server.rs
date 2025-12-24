@@ -432,19 +432,26 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                         }
 
                         // println!("Received get request: {:?}", req);
-                        let chunk: Chunk = req.into();
-                        let chunk_clone = chunk.clone();
+
+                        // Extract request parameters for subset reading
+                        let request_offset = req.offset;
+                        let request_size = req.size;
+                        let request_uuid = req.key.clone();
+
+                        // Create normalized cache key (always 0, chunk_size)
+                        let cache_key = Chunk::new(request_uuid.clone(), 0, chunk_size);
 
                         tracing::debug!("REQ[{}] Calling cache.get_or_insert_with", request_id);
                         cache.get_or_insert_with(
-                            chunk.clone(),
+                            cache_key,
                             {
                                 let writer = Arc::clone(&writer);
                                 let reader_pool = Arc::clone(&reader_pool);
                                 let start = Arc::clone(&start);
-                                // let chunk = chunk.clone();
+                                let request_offset = request_offset;
+                                let request_size = request_size;
+                                let request_uuid = request_uuid.clone();
                                 move |pin_guard| async move {
-                                    let chunk = chunk.clone();
                                     tracing::debug!("REQ[{}] CACHE HIT - entering read path", request_id);
                                     let location = pin_guard.location().clone();
 
@@ -453,8 +460,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         location,
                                         responder: tx,
                                         _pin_guard: pin_guard,
-                                        read_offset: chunk.offset,
-                                        read_size: chunk.size,
+                                        read_offset: request_offset,
+                                        read_size: request_size,
                                     };
                                     tracing::debug!("REQ[{}] Sending read request to reader pool", request_id);
                                     reader_pool.send(read_req).await.map_err(|e| {
@@ -483,9 +490,9 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                     // Validate read response - pin_guard must stay alive until here!
                                     // Note: We validate against the original chunk that was stored (0, chunk_size),
-                                    // not the subset request (chunk.offset, chunk.size)
+                                    // not the subset request (request_offset, request_size)
                                     #[cfg(debug_assertions)]
-                                    validate_read_response(&header, &chunk.uuid, 0, chunk_size);
+                                    validate_read_response(&header, &request_uuid, 0, chunk_size);
 
                                     // Return only the data portion (header is just for validation)
                                     let chunked_resp = data;
@@ -506,21 +513,23 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     METRICS.update_metric_counter("hit", 1);
                                     METRICS.update_hitratio(HitType::Hit);
-                                    METRICS.update_metric_counter("read_bytes_total", chunk.size);
-                                    METRICS.update_metric_counter("bytes_total", chunk.size);
+                                    METRICS.update_metric_counter("read_bytes_total", request_size);
+                                    METRICS.update_metric_counter("bytes_total", request_size);
                                     tracing::debug!("REQ[{}] CACHE HIT completed successfully", request_id);
                                     Ok(())
                                 }
                             },
                             {
-                                let chunk = chunk_clone.clone();
                                 let writer = Arc::clone(&writer);
                                 let remote = Arc::clone(&remote);
                                 let writer_pool = Arc::clone(&writer_pool);
                                 let start = Arc::clone(&start);
+                                let request_offset = request_offset;
+                                let request_size = request_size;
+                                let request_uuid = request_uuid.clone();
                                 move || async move {
                                     tracing::debug!("REQ[{}] CACHE MISS - entering remote fetch path", request_id);
-                                    let resp = match remote.get(chunk.uuid.as_str(), 0, chunk_size).await {
+                                    let resp = match remote.get(request_uuid.as_str(), 0, chunk_size).await {
                                         Ok(resp) => {
                                             tracing::debug!("REQ[{}] Remote fetch completed successfully", request_id);
                                             resp
@@ -543,7 +552,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     };
 
                                     // Will implicitly fail if size larger than chunk
-                                    let chunked_resp = resp.slice(chunk.offset as usize..(chunk.offset + chunk.size) as usize);
+                                    let chunked_resp = resp.slice(request_offset as usize..(request_offset + request_size) as usize);
                                     let encoded = bincode::serde::encode_to_vec(
                                         request::GetResponse::Response(chunked_resp),
                                         bincode::config::standard()
