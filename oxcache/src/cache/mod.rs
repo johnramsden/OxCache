@@ -511,17 +511,20 @@ mod mod_tests {
             Err(err) => assert!(false, "Error occurred: {err}"),
         };
 
-        // Insert multiple similar entries
-        let entry1 = Chunk::new(String::from("fake-uuid"), 120, 10);
-        let entry2 = Chunk::new(String::from("fake-uuid!"), 120, 10);
-        let entry3 = Chunk::new(String::from("fake-uuid"), 121, 10);
-        let entry4 = Chunk::new(String::from("fake-uuid"), 121, 11);
+        // Test UUID-only hashing: entries with same UUID should map to same cache entry
+        // even with different offset/size
+        let entry1 = Chunk::new(String::from("fake-uuid-1"), 120, 10);
+        let entry2 = Chunk::new(String::from("fake-uuid-2"), 120, 10);
+        let entry3 = Chunk::new(String::from("fake-uuid-3"), 121, 10);
+        let entry4 = Chunk::new(String::from("fake-uuid-4"), 121, 11);
 
+        // Different UUIDs, so different cache entries
         let chunk_loc1 = ChunkLocation::new(0, 20);
         let chunk_loc2 = ChunkLocation::new(1, 22);
         let chunk_loc3 = ChunkLocation::new(9, 25);
         let chunk_loc4 = ChunkLocation::new(7, 29);
 
+        // Insert all four entries (all have different UUIDs)
         check_err(
             cache
                 .get_or_insert_with(entry1.clone(), fail_path, {
@@ -558,6 +561,7 @@ mod mod_tests {
                 .await,
         );
 
+        // Verify all entries hit cache with correct locations
         check_err(
             cache
                 .get_or_insert_with(
@@ -610,6 +614,54 @@ mod mod_tests {
                     {
                         |pin_guard| async move {
                             assert_eq!(pin_guard.location(), &chunk_loc4);
+                            Ok(())
+                        }
+                    },
+                    fail_write_path,
+                )
+                .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_uuid_only_hashing() {
+        let cache = Cache::new(10, 100);
+
+        let fail_write_path = async || -> tokio::io::Result<ChunkLocation> {
+            assert!(false, "Write shouldn't be called for cache hit");
+            Ok(ChunkLocation { zone: 0, index: 0 })
+        };
+
+        let check_err = |result| match result {
+            Ok(()) => (),
+            Err(err) => assert!(false, "Error occurred: {err}"),
+        };
+
+        // Insert entry with specific offset/size
+        let entry1 = Chunk::new(String::from("same-uuid"), 120, 10);
+        let chunk_loc1 = ChunkLocation::new(0, 20);
+
+        check_err(
+            cache
+                .get_or_insert_with(entry1.clone(), |_| async { Ok(()) }, {
+                    let chunk_loc1 = chunk_loc1.clone();
+                    || async { Ok(chunk_loc1) }
+                })
+                .await,
+        );
+
+        // Try to insert with same UUID but different offset/size
+        // Should hit cache (reader path), not write
+        let entry2 = Chunk::new(String::from("same-uuid"), 0, 100);
+
+        check_err(
+            cache
+                .get_or_insert_with(
+                    entry2,
+                    {
+                        |pin_guard| async move {
+                            // Should hit cache and return same location as entry1
+                            assert_eq!(pin_guard.location(), &chunk_loc1);
                             Ok(())
                         }
                     },
@@ -701,10 +753,10 @@ mod mod_tests {
             Err(err) => assert!(false, "Error occurred: {err}"),
         };
 
-        let entry = Chunk::new(String::from("fake-uuid"), 120, 10);
+        let entry = Chunk::new(String::from("fake-uuid-1"), 120, 10);
         let chunk_loc = ChunkLocation::new(0, 20);
 
-        let entry2 = Chunk::new(String::from("fake-uuid"), 121, 10);
+        let entry2 = Chunk::new(String::from("fake-uuid-2"), 121, 10);
         let chunk_loc2 = ChunkLocation::new(0, 21);
 
         // Insert
