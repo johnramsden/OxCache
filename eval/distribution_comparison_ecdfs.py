@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate distribution comparison boxplots for OxCache performance metrics.
+Generate distribution comparison ECDF plots for OxCache latency metrics.
 Compares device types (Zoned vs Block) and eviction algorithms (Zone LRU vs Chunk LRU)
 organized by distribution (ZIPFIAN vs UNIFORM).
 """
@@ -11,7 +11,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib import patches as mpatches
 from matplotlib.patches import Rectangle
+from matplotlib.lines import Line2D
 from matplotlib import rcParams
+from matplotlib.ticker import LogLocator, FuncFormatter, MaxNLocator
 import numpy as np
 from datetime import datetime, timedelta
 import data_cache
@@ -46,22 +48,64 @@ EVICTION_TYPE_LABELS = {
     "chunk": "Chunk-LRU"
 }
 
-# Device colors (using lighter colors from original boxplot_graphs.py)
+# Device colors (same as box plots)
 DEVICE_COLORS = {
     "ZNS": "lightcoral",
     "Block": "lightblue"
 }
 
-# Eviction type hatching
-EVICTION_HATCH = {
-    "promotional": "",      # No hatch for Zone-LRU
-    "chunk": "///"         # Hash marks for Chunk-LRU
+# Line styles for eviction types
+EVICTION_LINE_STYLE = {
+    "promotional": "-",      # Solid line for Zone-LRU
+    "chunk": "--"           # Dashed line for Chunk-LRU
 }
+
+# Line width
+LINE_WIDTH = 2.5
 
 # Device name mappings
 DEVICE_MAPPINGS = {
     "nvme0n2": "ZNS",
     "nvme1n1": "Block"
+}
+
+# Supported latency metrics
+LATENCY_METRICS = {
+    "get_total": {
+        "file": "get_total_latency_ms.json",
+        "label": "Get Total Latency (ms)",
+        "short_label": "Get Total"
+    },
+    "get_hit": {
+        "file": "get_hit_latency_ms.json",
+        "label": "Get Hit Latency (ms)",
+        "short_label": "Get Hit"
+    },
+    "get_miss": {
+        "file": "get_miss_latency_ms.json",
+        "label": "Get Miss Latency (ms)",
+        "short_label": "Get Miss"
+    },
+    "device_read": {
+        "file": "device_read_latency_ms.json",
+        "label": "Device Read Latency (ms)",
+        "short_label": "Device Read"
+    },
+    "device_write": {
+        "file": "device_write_latency_ms.json",
+        "label": "Device Write Latency (ms)",
+        "short_label": "Device Write"
+    },
+    "disk_read": {
+        "file": "disk_read_latency_ms.json",
+        "label": "Disk Read Latency (ms)",
+        "short_label": "Disk Read"
+    },
+    "disk_write": {
+        "file": "disk_write_latency_ms.json",
+        "label": "Disk Write Latency (ms)",
+        "short_label": "Disk Write"
+    }
 }
 
 # ============================================================================
@@ -183,46 +227,68 @@ def collect_runs(split_output_dir):
 
 
 # ============================================================================
-# BOXPLOT GENERATION
+# ECDF GENERATION
 # ============================================================================
 
-def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, output_file, sample_size=None, from_eviction_start=False, filter_minutes=5, common_y_scale=False, show_outliers=False):
+def compute_ecdf(data):
     """
-    Generate distribution comparison boxplot for a specific distribution and metric.
+    Compute ECDF coordinates for a dataset.
+
+    Args:
+        data: NumPy array or list of values
+
+    Returns:
+        tuple: (x_values, y_values) for plotting ECDF
+               x_values: sorted data points
+               y_values: cumulative probabilities (0 to 1)
+    """
+    data = np.asarray(data)
+    n = len(data)
+
+    if n == 0:
+        return np.array([]), np.array([])
+
+    # Sort the data
+    x = np.sort(data)
+
+    # Compute cumulative probabilities
+    y = np.arange(1, n + 1) / n
+
+    return x, y
+
+
+def generate_distribution_comparison(block_dir, zns_dir, distribution, output_file, metric_type="get_total", sample_size=None, from_eviction_start=False, filter_minutes=5, log_scale=False):
+    """
+    Generate distribution comparison ECDF plot for latency.
 
     Args:
         block_dir: Path to block device split_output directory
         zns_dir: Path to ZNS device split_output directory
         distribution: "ZIPFIAN" or "UNIFORM"
-        metric: "latency" or "throughput"
         output_file: Output filename for the plot
+        metric_type: Type of latency metric to plot (from LATENCY_METRICS)
         sample_size: If provided, sample every Nth line from JSON files for faster processing
         from_eviction_start: If True, only include data from when eviction begins
         filter_minutes: Number of minutes to exclude from end of run (default: 5)
-        common_y_scale: If True, use common y-axis maximum across all subplots
-        show_outliers: If True, display outliers beyond 1.5×IQR from quartiles
+        log_scale: If True, use logarithmic scale for x-axis
     """
-    print(f"\nGenerating {distribution} {metric} comparison boxplot...")
+    # Get metric configuration
+    if metric_type not in LATENCY_METRICS:
+        raise ValueError(f"Unknown metric type: {metric_type}. Choose from: {list(LATENCY_METRICS.keys())}")
+
+    metric_config = LATENCY_METRICS[metric_type]
+    metric_file = metric_config["file"]
+    metric_label = metric_config["label"]
+
+    print(f"\nGenerating {distribution} {metric_config['short_label']} ECDF plot...")
     if from_eviction_start:
         print("  Filtering data from eviction start...")
     if filter_minutes:
         print(f"  Excluding last {filter_minutes} minutes of data...")
-    if common_y_scale:
-        print("  Using common y-axis scale across all subplots...")
-    if show_outliers:
-        print("  Showing outliers in box plots...")
+    if log_scale:
+        print("  Using logarithmic x-axis scale...")
 
-    # Determine metric filename and scale
-    if metric == "latency":
-        metric_file = "get_total_latency_ms.json"
-        metric_label = "Latency (ms)"
-        scale = 1.0  # Already in ms
-    elif metric == "throughput":
-        metric_file = "bytes_total.json"
-        metric_label = "Throughput (GiB/s)"
-        scale = 1 / (2**30)  # Convert bytes to GiB
-    else:
-        raise ValueError(f"Unknown metric: {metric}")
+    scale = 1.0  # Already in ms
 
     # Collect runs from both directories
     block_runs = collect_runs(block_dir)
@@ -238,20 +304,13 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
     if num_subplots == 1:
         axes = [axes]
 
-    # First pass: collect all data to find global maximum for y-axis
-    all_subplot_data = []
-    global_max = 0.0
-
     idx = 0
 
     # Iterate through ratios, then chunk sizes
     for ratio in RATIOS:
         for chunk_size in CHUNK_SIZES:
             # Prepare data for this subplot
-            current_data = []
-            labels = []
-            colors = []
-            hatches = []
+            current_ax = axes[idx]
 
             # Determine which eviction types to include
             if chunk_size == 1129316352:  # 1076MiB only has promotional
@@ -279,138 +338,95 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
                     if matching_run:
                         data_file = matching_run["path"] / metric_file
                         if data_file.exists():
-                            print(f"  Loading {metric_file} for {device} {EVICTION_TYPE_LABELS[eviction_type]}...")
+                            print(f"  Loading {metric_config['short_label']} for {device} {EVICTION_TYPE_LABELS[eviction_type]}...")
 
                             # Find eviction start time if filtering is enabled
                             eviction_start_time = None
                             if from_eviction_start:
                                 eviction_start_time = find_eviction_start_time(matching_run["path"])
 
-                            if metric == "throughput":
-                                # Load with timestamps and filter in one pass using shared cache
-                                # Returns NumPy arrays for efficient processing
-                                ts, vals = data_cache.load_metric_data(data_file,
-                                                                       filter_minutes=filter_minutes,
-                                                                       use_cache=True,
-                                                                       sample_size=sample_size)
+                            # Load latency data with filtering in one pass using shared cache
+                            # Returns NumPy arrays
+                            ts, vals = data_cache.load_metric_data(data_file,
+                                                                   filter_minutes=filter_minutes,
+                                                                   use_cache=True,
+                                                                   sample_size=sample_size)
 
-                                # Filter from eviction start if enabled
-                                if from_eviction_start and eviction_start_time is not None:
-                                    mask = ts >= eviction_start_time
-                                    ts = ts[mask]
-                                    vals = vals[mask]
-                                    print(f"    Filtered to {len(vals)} points from eviction start")
+                            # Filter from eviction start if enabled
+                            if from_eviction_start and eviction_start_time is not None:
+                                mask = ts >= eviction_start_time
+                                ts = ts[mask]
+                                vals = vals[mask]
+                                print(f"    Filtered to {len(vals)} points from eviction start")
 
-                                # Calculate throughput in 60-second bins (vectorized)
-                                throughput = data_cache.calculate_throughput_bins(ts, vals, bin_seconds=60)
-                                # Scale and convert to list for matplotlib
-                                current_data.append((throughput * scale).tolist())
-                            else:
-                                # Load latency data with filtering in one pass using shared cache
-                                # Returns NumPy arrays
-                                ts, vals = data_cache.load_metric_data(data_file,
-                                                                       filter_minutes=filter_minutes,
-                                                                       use_cache=True,
-                                                                       sample_size=sample_size)
+                            # Scale data
+                            vals = vals * scale
 
-                                # Filter from eviction start if enabled
-                                if from_eviction_start and eviction_start_time is not None:
-                                    mask = ts >= eviction_start_time
-                                    ts = ts[mask]
-                                    vals = vals[mask]
-                                    print(f"    Filtered to {len(vals)} points from eviction start")
+                            # Compute ECDF
+                            x, y = compute_ecdf(vals)
 
-                                # Scale and convert to list for matplotlib
-                                current_data.append((vals * scale).tolist())
+                            # Plot ECDF
+                            label = f"{device} {EVICTION_TYPE_LABELS[eviction_type]}"
+                            color = DEVICE_COLORS[device]
+                            linestyle = EVICTION_LINE_STYLE[eviction_type]
 
-                            # Add styling info
-                            labels.append(f"{device}-{EVICTION_TYPE_LABELS[eviction_type]}")
-                            colors.append(DEVICE_COLORS[device])
-                            hatches.append(EVICTION_HATCH[eviction_type])
+                            current_ax.plot(x, y * 100,  # Convert to percentage
+                                          label=label,
+                                          color=color,
+                                          linestyle=linestyle,
+                                          linewidth=LINE_WIDTH,
+                                          alpha=0.8)
+
                         else:
                             print(f"Warning: Missing {metric_file} for {device} {eviction_type} chunk={chunk_size} ratio={ratio}")
-                            current_data.append([])
-                            labels.append(f"{device}-{EVICTION_TYPE_LABELS[eviction_type]}")
-                            colors.append(DEVICE_COLORS[device])
-                            hatches.append(EVICTION_HATCH[eviction_type])
                     else:
                         print(f"Warning: No run found for {device} {eviction_type} chunk={chunk_size} dist={distribution} ratio={ratio}")
 
-            # Store data for this subplot
-            all_subplot_data.append({
-                'data': current_data,
-                'labels': labels,
-                'colors': colors,
-                'hatches': hatches,
-                'chunk_size': chunk_size
-            })
+            # Configure subplot
+            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=16, weight='bold')
+            current_ax.set_ylabel('Cumulative Probability (%)', fontsize=14)
+            current_ax.set_ylim(0, 100)
 
-            # Update global maximum if using common scale
-            if common_y_scale:
-                for data_list in current_data:
-                    if len(data_list) > 0:
-                        local_max = max(data_list)
-                        if local_max > global_max:
-                            global_max = local_max
+            # Configure x-axis scale
+            if log_scale:
+                current_ax.set_xscale('log')
+                # Use exponential notation for tick labels
+                current_ax.xaxis.set_major_locator(LogLocator(base=10.0, numticks=10))
+                current_ax.xaxis.set_minor_locator(LogLocator(base=10.0, subs='auto', numticks=10))
+
+                # Format tick labels to show exponents (e.g., 10^0, 10^1, etc.)
+                def exp_formatter(x, pos):
+                    if x == 0:
+                        return '0'
+                    exponent = int(np.log10(x))
+                    # Show 10^n format
+                    if x == 10**exponent:
+                        if exponent == 0:
+                            return '1'
+                        elif exponent == 1:
+                            return '10'
+                        else:
+                            return f'$10^{{{exponent}}}$'
+                    else:
+                        # For intermediate values, show the number
+                        return f'{x:.0f}' if x >= 1 else f'{x:.1f}'
+
+                current_ax.xaxis.set_major_formatter(FuncFormatter(exp_formatter))
+            else:
+                current_ax.set_xlim(left=0)
+                # Use MaxNLocator to ensure nice, evenly-spaced tick intervals
+                current_ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=False, prune=None))
+
+            current_ax.grid(True, alpha=0.3, linestyle='--')
+
+            # Rotate y-axis labels
+            for label in current_ax.get_yticklabels():
+                label.set_rotation(45)
 
             idx += 1
 
-    # Add some padding to the global max (10% above highest value)
-    if common_y_scale:
-        y_max = global_max * 1.1
-        print(f"  Setting common y-axis range: [0, {y_max:.2f}]")
-    else:
-        y_max = None
-
-    # Second pass: create boxplots with common y-axis
-    idx = 0
-    for subplot_info in all_subplot_data:
-        current_data = subplot_info['data']
-        labels = subplot_info['labels']
-        colors = subplot_info['colors']
-        hatches = subplot_info['hatches']
-        chunk_size = subplot_info['chunk_size']
-
-        # Create boxplot for this subplot
-        if current_data:
-                bp = axes[idx].boxplot(current_data,
-                                      showfliers=show_outliers,
-                                      widths=0.8,
-                                      medianprops=dict(linewidth=2, color='black'),
-                                      patch_artist=True)
-
-                # Apply colors and hatches
-                for i, (box, color, hatch) in enumerate(zip(bp['boxes'], colors, hatches)):
-                    box.set_facecolor(color)
-                    box.set_hatch(hatch)
-                    box.set_alpha(0.7)
-
-                # Set x-axis labels (empty for cleaner look, or could add device labels)
-                axes[idx].set_xticks(range(1, len(labels) + 1))
-                axes[idx].set_xticklabels([], rotation=45, fontsize=10)
-
-                # Add chunk size label below subplot
-                axes[idx].set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=16, weight='bold')
-
-                # Rotate y-axis labels
-                for label in axes[idx].get_yticklabels():
-                    label.set_rotation(45)
-
-                # Set y-axis range
-                if common_y_scale:
-                    # Use common y-axis maximum for all subplots
-                    axes[idx].set_ylim(0, y_max)
-                else:
-                    # Just set bottom to 0, let matplotlib auto-scale the top
-                    axes[idx].set_ylim(bottom=0)
-
-        idx += 1
-
-    # Add y-axis label on the far left
-    fig.text(0.02, 0.5, metric_label, va='center', rotation='vertical', fontsize=22, weight='bold')
-
-    # Adjust layout (do these BEFORE computing positions)
-    plt.subplots_adjust(wspace=0.05, hspace=0.0)
+    # Adjust layout
+    plt.subplots_adjust(wspace=0.15, hspace=0.0)
     plt.tight_layout(pad=0.0)
     plt.subplots_adjust(top=0.92, bottom=0.15, left=0.05)
 
@@ -419,6 +435,46 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
 
     # Compute positions for ratio boxes and labels based on actual subplot bounds
     axes_bboxes = [ax.get_position().bounds for ax in axes]  # (x, y, w, h) per axes
+
+    # Calculate the true center of all subplots
+    leftmost = axes_bboxes[0][0]  # x position of first subplot
+    rightmost = axes_bboxes[-1][0] + axes_bboxes[-1][2]  # x + width of last subplot
+    subplot_center = (leftmost + rightmost) / 2
+
+    # Create figure-level legend at bottom
+    legend_lines = [
+        Line2D([0], [0], color='lightcoral', linestyle='-', linewidth=LINE_WIDTH,
+               label='ZNS (Zone LRU)', alpha=0.8),
+        Line2D([0], [0], color='lightcoral', linestyle='--', linewidth=LINE_WIDTH,
+               label='ZNS (Chunk LRU)', alpha=0.8),
+        Line2D([0], [0], color='lightblue', linestyle='-', linewidth=LINE_WIDTH,
+               label='Block (Zone LRU)', alpha=0.8),
+        Line2D([0], [0], color='lightblue', linestyle='--', linewidth=LINE_WIDTH,
+               label='Block (Chunk LRU)', alpha=0.8),
+    ]
+    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, 0.02),
+               loc='center', fontsize="large", columnspacing=2.0, frameon=False)
+
+    # Add a background box for the x-axis label to make it stand out
+    label_y = 0.08
+    label_width = 0.12
+    label_height = 0.03
+    fig.add_artist(
+        Rectangle(
+            (subplot_center - label_width/2, label_y - label_height/2),
+            label_width,
+            label_height,
+            transform=fig.transFigure,
+            facecolor='white',
+            edgecolor='black',
+            linewidth=1.5,
+            zorder=10,
+        )
+    )
+
+    # Add x-axis label at the bottom, centered over the subplots
+    fig.text(subplot_center, label_y, 'Latency (ms)', ha='center', va='center',
+             fontsize=18, weight='bold', zorder=11)
 
     # First 3 subplots -> Ratio 1:2, next 3 -> Ratio 1:10
     group1 = axes_bboxes[0:3]
@@ -489,24 +545,6 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
         zorder=2,
     )
 
-    # Add legend at bottom
-    legend_patches = [
-        mpatches.Patch(facecolor='lightcoral', label='ZNS (Zone LRU)', alpha=0.7),
-        mpatches.Patch(facecolor='lightcoral', hatch='///', label='ZNS (Chunk LRU)', alpha=0.7),
-        mpatches.Patch(facecolor='lightblue', label='Block (Zone LRU)', alpha=0.7),
-        mpatches.Patch(facecolor='lightblue', hatch='///', label='Block (Chunk LRU)', alpha=0.7),
-    ]
-
-    fig.legend(
-        ncols=4,
-        handles=legend_patches,
-        bbox_to_anchor=(0.5, 0.08),
-        loc='center',
-        fontsize="large",
-        columnspacing=2.0,
-        frameon=False
-    )
-
     # Save figure
     plt.savefig(output_file, bbox_inches='tight', dpi=100)
     print(f"Saved: {output_file}")
@@ -519,7 +557,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate distribution comparison boxplot graphs for OxCache performance metrics."
+        description="Generate distribution comparison ECDF graphs for OxCache latency metrics."
     )
     parser.add_argument(
         '--block-dir',
@@ -545,7 +583,7 @@ def main():
     parser.add_argument(
         '--from-eviction-start',
         action='store_true',
-        help='Only plot data from when eviction begins (detected by usage_percentage decrease)'
+        help='Only plot data from when eviction begins (detected by peak usage_percentage)'
     )
     parser.add_argument(
         '--filter-minutes',
@@ -554,14 +592,15 @@ def main():
         help='Exclude last N minutes of data from each run (default: 5, use 0 for no filtering)'
     )
     parser.add_argument(
-        '--common-y-scale',
-        action='store_true',
-        help='Use common y-axis maximum across all subplots in each graph'
+        '--metric',
+        choices=list(LATENCY_METRICS.keys()),
+        default='get_total',
+        help='Latency metric to plot (default: get_total)'
     )
     parser.add_argument(
-        '--show-outliers',
+        '--log-scale',
         action='store_true',
-        help='Show outliers in box plots (points beyond 1.5×IQR from quartiles)'
+        help='Use logarithmic scale for x-axis (latency)'
     )
 
     args = parser.parse_args()
@@ -583,22 +622,23 @@ def main():
     # Create output directory if needed
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate all 4 graphs (2 distributions × 2 metrics)
-    graphs = [
-        # ("ZIPFIAN", "latency", "zipfian_latency.png"),
-        ("ZIPFIAN", "throughput", "zipfian_throughput.png"),
-        # ("UNIFORM", "latency", "uniform_latency.png"),
-        ("UNIFORM", "throughput", "uniform_throughput.png"),
-    ]
-
     # Convert filter_minutes=0 to None for data_cache
     filter_min = args.filter_minutes if args.filter_minutes > 0 else None
 
-    for distribution, metric, filename in graphs:
-        output_file = output_dir / filename
-        generate_distribution_comparison(block_split, zns_split, distribution, metric, output_file, args.sample, args.from_eviction_start, filter_min, args.common_y_scale, args.show_outliers)
+    # Get metric short label for filename
+    metric_short = LATENCY_METRICS[args.metric]['short_label'].lower().replace(' ', '_')
 
-    print("\n✓ All distribution comparison boxplots generated successfully!")
+    # Generate ECDF plots for both distributions
+    graphs = [
+        ("ZIPFIAN", f"zipfian_{metric_short}_ecdf.png"),
+        ("UNIFORM", f"uniform_{metric_short}_ecdf.png"),
+    ]
+
+    for distribution, filename in graphs:
+        output_file = output_dir / filename
+        generate_distribution_comparison(block_split, zns_split, distribution, output_file, args.metric, args.sample, args.from_eviction_start, filter_min, args.log_scale)
+
+    print("\n✓ All distribution comparison ECDF plots generated successfully!")
     return 0
 
 
