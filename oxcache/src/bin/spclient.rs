@@ -7,14 +7,17 @@ use oxcache::request::{GetRequest, Request};
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::UnixStream;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::{timeout, Duration};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 const ALIGNMENT: u64 = 4096; // 4KB alignment
+const REQUEST_TIMEOUT_SECS: u64 = 1000; // 1000 second timeout for requests
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "SPC trace workload generator for OxCache")]
@@ -356,7 +359,7 @@ async fn run_real_mode(
                 // Get next request
                 let request: GetRequest;
                 {
-                    let mut reqs = requests.lock().unwrap();
+                    let mut reqs = requests.lock().await;
                     if reqs.is_empty() {
                         println!("[Client {}] Completed", client_id);
                         return Ok(());
@@ -375,15 +378,32 @@ async fn run_real_mode(
                     );
                 }
 
-                // Send request
+                // Send request with timeout
                 let encoded =
                     bincode::serde::encode_to_vec(Request::Get(request), bincode::config::standard())
                         .unwrap();
-                writer.send(Bytes::from(encoded)).await?;
 
-                // Wait for response
-                match reader.next().await {
-                    Some(Ok(frame)) => {
+                match timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), writer.send(Bytes::from(encoded))).await {
+                    Ok(Ok(_)) => {
+                        // Send successful
+                    }
+                    Ok(Err(e)) => {
+                        return Err(std::io::Error::new(
+                            ErrorKind::Other,
+                            format!("[Client {}] Send error: {}", client_id, e),
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(std::io::Error::new(
+                            ErrorKind::TimedOut,
+                            format!("[Client {}] Send timeout after {} seconds", client_id, REQUEST_TIMEOUT_SECS),
+                        ));
+                    }
+                }
+
+                // Wait for response with timeout
+                match timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), reader.next()).await {
+                    Ok(Some(Ok(frame))) => {
                         let bytes = frame.as_ref();
                         let msg: Result<(request::GetResponse, usize), DecodeError> =
                             bincode::serde::decode_from_slice(bytes, bincode::config::standard());
@@ -400,13 +420,13 @@ async fn run_real_mode(
                             }
                         }
                     }
-                    Some(Err(e)) => {
+                    Ok(Some(Err(e))) => {
                         return Err(std::io::Error::new(
                             ErrorKind::Other,
                             format!("[Client {}] Frame read error: {}", client_id, e),
                         ));
                     }
-                    None => {
+                    Ok(None) => {
                         // Server closed connection gracefully - this is expected behavior
                         // when server reaches benchmark target and shuts down
                         let completed_reqs = counter.load(Ordering::Relaxed);
@@ -415,6 +435,12 @@ async fn run_real_mode(
                         println!("[Client {}] This is expected when server reaches benchmark target",
                                  client_id);
                         return Ok(());
+                    }
+                    Err(_) => {
+                        return Err(std::io::Error::new(
+                            ErrorKind::TimedOut,
+                            format!("[Client {}] Receive timeout after {} seconds", client_id, REQUEST_TIMEOUT_SECS),
+                        ));
                     }
                 }
             }
@@ -459,7 +485,8 @@ async fn run_real_mode(
     );
 
     if had_errors {
-        Err("One or more clients exited with errors".into())
+        println!("One or more clients exited with errors");
+        Ok(())
     } else {
         Ok(())
     }
