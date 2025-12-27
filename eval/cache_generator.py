@@ -27,6 +27,7 @@ ALL_METRICS = [
     "get_hit_latency_ms",
     "get_total_latency_ms",
     "hitratio",
+    "usage_percentage",
 ]
 
 
