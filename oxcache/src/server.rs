@@ -225,7 +225,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
             // Initialize bytes-based tracking at server startup if bytes target is set
             if benchmark_target_bytes.is_some() {
-                let initial_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                let initial_bytes = METRICS.get_counter("client_request_bytes_total").unwrap_or(0);
                 *METRICS.benchmark_state.bytes_initial_total.lock().unwrap() = Some(initial_bytes);
                 *METRICS.benchmark_state.bytes_benchmark_start_time.lock().unwrap() = Some(std::time::Instant::now());
                 tracing::info!("=== BENCHMARK: Bytes tracking started from server startup - target: {} bytes ({} MB) ===",
@@ -252,7 +252,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                     // Check bytes threshold (started from server startup)
                     if let Some(target_bytes) = benchmark_target_bytes {
                         if let Some(bytes_initial) = *METRICS.benchmark_state.bytes_initial_total.lock().unwrap() {
-                            let final_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                            let final_bytes = METRICS.get_counter("client_request_bytes_total").unwrap_or(0);
                             let bytes_transferred = final_bytes.saturating_sub(bytes_initial);
 
                             if bytes_transferred >= target_bytes {
@@ -275,7 +275,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 }
 
                 // Calculate and print throughput based on which mode completed
-                let final_bytes = METRICS.get_counter("bytes_total").unwrap_or(0);
+                let final_bytes = METRICS.get_counter("client_request_bytes_total").unwrap_or(0);
                 let (initial_bytes, start_time) = if benchmark_target_bytes.is_some() {
                     // Use bytes-based tracking (from startup)
                     let bytes_initial = METRICS.benchmark_state.bytes_initial_total.lock().unwrap().unwrap_or(0);
@@ -297,8 +297,8 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 tracing::info!("========================================");
                 tracing::info!("Completion reason: {}", completion_reason);
                 tracing::info!("Duration: {:.2} seconds", elapsed);
-                tracing::info!("Initial bytes_total: {}", initial_bytes);
-                tracing::info!("Final bytes_total: {}", final_bytes);
+                tracing::info!("Initial client_request_bytes_total: {}", initial_bytes);
+                tracing::info!("Final client_request_bytes_total: {}", final_bytes);
                 tracing::info!("Bytes transferred: {}", bytes_transferred);
                 tracing::info!("Throughput: {:.2} bytes/sec", throughput);
                 tracing::info!("Throughput: {:.2} MB/sec", throughput / 1_048_576.0);
@@ -515,6 +515,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_hitratio(HitType::Hit);
                                     METRICS.update_metric_counter("read_bytes_total", request_size);
                                     METRICS.update_metric_counter("bytes_total", request_size);
+                                    METRICS.update_metric_counter("client_request_bytes_total", request_size);
                                     tracing::debug!("REQ[{}] CACHE HIT completed successfully", request_id);
                                     Ok(())
                                 }
@@ -600,6 +601,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_hitratio(HitType::Miss);
                                     METRICS.update_metric_counter("written_bytes_total", chunk_size);
                                     METRICS.update_metric_counter("bytes_total", chunk_size);
+                                    METRICS.update_metric_counter("client_request_bytes_total", request_size);
                                     tracing::debug!("REQ[{}] CACHE MISS completed successfully", request_id);
                                     Ok(write_response)
                                 }
