@@ -516,6 +516,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_counter("read_bytes_total", request_size);
                                     METRICS.update_metric_counter("bytes_total", request_size);
                                     METRICS.update_metric_counter("client_request_bytes_total", request_size);
+                                    METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                    METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     tracing::debug!("REQ[{}] CACHE HIT completed successfully", request_id);
                                     Ok(())
                                 }
@@ -551,6 +553,8 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("remote.get failed: {}", e)));
                                         }
                                     };
+                                    // Sent to client, record time
+                                    METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
 
                                     // Will implicitly fail if size larger than chunk
                                     let chunked_resp = resp.slice(request_offset as usize..(request_offset + request_size) as usize);
@@ -602,6 +606,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                     METRICS.update_metric_counter("written_bytes_total", chunk_size);
                                     METRICS.update_metric_counter("bytes_total", chunk_size);
                                     METRICS.update_metric_counter("client_request_bytes_total", request_size);
+                                    METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
                                     tracing::debug!("REQ[{}] CACHE MISS completed successfully", request_id);
                                     Ok(write_response)
                                 }
@@ -623,7 +628,6 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                 break;
             }
         }
-        METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
     }
     Ok(())
 }
