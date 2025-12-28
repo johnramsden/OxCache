@@ -61,7 +61,7 @@ EVICTION_LINE_STYLE = {
 }
 
 # Line width
-LINE_WIDTH = 2.5
+LINE_WIDTH = 3.5
 
 # Device name mappings
 DEVICE_MAPPINGS = {
@@ -297,8 +297,9 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
     print(f"Found {len(block_runs)} block runs and {len(zns_runs)} ZNS runs")
 
     # Create figure with 6 subplots (1 row x 6 columns)
+    # Subplots are 2/5 original height, but all spacing preserved
     num_subplots = len(RATIOS) * len(CHUNK_SIZES)  # 2 ratios * 3 chunk sizes = 6
-    fig, axes = plt.subplots(1, num_subplots, figsize=(5 * num_subplots, 10))
+    fig, axes = plt.subplots(1, num_subplots, figsize=(5 * num_subplots, 5.38))
 
     # Ensure axes is always a list
     if num_subplots == 1:
@@ -377,6 +378,16 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                                           linewidth=LINE_WIDTH,
                                           alpha=0.8)
 
+                            # Add p99 marker
+                            if len(x) > 0 and len(y) > 0:
+                                # Find p99 value (where y >= 0.99)
+                                p99_idx = np.searchsorted(y, 0.99)
+                                if p99_idx < len(x):
+                                    p99_value = x[p99_idx]
+                                    # Draw vertical line at p99 with same style as curve but thinner
+                                    current_ax.axvline(x=p99_value, color=color,
+                                                      linestyle=linestyle, linewidth=1.5, alpha=0.6)
+
                         else:
                             print(f"Warning: Missing {metric_file} for {device} {eviction_type} chunk={chunk_size} ratio={ratio}")
                     else:
@@ -384,7 +395,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
             # Configure subplot
             current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=16, weight='bold')
-            current_ax.set_ylabel('Cumulative Probability (%)', fontsize=14)
+            current_ax.set_ylabel('Cumulative Probability (%)', fontsize=18)
             current_ax.set_ylim(0, 100)
 
             # Configure x-axis scale
@@ -392,7 +403,8 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                 current_ax.set_xscale('log')
                 # Use exponential notation for tick labels
                 current_ax.xaxis.set_major_locator(LogLocator(base=10.0, numticks=10))
-                current_ax.xaxis.set_minor_locator(LogLocator(base=10.0, subs='auto', numticks=10))
+                # Don't show minor ticks to keep it clean
+                current_ax.xaxis.set_minor_locator(plt.NullLocator())
 
                 # Format tick labels to show exponents (e.g., 10^0, 10^1, etc.)
                 def exp_formatter(x, pos):
@@ -425,10 +437,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
             idx += 1
 
-    # Adjust layout
+    # Adjust layout - subplots at 2/5 height with proportional spacing
     plt.subplots_adjust(wspace=0.15, hspace=0.0)
     plt.tight_layout(pad=0.0)
-    plt.subplots_adjust(top=0.92, bottom=0.15, left=0.05)
+    plt.subplots_adjust(top=0.851, bottom=0.279, left=0.05)
 
     # Make sure layout is finalized
     fig.canvas.draw()
@@ -458,7 +470,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
     # Add a background box for the x-axis label to make it stand out
     label_y = 0.08
     label_width = 0.12
-    label_height = 0.03
+    label_height = 0.04
     fig.add_artist(
         Rectangle(
             (subplot_center - label_width/2, label_y - label_height/2),
@@ -491,7 +503,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
     # Vertical placement of the grey boxes in figure coords
     box_y = 0.93
-    box_h = 0.05
+    box_h = 0.06
 
     # Grey box for Ratio 1:2
     fig.add_artist(
@@ -594,13 +606,19 @@ def main():
     parser.add_argument(
         '--metric',
         choices=list(LATENCY_METRICS.keys()),
-        default='get_total',
+        required=True,
         help='Latency metric to plot (default: get_total)'
     )
     parser.add_argument(
         '--log-scale',
         action='store_true',
         help='Use logarithmic scale for x-axis (latency)'
+    )
+    parser.add_argument(
+        '--distribution',
+        choices=['ZIPFIAN', 'UNIFORM', 'both'],
+        default='both',
+        help='Which distribution(s) to process (default: both)'
     )
 
     args = parser.parse_args()
@@ -628,11 +646,17 @@ def main():
     # Get metric short label for filename
     metric_short = LATENCY_METRICS[args.metric]['short_label'].lower().replace(' ', '_')
 
-    # Generate ECDF plots for both distributions
-    graphs = [
+    # Generate ECDF plots for selected distribution(s)
+    all_graphs = [
         ("ZIPFIAN", f"zipfian_{metric_short}_ecdf.png"),
         ("UNIFORM", f"uniform_{metric_short}_ecdf.png"),
     ]
+
+    # Filter based on --distribution argument
+    if args.distribution == 'both':
+        graphs = all_graphs
+    else:
+        graphs = [g for g in all_graphs if g[0] == args.distribution]
 
     for distribution, filename in graphs:
         output_file = output_dir / filename

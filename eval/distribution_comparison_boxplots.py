@@ -231,8 +231,9 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
     print(f"Found {len(block_runs)} block runs and {len(zns_runs)} ZNS runs")
 
     # Create figure with 6 subplots (1 row x 6 columns)
+    # Subplots are 2/5 original height, but all spacing preserved
     num_subplots = len(RATIOS) * len(CHUNK_SIZES)  # 2 ratios * 3 chunk sizes = 6
-    fig, axes = plt.subplots(1, num_subplots, figsize=(5 * num_subplots, 10))
+    fig, axes = plt.subplots(1, num_subplots, figsize=(5 * num_subplots, 5.38))
 
     # Ensure axes is always a list
     if num_subplots == 1:
@@ -409,10 +410,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
     # Add y-axis label on the far left
     fig.text(0.02, 0.5, metric_label, va='center', rotation='vertical', fontsize=22, weight='bold')
 
-    # Adjust layout (do these BEFORE computing positions)
+    # Adjust layout (do these BEFORE computing positions) - subplots at 2/5 height with proportional spacing
     plt.subplots_adjust(wspace=0.05, hspace=0.0)
     plt.tight_layout(pad=0.0)
-    plt.subplots_adjust(top=0.92, bottom=0.15, left=0.05)
+    plt.subplots_adjust(top=0.851, bottom=0.279, left=0.05)
 
     # Make sure layout is finalized
     fig.canvas.draw()
@@ -435,7 +436,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
 
     # Vertical placement of the grey boxes in figure coords
     box_y = 0.93
-    box_h = 0.05
+    box_h = 0.06
 
     # Grey box for Ratio 1:2
     fig.add_artist(

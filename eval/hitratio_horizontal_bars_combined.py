@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Generate horizontal bar charts comparing final hit ratios across configurations.
-Compares Block vs ZNS devices for different chunk sizes, ratios, and eviction types.
+Generate combined horizontal bar charts comparing final hit ratios across configurations.
+Displays both ZIPFIAN and UNIFORM distributions side by side in one figure.
 """
 
 import json
@@ -60,7 +60,7 @@ BAR_HATCHES = {
 }
 
 # ============================================================================
-# DATA PARSING FUNCTIONS (copied from boxplot_graphs.py)
+# DATA PARSING FUNCTIONS
 # ============================================================================
 
 def parse_directory_name(dirname):
@@ -129,7 +129,7 @@ def collect_runs(split_output_dir):
 
 
 # ============================================================================
-# NEW FUNCTIONS FOR HIT RATIO EXTRACTION
+# HIT RATIO EXTRACTION
 # ============================================================================
 
 def get_final_hitratio(run_path):
@@ -288,8 +288,9 @@ def collect_hitratio_data(block_runs, zns_runs):
                     config["avg_hitratio"] = sum(values) / len(values)
                     data_by_distribution[distribution].append(config)
 
-        # Sort each distribution by average hit ratio (descending)
-        data_by_distribution[distribution].sort(key=lambda x: x["avg_hitratio"], reverse=True)
+        # Sort by fixed order: ratio descending, then chunk size ascending
+        # This gives: (64KiB, R=10), (256MiB, R=10), (1077MiB, R=10), (64KiB, R=2), (256MiB, R=2), (1077MiB, R=2)
+        data_by_distribution[distribution].sort(key=lambda x: (-x["ratio"], x["chunk_size"]))
 
     return data_by_distribution
 
@@ -298,83 +299,101 @@ def collect_hitratio_data(block_runs, zns_runs):
 # VISUALIZATION FUNCTION
 # ============================================================================
 
-def create_horizontal_bar_chart(distribution_data, distribution_name, output_file):
+def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
     """
-    Create a horizontal bar chart for one distribution.
+    Create a combined horizontal bar chart with both distributions side by side.
 
     Args:
-        distribution_data: List of config dicts sorted by hit ratio
-        distribution_name: "ZIPFIAN" or "UNIFORM"
+        data_by_distribution: Dict with ZIPFIAN and UNIFORM data
         output_file: Path to save the figure
     """
-    num_configs = len(distribution_data)
+    # Get max number of configs to ensure both subplots have same y-range
+    max_configs = max(len(data_by_distribution["ZIPFIAN"]),
+                      len(data_by_distribution["UNIFORM"]))
 
-    if num_configs == 0:
-        print(f"Warning: No data to plot for {distribution_name}")
+    if max_configs == 0:
+        print("Warning: No data to plot")
         return
 
-    # Calculate figure dimensions
-    fig_height = max(8, num_configs * 0.8)
-    fig_width = 12
+    # Calculate figure dimensions - half width, adjusted height to prevent overlap
+    fig_height = max(6, max_configs * 0.7)  # Increased from 0.4 to 0.7 for more vertical space
+    fig_width = 8  # Half the original width
 
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height), sharey=False)
 
-    # Bar dimensions and spacing
-    bar_height = 0.15
-    group_spacing = 1.0
-    bar_spacing = 0.02
+    # Bar dimensions and spacing - original thickness for readability
+    bar_height = 0.15  # Original thickness
+    group_spacing = 1.0  # Original spacing
+    bar_spacing = 0.02  # Original spacing
 
-    # Y-axis setup
-    y_ticks = []
-    y_labels = []
+    # Plot for each distribution
+    axes = [ax1, ax2]
+    for dist_idx, distribution in enumerate(DISTRIBUTIONS):
+        ax = axes[dist_idx]
+        distribution_data = data_by_distribution[distribution]
 
-    # Draw bars (reversed for proper display order)
-    for i, config in enumerate(reversed(distribution_data)):
-        y_base = i * group_spacing
+        if len(distribution_data) == 0:
+            print(f"Warning: No data for {distribution}")
+            ax.text(0.5, 0.5, f"No data for {distribution}",
+                   ha='center', va='center', transform=ax.transAxes)
+            continue
 
-        # Extract values (may be None)
-        # Order: ZNS promotional, Block promotional, ZNS chunk, Block chunk
-        values_and_labels = [
-            (config.get("zns_promotional"), "ZNS", "promotional"),
-            (config.get("block_promotional"), "Block", "promotional"),
-            (config.get("zns_chunk"), "ZNS", "chunk"),
-            (config.get("block_chunk"), "Block", "chunk"),
-        ]
+        # Y-axis setup
+        y_ticks = []
+        y_labels = []
 
-        # Draw each bar if value exists
-        for j, (value, device, eviction) in enumerate(values_and_labels):
-            if value is not None:
-                y_pos = y_base + j * (bar_height + bar_spacing)
-                color = BAR_COLORS[device]
-                hatch = BAR_HATCHES[eviction]
+        # Draw bars (reversed for proper display order)
+        for i, config in enumerate(reversed(distribution_data)):
+            y_base = i * group_spacing
 
-                ax.barh(y_pos, value * 100, height=bar_height,
-                       color=color, hatch=hatch, edgecolor='black', linewidth=0.5, alpha=0.99)
+            # Extract values (may be None)
+            # Order: ZNS promotional, Block promotional, ZNS chunk, Block chunk
+            values_and_labels = [
+                (config.get("zns_promotional"), "ZNS", "promotional"),
+                (config.get("block_promotional"), "Block", "promotional"),
+                (config.get("zns_chunk"), "ZNS", "chunk"),
+                (config.get("block_chunk"), "Block", "chunk"),
+            ]
 
-                # Add percentage label to the right of the bar
-                percentage = value * 100
-                text_x = percentage + 1
-                ax.text(text_x, y_pos, f'{percentage:.1f}%',
-                       va='center', ha='left', fontsize=8, color='black')
+            # Draw each bar if value exists
+            for j, (value, device, eviction) in enumerate(values_and_labels):
+                if value is not None:
+                    y_pos = y_base + j * (bar_height + bar_spacing)
+                    color = BAR_COLORS[device]
+                    hatch = BAR_HATCHES[eviction]
 
-        # Y-tick at center of the 4-bar group
-        y_center = y_base + 1.5 * (bar_height + bar_spacing)
-        y_ticks.append(y_center)
+                    ax.barh(y_pos, value * 100, height=bar_height,
+                           color=color, hatch=hatch, edgecolor='black', linewidth=0.5, alpha=0.99)
 
-        # Format label: "256MiB, R=2"
-        chunk_label = CHUNK_SIZE_LABELS[config["chunk_size"]]
-        ratio_label = f"R={config['ratio']}"
-        y_labels.append(f"{chunk_label}, {ratio_label}")
+                    # Add percentage label to the right of the bar
+                    percentage = value * 100
+                    text_x = percentage + 1.5
+                    ax.text(text_x, y_pos, f'{percentage:.1f}%',
+                           va='center', ha='left', fontsize=7, color='black')
 
-    # Configure Y-axis
-    ax.set_yticks(y_ticks)
-    ax.set_yticklabels(y_labels, fontsize=14)
+            # Y-tick at center of the 4-bar group
+            y_center = y_base + 1.5 * (bar_height + bar_spacing)
+            y_ticks.append(y_center)
 
-    # Configure X-axis
-    ax.set_xlabel("Hit Ratio (%)", fontsize=16)
-    ax.set_xlim(0, 100)
-    ax.set_xticks(range(0, 101, 10))
-    ax.grid(axis='x', alpha=0.3, linestyle='--')
+            # Format label: just chunk size (ratio shown in box on left)
+            chunk_label = CHUNK_SIZE_LABELS[config["chunk_size"]]
+            y_labels.append(chunk_label)
+
+        # Configure Y-axis
+        ax.set_yticks(y_ticks)
+        ax.set_yticklabels(y_labels, fontsize=11)
+
+        # Configure X-axis - use fewer ticks to avoid overlap
+        ax.set_xlabel("Hit Ratio (%)", fontsize=13)
+        ax.set_xlim(0, 105)  # Extended to give room for labels
+        ax.set_xticks(range(0, 101, 20))  # Every 20% instead of 10%
+        ax.grid(axis='x', alpha=0.3, linestyle='--')
+
+        # Add distribution title
+        ax.set_title(distribution, fontsize=16, weight='bold')
+
+        # Invert y-axis so highest hit ratio is at top
+        ax.invert_yaxis()
 
     # Create legend (order: ZNS Zone-LRU, ZNS Chunk-LRU, Block Zone-LRU, Block Chunk-LRU)
     legend_handles = []
@@ -393,17 +412,103 @@ def create_horizontal_bar_chart(distribution_data, distribution_name, output_fil
             )
             legend_handles.append(patch)
 
-    # Invert y-axis so highest hit ratio is at top
-    ax.invert_yaxis()
-
-    # Adjust layout to make room for legend at bottom
+    # Adjust layout with more space at bottom for legend and left for ratio boxes
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.15)
+    plt.subplots_adjust(bottom=0.18, wspace=0.45, left=0.22)
 
-    # Add legend at bottom center (below the x-axis label)
-    fig.legend(handles=legend_handles, loc='lower center', fontsize=12,
+    # Make sure layout is finalized before getting positions
+    fig.canvas.draw()
+
+    # Add ratio grouping boxes on the left
+    # Get the positions of the subplots
+    ax1_bbox = ax1.get_position()
+
+    # Calculate y positions for ratio groups
+    # Assuming 6 configs total (3 for R=2, 3 for R=10)
+    if len(data_by_distribution["ZIPFIAN"]) > 0 or len(data_by_distribution["UNIFORM"]) > 0:
+        # We need to figure out where R=2 and R=10 groups are
+        # Based on the fixed ordering, first 3 are R=2, next 3 are R=10
+        num_r2 = sum(1 for c in data_by_distribution["ZIPFIAN"] if c["ratio"] == 2)
+        num_r10 = sum(1 for c in data_by_distribution["ZIPFIAN"] if c["ratio"] == 10)
+
+        if num_r2 > 0 and num_r10 > 0:
+            # Calculate the vertical extent of each group based on subplot position
+            # The bars are drawn from bottom to top in reversed order
+            subplot_height = ax1_bbox.height
+            total_configs = num_r2 + num_r10
+
+            # R=10 group is sorted first, but after reverse() and invert_yaxis()
+            # R=2 ends up at top of display, R=10 at bottom
+            r10_height = (num_r10 / total_configs) * subplot_height
+            r2_height = (num_r2 / total_configs) * subplot_height
+
+            # Box dimensions - thinner, just enough for text
+            box_width = 0.055
+            box_x = 0.04  # Shifted right to avoid overlap with figure edge
+
+            # R=2 box (top portion of plot - after inversion)
+            r2_y_start = ax1_bbox.y0 + r10_height
+            r2_box = plt.Rectangle(
+                (box_x, r2_y_start),
+                box_width,
+                r2_height,
+                transform=fig.transFigure,
+                facecolor='lightgrey',
+                edgecolor='black',
+                linewidth=1.5,
+                alpha=0.5,
+                zorder=1,
+                clip_on=False
+            )
+            fig.add_artist(r2_box)
+
+            # R=10 box (bottom portion of plot - after inversion)
+            r10_y_start = ax1_bbox.y0
+            r10_box = plt.Rectangle(
+                (box_x, r10_y_start),
+                box_width,
+                r10_height,
+                transform=fig.transFigure,
+                facecolor='lightgrey',
+                edgecolor='black',
+                linewidth=1.5,
+                alpha=0.5,
+                zorder=1,
+                clip_on=False
+            )
+            fig.add_artist(r10_box)
+
+            # Add text labels (matching distribution graph format)
+            fig.text(
+                box_x + box_width / 2,
+                r2_y_start + r2_height / 2,
+                "Ratio: 1:2",
+                ha='center',
+                va='center',
+                fontsize=12,
+                weight='bold',
+                rotation=90,
+                transform=fig.transFigure,
+                zorder=2
+            )
+
+            fig.text(
+                box_x + box_width / 2,
+                r10_y_start + r10_height / 2,
+                "Ratio: 1:10",
+                ha='center',
+                va='center',
+                fontsize=12,
+                weight='bold',
+                rotation=90,
+                transform=fig.transFigure,
+                zorder=2
+            )
+
+    # Add legend at bottom center (below both subplots)
+    fig.legend(handles=legend_handles, loc='lower center', fontsize=10,
               ncol=4, frameon=True, fancybox=True, shadow=True,
-              bbox_to_anchor=(0.5, -0.02))
+              bbox_to_anchor=(0.5, 0.01), columnspacing=1.0)
 
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"Saved: {output_file}")
@@ -416,7 +521,7 @@ def create_horizontal_bar_chart(distribution_data, distribution_name, output_fil
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate horizontal bar charts comparing final hit ratios across configurations."
+        description="Generate combined horizontal bar chart comparing final hit ratios across configurations."
     )
     parser.add_argument(
         '--block-dir',
@@ -463,22 +568,12 @@ def main():
     print("Extracting final hit ratios...")
     data_by_distribution = collect_hitratio_data(block_runs, zns_runs)
 
-    # Generate chart for each distribution
-    for distribution in DISTRIBUTIONS:
-        if distribution not in data_by_distribution:
-            print(f"Warning: No data found for {distribution}")
-            continue
+    # Generate combined chart
+    output_file = output_dir / "hitratio_bars_combined.png"
+    print("\nGenerating combined chart...")
+    create_combined_horizontal_bar_chart(data_by_distribution, output_file)
 
-        configs = data_by_distribution[distribution]
-        if not configs:
-            print(f"Warning: No configurations found for {distribution}")
-            continue
-
-        output_file = output_dir / f"hitratio_bars_{distribution}.png"
-        print(f"\nGenerating {distribution} chart...")
-        create_horizontal_bar_chart(configs, distribution, output_file)
-
-    print("\nAll charts generated successfully!")
+    print("\nChart generated successfully!")
     return 0
 
 
