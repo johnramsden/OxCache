@@ -14,7 +14,6 @@ use nvme::types::{Byte, Chunk, LogicalBlock, NVMeConfig, PerformOn, ZNSConfig, Z
 use std::io::ErrorKind;
 use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
-use std::time::Duration;
 use crate::metrics::{MetricType, METRICS};
 use crate::zone_state::zone_priority_queue::ZonePriorityQueue;
 use crate::cache::bucket::Chunk as CacheKey;

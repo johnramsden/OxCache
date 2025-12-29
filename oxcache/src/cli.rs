@@ -27,6 +27,9 @@ pub struct CliArgs {
     pub reader_threads: Option<usize>,
 
     #[arg(long)]
+    pub cache_shards: Option<usize>,
+
+    #[arg(long)]
     pub chunk_size: Option<Byte>,
 
     #[arg(long)]
@@ -103,6 +106,7 @@ pub struct ParsedServerConfig {
     pub disk: Option<String>,
     pub writer_threads: Option<usize>,
     pub reader_threads: Option<usize>,
+    pub cache_shards: Option<usize>,
     pub chunk_size: Option<Byte>,
     pub max_write_size: Option<Byte>,
     pub block_zone_capacity: Option<Byte>,
@@ -168,6 +172,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
     let reader_threads = cli
         .reader_threads
         .or_else(|| config.as_ref()?.server.reader_threads);
+    let cache_shards = cli
+        .cache_shards
+        .or_else(|| config.as_ref()?.server.cache_shards);
 
     let remote_type = cli
         .remote_type
@@ -327,6 +334,7 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         disk,
         writer_threads,
         reader_threads,
+        cache_shards,
         remote: ServerRemoteConfig {
             remote_type,
             bucket: remote_bucket,

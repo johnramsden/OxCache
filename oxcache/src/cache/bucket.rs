@@ -1,8 +1,9 @@
 use crate::request::GetRequest;
 use nvme::types::{Byte, Zone};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, RwLock};
 use lru_mem::HeapSize;
+use bytes::Bytes;
 
 #[derive(Debug, Clone)]
 pub struct Chunk {
@@ -149,8 +150,18 @@ impl From<GetRequest> for Chunk {
     }
 }
 
+/// Data source for cache hits - either from disk or RAM buffer
+#[derive(Debug)]
+pub enum DataSource {
+    Disk(PinGuard),
+    Ram(Bytes),
+}
+
 #[derive(Debug)]
 pub enum ChunkState {
     Ready(Arc<PinnedChunkLocation>),
-    Waiting(Arc<Notify>),
+    Waiting {
+        notify: Arc<Notify>,
+        buffer: Arc<RwLock<Option<Bytes>>>,
+    },
 }
