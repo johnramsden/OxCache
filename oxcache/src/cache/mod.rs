@@ -1,30 +1,22 @@
+use crate::cache::bucket::Chunk as CacheKey;
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState, PinnedChunkLocation};
+use crate::server::validate_read_response;
+use bytes::Bytes;
 use ndarray::{Array2, ArrayBase, s};
 use nvme::types::{self, Zone};
+use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
-use std::iter::zip;
 use std::sync::Arc;
 use std::{collections::HashMap, io};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use bytes::Bytes;
 use tokio::sync::{Notify, RwLock};
-use crate::cache::bucket::Chunk as CacheKey;
-use crate::writerpool::{WriterPool};
-use std::future::Future;
-use crate::server::validate_read_response;
 
 pub mod bucket;
 pub use bucket::{DataSource, PinGuard};
 
 // An entry
 type EntryType = Arc<RwLock<ChunkState>>;
-fn new_entry() -> EntryType {
-    Arc::new(RwLock::new(ChunkState::Waiting {
-        notify: Arc::new(Notify::new()),
-        buffer: Arc::new(RwLock::new(None)),
-    }))
-}
 
 // Entry not found
 fn entry_not_found() -> std::io::Error {
@@ -84,9 +76,9 @@ impl Cache {
     ) -> tokio::io::Result<()>
     where
         R: FnOnce(DataSource) -> RFut + Send + 'static,
-        RFut: Future<Output=tokio::io::Result<()>> + Send + 'static,
+        RFut: Future<Output = tokio::io::Result<()>> + Send + 'static,
         W: FnOnce(Arc<RwLock<Option<Bytes>>>, Arc<Notify>) -> WFut + Send + 'static,
-        WFut: Future<Output=tokio::io::Result<ChunkLocation>> + Send + 'static,
+        WFut: Future<Output = tokio::io::Result<ChunkLocation>> + Send + 'static,
     {
         let mut reader = Some(reader);
         // NOTE: If we are ever clearing something from the map we need to acquire exclusive lock
@@ -235,14 +227,18 @@ impl Cache {
                         // Update reverse mapping
                         let mut reverse_mapping_guard = self.zone_to_entry.write().await;
                         reverse_mapping_guard[location.as_index()] = Some(key.clone());
-                        tracing::debug!("LRU_SYNC: Added chunk {:?} to bucket map reverse mapping", location);
+                        tracing::debug!(
+                            "LRU_SYNC: Added chunk {:?} to bucket map reverse mapping",
+                            location
+                        );
                         tracing::debug!("[map-dbg] location {:?} map updated", location);
                         drop(reverse_mapping_guard);
 
                         // Transition to Ready state
                         let mut chunk_loc_guard = locked_chunk_location.write().await;
                         tracing::debug!("[map-dbg] location {:?} being written to", location);
-                        *chunk_loc_guard = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(location.clone())));
+                        *chunk_loc_guard =
+                            ChunkState::Ready(Arc::new(PinnedChunkLocation::new(location.clone())));
                         drop(chunk_loc_guard);
                     }
                 }
@@ -286,7 +282,10 @@ impl Cache {
                             None => {
                                 return Err(io::Error::new(
                                     io::ErrorKind::NotFound,
-                                    format!("Couldn't find entry while removing zones: {:?}", chunk),
+                                    format!(
+                                        "Couldn't find entry while removing zones: {:?}",
+                                        chunk
+                                    ),
                                 ));
                             }
                         };
@@ -310,15 +309,13 @@ impl Cache {
         zone: Zone,
         reader: R,
         writer: W,
-        writer_pool: Arc<WriterPool>,
     ) -> io::Result<()>
     where
         R: FnOnce(Vec<(CacheKey, ChunkLocation)>) -> RFut + Send,
-        RFut: Future<Output=io::Result<Vec<(CacheKey, Bytes)>>> + Send,
+        RFut: Future<Output = io::Result<Vec<(CacheKey, Bytes)>>> + Send,
         W: FnOnce(Vec<(CacheKey, Bytes)>) -> WFut + Send,
-        WFut: Future<Output=io::Result<Vec<(CacheKey, ChunkLocation, Bytes)>>> + Send,
+        WFut: Future<Output = io::Result<Vec<(CacheKey, ChunkLocation, Bytes)>>> + Send,
     {
-
         // Reset the existing entries
         // Collect items and corresponding notifiers
         let (items, notifies) = {
@@ -330,7 +327,8 @@ impl Cache {
             let zone_slice = s![zone as usize, ..];
 
             // Collect all keys in this zone and group by shard
-            let mut keys_by_shard: Vec<Vec<(Chunk, ChunkLocation)>> = vec![Vec::new(); self.num_shards];
+            let mut keys_by_shard: Vec<Vec<(Chunk, ChunkLocation)>> =
+                vec![Vec::new(); self.num_shards];
             for (chunk_idx, opt_key) in zone_mapping.slice(zone_slice).iter().enumerate() {
                 if let Some(key) = opt_key.clone() {
                     let old_loc = ChunkLocation::new(zone, chunk_idx as nvme::types::Chunk);
@@ -345,7 +343,7 @@ impl Cache {
                     continue;
                 }
 
-                for (key, old_loc) in keys {
+                for (key, _old_loc) in keys {
                     let shard_guard = self.shards[shard_idx].read().await;
                     let entry = shard_guard
                         .buckets
@@ -368,11 +366,16 @@ impl Cache {
                                     continue; // Retry after being notified
                                 }
                                 pinned_loc.location.clone()
-                            },
+                            }
                             ChunkState::Waiting { .. } => {
                                 // TODO: Shouldnt occur since zone was full
-                                tracing::debug!("Encountered invalid waiting state during zone cleaning");
-                                return Err(io::Error::new(ErrorKind::Other, "Encountered invalid waiting state during zone cleaning"))
+                                tracing::debug!(
+                                    "Encountered invalid waiting state during zone cleaning"
+                                );
+                                return Err(io::Error::new(
+                                    ErrorKind::Other,
+                                    "Encountered invalid waiting state during zone cleaning",
+                                ));
                             }
                         };
 
@@ -411,9 +414,7 @@ impl Cache {
             .collect();
 
         let payloads = match reader(read_input).await {
-            Ok(p) => {
-                p
-            },
+            Ok(p) => p,
             Err(e) => {
                 // TODO: Should we bother? Probably still fatal
                 // rollback
@@ -475,9 +476,18 @@ impl Cache {
                 Some(id) => id.clone(),
                 None => {
                     // This should not happen - indicates LRU/bucket map sync issue
-                    tracing::error!("SYNC_BUG: Chunk {:?} was in LRU but not found in reverse map", chunk);
-                    return Err(io::Error::new(ErrorKind::NotFound, format!("LRU/bucket map sync bug: chunk {:?} missing from reverse map", chunk)))
-                },
+                    tracing::error!(
+                        "SYNC_BUG: Chunk {:?} was in LRU but not found in reverse map",
+                        chunk
+                    );
+                    return Err(io::Error::new(
+                        ErrorKind::NotFound,
+                        format!(
+                            "LRU/bucket map sync bug: chunk {:?} missing from reverse map",
+                            chunk
+                        ),
+                    ));
+                }
             };
 
             let shard_idx = self.get_shard_index(&chunk_id);
@@ -487,9 +497,13 @@ impl Cache {
             let entry = match shard_guard.buckets.get(&chunk_id) {
                 Some(v) => Arc::clone(v),
                 None => {
-                    tracing::error!("Not found chunk {:?} when removing entries, chunk id is {:?}", chunk, chunk_id);
+                    tracing::error!(
+                        "Not found chunk {:?} when removing entries, chunk id is {:?}",
+                        chunk,
+                        chunk_id
+                    );
                     return Err(entry_not_found());
-                },
+                }
             };
 
             // Get the write lock FIRST to prevent new pins
@@ -501,11 +515,17 @@ impl Cache {
                     let pinned_loc_clone = Arc::clone(pinned_loc);
                     drop(entry_guard);
                     drop(shard_guard); // Release shard lock before waiting
-                    tracing::warn!("EVICTION: Waiting for chunk at {:?} to be unpinned during entry removal (pin_count={})",
-                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+                    tracing::warn!(
+                        "EVICTION: Waiting for chunk at {:?} to be unpinned during entry removal (pin_count={})",
+                        pinned_loc_clone.location,
+                        pinned_loc_clone.pin_count()
+                    );
                     pinned_loc_clone.wait_for_unpin().await;
-                    tracing::warn!("EVICTION: Chunk at {:?} unpinned during entry removal (pin_count={})",
-                                   pinned_loc_clone.location, pinned_loc_clone.pin_count());
+                    tracing::warn!(
+                        "EVICTION: Chunk at {:?} unpinned during entry removal (pin_count={})",
+                        pinned_loc_clone.location,
+                        pinned_loc_clone.pin_count()
+                    );
                     // Re-acquire shard lock and entry lock
                     shard_guard = self.shards[shard_idx].write().await;
                     let _entry_guard = entry.write().await;
@@ -515,14 +535,27 @@ impl Cache {
             // Now safe to remove from maps while holding entry write lock
             zone_mapping[chunk.as_index()].take();
             let _removed_entry = shard_guard.buckets.remove(&chunk_id);
-            tracing::debug!("LRU_SYNC: Removed chunk {:?} from bucket map via remove_entries", chunk);
-            tracing::debug!("Found chunk {:?} when removing entries", _removed_entry.is_some());
+            tracing::debug!(
+                "LRU_SYNC: Removed chunk {:?} from bucket map via remove_entries",
+                chunk
+            );
+            tracing::debug!(
+                "Found chunk {:?} when removing entries",
+                _removed_entry.is_some()
+            );
             // entry_guard is dropped here, releasing the entry write lock
         }
 
-        tracing::debug!("DEADLOCK_DEBUG: [Thread {:?}] Releasing zone_to_entry write lock for remove_entries", thread_id);
+        tracing::debug!(
+            "DEADLOCK_DEBUG: [Thread {:?}] Releasing zone_to_entry write lock for remove_entries",
+            thread_id
+        );
         // zone_mapping is dropped here
-        tracing::debug!("DEADLOCK_DEBUG: [Thread {:?}] Completed remove_entries for {} chunks", thread_id, chunks.len());
+        tracing::debug!(
+            "DEADLOCK_DEBUG: [Thread {:?}] Completed remove_entries for {} chunks",
+            thread_id,
+            chunks.len()
+        );
         Ok(())
     }
 }
@@ -660,7 +693,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc1);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -680,7 +715,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc2);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -700,7 +737,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc3);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -720,7 +759,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc4);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -773,7 +814,9 @@ mod mod_tests {
                                     // Should hit cache and return same location as entry1
                                     assert_eq!(pin_guard.location(), &chunk_loc1);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -828,7 +871,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -908,7 +953,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }
@@ -929,7 +976,9 @@ mod mod_tests {
                                 DataSource::Disk(pin_guard) => {
                                     assert_eq!(pin_guard.location(), &chunk_loc);
                                 }
-                                DataSource::Ram(_) => assert!(false, "Should read from disk, not RAM"),
+                                DataSource::Ram(_) => {
+                                    assert!(false, "Should read from disk, not RAM")
+                                }
                             }
                             Ok(())
                         }

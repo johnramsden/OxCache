@@ -1,3 +1,4 @@
+use crate::metrics::{METRICS, MetricType};
 use crate::{
     cache::{self},
     device,
@@ -5,10 +6,9 @@ use crate::{
 };
 use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
+use std::sync::atomic::{Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use crate::metrics::{MetricType, METRICS};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
 pub struct WriteResponse {
@@ -40,11 +40,19 @@ pub struct BatchWriteResponse {
 }
 
 fn request_update_lru(req: WriteRequest) -> WriteRequestInternal {
-    WriteRequestInternal { data: req.data, responder: req.responder, update_lru: true }
+    WriteRequestInternal {
+        data: req.data,
+        responder: req.responder,
+        update_lru: true,
+    }
 }
 
 fn request_no_update_lru(req: WriteRequest) -> WriteRequestInternal {
-    WriteRequestInternal { data: req.data, responder: req.responder, update_lru: false }
+    WriteRequestInternal {
+        data: req.data,
+        responder: req.responder,
+        update_lru: false,
+    }
 }
 
 /// Represents an individual writer thread
@@ -54,7 +62,7 @@ struct Writer {
     receiver: Receiver<WriteRequestInternal>,
     priority_receiver: Receiver<BatchWriteRequest>,
     eviction: Arc<Mutex<EvictionPolicyWrapper>>,
-    priority_only: bool
+    priority_only: bool,
 }
 
 impl Writer {
@@ -64,7 +72,7 @@ impl Writer {
         priority_receiver: Receiver<BatchWriteRequest>,
         device: Arc<dyn device::Device>,
         eviction: &Arc<Mutex<EvictionPolicyWrapper>>,
-        priority_only: bool
+        priority_only: bool,
     ) -> Self {
         Self {
             id,
@@ -72,7 +80,7 @@ impl Writer {
             priority_receiver,
             device,
             eviction: eviction.clone(),
-            priority_only
+            priority_only,
         }
     }
 
@@ -86,7 +94,10 @@ impl Writer {
             };
 
             // If no priority request, handle regular requests with timeout
-            match self.receiver.recv_timeout(std::time::Duration::from_millis(10)) {
+            match self
+                .receiver
+                .recv_timeout(std::time::Duration::from_millis(10))
+            {
                 Ok(msg) => {
                     self.process_regular_request(msg);
                 }
@@ -154,7 +165,11 @@ impl Writer {
                 }
             }
         });
-        METRICS.update_metric_histogram_latency("device_write_latency_ms", start.elapsed(), MetricType::MsLatency);
+        METRICS.update_metric_histogram_latency(
+            "device_write_latency_ms",
+            start.elapsed(),
+            MetricType::MsLatency,
+        );
 
         let resp = WriteResponse { location: result };
         let snd = msg.responder.send(resp);
@@ -171,7 +186,6 @@ impl Writer {
         let mut locations = Vec::with_capacity(data_len);
 
         for data in batch_req.data.into_iter() {
-
             // Use eviction bypass for priority batch requests (eviction writes)
             let result = self.device.append_with_eviction_bypass(data, true);
 
@@ -234,8 +248,12 @@ impl WriterPool {
         device: Arc<dyn device::Device>,
         eviction_policy: &Arc<Mutex<EvictionPolicyWrapper>>,
     ) -> Self {
-        let (sender, receiver): (Sender<WriteRequestInternal>, Receiver<WriteRequestInternal>) = unbounded();
-        let (priority_sender, priority_receiver): (Sender<BatchWriteRequest>, Receiver<BatchWriteRequest>) = unbounded();
+        let (sender, receiver): (Sender<WriteRequestInternal>, Receiver<WriteRequestInternal>) =
+            unbounded();
+        let (priority_sender, priority_receiver): (
+            Sender<BatchWriteRequest>,
+            Receiver<BatchWriteRequest>,
+        ) = unbounded();
         let mut handles = Vec::with_capacity(num_writers);
 
         // Regular writers
@@ -244,7 +262,14 @@ impl WriterPool {
             let priority_rx_clone = priority_receiver.clone();
 
             // Will create ONE priority writer (last) via id == num_writers
-            let writer = Writer::new(id, rx_clone, priority_rx_clone, device.clone(), eviction_policy, id == num_writers);
+            let writer = Writer::new(
+                id,
+                rx_clone,
+                priority_rx_clone,
+                device.clone(),
+                eviction_policy,
+                id == num_writers,
+            );
             let handle = thread::spawn(move || writer.run());
             handles.push(handle);
         }
@@ -261,24 +286,30 @@ impl WriterPool {
         // For now, bypass capacity checking for regular writes since the semaphore
         // approach was causing issues. The reservation system is primarily for
         // preventing eviction deadlocks, not for general capacity management.
-        self.sender.send_async(request_update_lru(message)).await.map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("WriterPool::send_async failed: {}", e),
-            )
-        })
+        self.sender
+            .send_async(request_update_lru(message))
+            .await
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("WriterPool::send_async failed: {}", e),
+                )
+            })
     }
 
     pub async fn send_no_update_lru(&self, message: WriteRequest) -> std::io::Result<()> {
         // For now, bypass capacity checking for regular writes since the semaphore
         // approach was causing issues. The reservation system is primarily for
         // preventing eviction deadlocks, not for general capacity management.
-        self.sender.send_async(request_no_update_lru(message)).await.map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("WriterPool::send_async failed: {}", e),
-            )
-        })
+        self.sender
+            .send_async(request_no_update_lru(message))
+            .await
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("WriterPool::send_async failed: {}", e),
+                )
+            })
     }
 
     /// Send a prioritized batch request for eviction writes

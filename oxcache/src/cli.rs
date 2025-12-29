@@ -1,11 +1,13 @@
-use std::{fs, net::{IpAddr, SocketAddr}};
+use std::{
+    fs,
+    net::{IpAddr, SocketAddr},
+};
 
 use clap::Parser;
 use nvme::types::Byte;
 use serde::Deserialize;
 
 use crate::server::{ServerConfig, ServerEvictionConfig, ServerMetricsConfig, ServerRemoteConfig};
-
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -263,10 +265,14 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
     if eviction_policy.to_lowercase() == "chunk" {
         let low_water_clean = if low_water_clean.is_none() {
             return Err("low_water_clean must be set".into());
-        } else { low_water_clean.unwrap() };
+        } else {
+            low_water_clean.unwrap()
+        };
 
         if low_water_clean >= (low_water_evict - high_water_evict) {
-            return Err("low_water_clean must be less than (low_water_evict - high_water_evict)".into());
+            return Err(
+                "low_water_clean must be less than (low_water_evict - high_water_evict)".into(),
+            );
         }
     }
 
@@ -284,9 +290,7 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .or_else(|| config.as_ref()?.server.block_zone_capacity);
     let block_zone_capacity = block_zone_capacity.ok_or("Missing block_zone_capacity")?;
 
-    let max_zones = cli
-        .max_zones
-        .or_else(|| config.as_ref()?.server.max_zones);
+    let max_zones = cli.max_zones.or_else(|| config.as_ref()?.server.max_zones);
 
     // Metrics
 
@@ -299,7 +303,9 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
         .clone()
         .or_else(|| config.as_ref()?.metrics.ip_addr.clone());
 
-    if metrics_port.is_none() && metrics_ip.is_some() || metrics_port.is_some() && metrics_ip.is_none() {
+    if metrics_port.is_none() && metrics_ip.is_some()
+        || metrics_port.is_some() && metrics_ip.is_none()
+    {
         return Err("Missing metrics ip or port, both must be set or neither".into());
     }
 
@@ -316,15 +322,34 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
     };
 
     // Benchmark mode settings
-    let benchmark_mode = cli.benchmark_mode || config.as_ref().and_then(|c| c.metrics.benchmark_mode).unwrap_or(false);
-    let benchmark_duration_secs = cli.benchmark_duration_secs
-        .or_else(|| config.as_ref().and_then(|c| c.metrics.benchmark_duration_secs));
-    let benchmark_target_bytes = cli.benchmark_target_bytes
-        .or_else(|| config.as_ref().and_then(|c| c.metrics.benchmark_target_bytes));
+    let benchmark_mode = cli.benchmark_mode
+        || config
+            .as_ref()
+            .and_then(|c| c.metrics.benchmark_mode)
+            .unwrap_or(false);
+    let benchmark_duration_secs = cli.benchmark_duration_secs.or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.metrics.benchmark_duration_secs)
+    });
+    let benchmark_target_bytes = cli.benchmark_target_bytes.or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.metrics.benchmark_target_bytes)
+    });
 
-    let eviction_metrics = cli.eviction_metrics || config.as_ref().and_then(|c| c.metrics.eviction_metrics).unwrap_or(false);
-    let eviction_metrics_interval = cli.eviction_metrics_interval
-        .or_else(|| config.as_ref().and_then(|c| c.metrics.eviction_metrics_interval))
+    let eviction_metrics = cli.eviction_metrics
+        || config
+            .as_ref()
+            .and_then(|c| c.metrics.eviction_metrics)
+            .unwrap_or(false);
+    let eviction_metrics_interval = cli
+        .eviction_metrics_interval
+        .or_else(|| {
+            config
+                .as_ref()
+                .and_then(|c| c.metrics.eviction_metrics_interval)
+        })
         .unwrap_or(60); // Default to 60 seconds
 
     // TODO: Add secrets from env vars
@@ -358,6 +383,6 @@ pub fn load_config(cli: &CliArgs) -> Result<ServerConfig, Box<dyn std::error::Er
             benchmark_target_bytes,
             eviction_metrics,
             eviction_metrics_interval,
-        }
+        },
     })
 }

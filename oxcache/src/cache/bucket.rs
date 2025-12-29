@@ -1,9 +1,12 @@
 use crate::request::GetRequest;
-use nvme::types::{Byte, Zone};
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-use tokio::sync::{Notify, RwLock};
-use lru_mem::HeapSize;
 use bytes::Bytes;
+use lru_mem::HeapSize;
+use nvme::types::{Byte, Zone};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use tokio::sync::{Notify, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct Chunk {
@@ -72,7 +75,11 @@ impl PinnedChunkLocation {
     /// Pin this location (increment ref count). Returns a guard that will unpin on drop.
     pub fn pin(self: &Arc<Self>) -> PinGuard {
         let new_count = self.pin_count.fetch_add(1, Ordering::SeqCst) + 1;
-        tracing::debug!("Pinning location {:?}, pin_count now: {}", self.location, new_count);
+        tracing::debug!(
+            "Pinning location {:?}, pin_count now: {}",
+            self.location,
+            new_count
+        );
         PinGuard::new(self)
     }
 
@@ -99,8 +106,12 @@ impl PinnedChunkLocation {
     fn unpin(&self) {
         let old_count = self.pin_count.fetch_sub(1, Ordering::SeqCst);
         let new_count = old_count - 1;
-        tracing::debug!("Unpinning location {:?}, pin_count now: {}", self.location, new_count);
-        
+        tracing::debug!(
+            "Unpinning location {:?}, pin_count now: {}",
+            self.location,
+            new_count
+        );
+
         // If pin count reached 0, notify any waiting eviction threads
         if new_count == 0 {
             self.unpin_notify.notify_waiters();
@@ -117,7 +128,7 @@ pub struct PinGuard {
 
 impl PinGuard {
     fn new(pinned_location: &Arc<PinnedChunkLocation>) -> Self {
-        Self { 
+        Self {
             location: pinned_location.location.clone(),
             pinned_location: Arc::clone(pinned_location),
         }
