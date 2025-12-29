@@ -1,15 +1,13 @@
 use clap::Parser;
-use nvme::types::Byte;
 use oxcache;
-use oxcache::cli::{load_config, AppConfig, CliArgs};
+use oxcache::cli::{AppConfig, CliArgs, load_config};
 use oxcache::remote;
 use oxcache::server::{RUNTIME, Server};
 use std::fs;
 use std::process::exit;
 use std::sync::OnceLock;
-use tracing::{event, Level};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use tracing_appender::{non_blocking, rolling};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CliArgs::parse();
@@ -28,12 +26,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or_else(|| app_config.as_ref().and_then(|c| c.log_level.clone()))
         .unwrap_or_else(|| "info".to_string());
-    
-    let file_metrics_directory = cli
-        .file_metrics_directory
-        .clone()
-        .or_else(|| app_config.as_ref().and_then(|c| c.metrics.file_metrics_directory.clone()));
-    
+
+    let file_metrics_directory = cli.file_metrics_directory.clone().or_else(|| {
+        app_config
+            .as_ref()
+            .and_then(|c| c.metrics.file_metrics_directory.clone())
+    });
+
     init_logging(&log_level, file_metrics_directory.as_deref());
 
     let config = load_config(&cli)?;
@@ -76,11 +75,11 @@ static METRICS_GUARD: OnceLock<non_blocking::WorkerGuard> = OnceLock::new();
 pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
     let directive = match level.to_lowercase().as_str() {
         "error" => "error",
-        "warn"  => "warn",
-        "info"  => "info",
+        "warn" => "warn",
+        "info" => "info",
         "debug" => "debug",
         "trace" => "trace",
-        _       => "info",
+        _ => "info",
     };
 
     if let Some(metrics_dir) = metrics_directory {
@@ -131,9 +130,7 @@ pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
             .compact()
             .with_filter(EnvFilter::new(format!("{},metrics=off", directive)));
 
-        let _ = tracing_subscriber::registry()
-            .with(stdout_layer)
-            .try_init();
+        let _ = tracing_subscriber::registry().with(stdout_layer).try_init();
     }
 }
 

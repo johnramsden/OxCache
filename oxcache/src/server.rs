@@ -1,9 +1,8 @@
-use crate::cache::Cache;
+use crate::cache::{Cache, DataSource};
 use crate::device::Device;
 use crate::eviction::{EvictionPolicyWrapper, Evictor, EvictorMessage};
 use crate::readerpool::{ReadRequest, ReaderPool};
 use crate::writerpool::{WriteRequest, WriterPool};
-use tracing::debug;
 use nvme::types::Byte;
 use std::error::Error;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -12,6 +11,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
 
 use crate::cache::bucket::Chunk;
+use crate::metrics::{HitType, METRICS, MetricType, init_metrics_exporter};
 use crate::remote::RemoteBackend;
 use crate::{device, request};
 use bincode;
@@ -22,11 +22,10 @@ use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use crate::metrics::{init_metrics_exporter, HitType, MetricType, METRICS};
-use std::sync::atomic::{AtomicU64, Ordering};
 // Global tokio runtime
 // pub static RUNTIME: Lazy<Runtime> =
 // Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
@@ -80,6 +79,7 @@ pub struct ServerConfig {
     pub max_write_size: Byte,
     pub max_zones: Option<u64>,
     pub metrics: ServerMetricsConfig,
+    pub cache_shards: Option<usize>,
 }
 
 pub struct Server<T: RemoteBackend + Send + Sync> {
@@ -102,8 +102,16 @@ pub fn validate_read_response(buf: &[u8], key: &str, offset: Byte, size: Byte) {
     buffer.copy_from_slice(&buf[0..8]);
     let read_key_hash = u64::from_be_bytes(buffer);
     if read_key_hash != key_hash {
-        tracing::error!("Buffer validation failed - key hash mismatch: expected {}, got {}, buf_len: {}", key_hash, read_key_hash, buf.len());
-        tracing::error!("Buffer prefix: {:02x?}", &buf[0..std::cmp::min(32, buf.len())]);
+        tracing::error!(
+            "Buffer validation failed - key hash mismatch: expected {}, got {}, buf_len: {}",
+            key_hash,
+            read_key_hash,
+            buf.len()
+        );
+        tracing::error!(
+            "Buffer prefix: {:02x?}",
+            &buf[0..std::cmp::min(32, buf.len())]
+        );
     }
     debug_assert_eq!(read_key_hash, key_hash);
 
@@ -133,10 +141,13 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
         let shutdown = Arc::new(Notify::new());
 
+        let cache_shards = config.cache_shards.unwrap_or(1024);
+
         Ok(Self {
             cache: Arc::new(Cache::new(
                 device.get_num_zones(),
                 device.get_chunks_per_zone(),
+                cache_shards,
             )),
             remote: Arc::new(remote),
             config,
@@ -200,7 +211,7 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             Arc::clone(&self.cache),
             Duration::from_millis(self.config.eviction.eviction_interval),
             self.evict_rx.clone(),
-            writerpool.clone()
+            writerpool.clone(),
         )?;
 
         // Shutdown signal
@@ -225,18 +236,32 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
             // Initialize bytes-based tracking at server startup if bytes target is set
             if benchmark_target_bytes.is_some() {
-                let initial_bytes = METRICS.get_counter("client_request_bytes_total").unwrap_or(0);
+                let initial_bytes = METRICS
+                    .get_counter("client_request_bytes_total")
+                    .unwrap_or(0);
                 *METRICS.benchmark_state.bytes_initial_total.lock().unwrap() = Some(initial_bytes);
-                *METRICS.benchmark_state.bytes_benchmark_start_time.lock().unwrap() = Some(std::time::Instant::now());
-                tracing::info!("=== BENCHMARK: Bytes tracking started from server startup - target: {} bytes ({} MB) ===",
-                    benchmark_target_bytes.unwrap(), benchmark_target_bytes.unwrap() / 1_048_576);
+                *METRICS
+                    .benchmark_state
+                    .bytes_benchmark_start_time
+                    .lock()
+                    .unwrap() = Some(std::time::Instant::now());
+                tracing::info!(
+                    "=== BENCHMARK: Bytes tracking started from server startup - target: {} bytes ({} MB) ===",
+                    benchmark_target_bytes.unwrap(),
+                    benchmark_target_bytes.unwrap() / 1_048_576
+                );
             }
 
             // Enable and log duration-based benchmark if configured (will start on first eviction)
             if benchmark_duration_secs.is_some() {
-                METRICS.benchmark_state.duration_benchmark_enabled.store(true, Ordering::SeqCst);
-                tracing::info!("=== BENCHMARK: Duration tracking will start on first eviction - target: {} seconds ===",
-                    benchmark_duration_secs.unwrap());
+                METRICS
+                    .benchmark_state
+                    .duration_benchmark_enabled
+                    .store(true, Ordering::SeqCst);
+                tracing::info!(
+                    "=== BENCHMARK: Duration tracking will start on first eviction - target: {} seconds ===",
+                    benchmark_duration_secs.unwrap()
+                );
             }
 
             let shutdown_benchmark = self.shutdown.clone();
@@ -244,19 +269,26 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
             tokio::spawn(async move {
                 // Poll for completion conditions
                 let check_interval_ms = 1000; // Check every 1 second
-                let mut completion_reason = String::new();
+                let completion_reason;
 
                 loop {
                     tokio::time::sleep(Duration::from_millis(check_interval_ms)).await;
 
                     // Check bytes threshold (started from server startup)
                     if let Some(target_bytes) = benchmark_target_bytes {
-                        if let Some(bytes_initial) = *METRICS.benchmark_state.bytes_initial_total.lock().unwrap() {
-                            let final_bytes = METRICS.get_counter("client_request_bytes_total").unwrap_or(0);
+                        if let Some(bytes_initial) =
+                            *METRICS.benchmark_state.bytes_initial_total.lock().unwrap()
+                        {
+                            let final_bytes = METRICS
+                                .get_counter("client_request_bytes_total")
+                                .unwrap_or(0);
                             let bytes_transferred = final_bytes.saturating_sub(bytes_initial);
 
                             if bytes_transferred >= target_bytes {
-                                completion_reason = format!("Bytes threshold reached: {} >= {} bytes", bytes_transferred, target_bytes);
+                                completion_reason = format!(
+                                    "Bytes threshold reached: {} >= {} bytes",
+                                    bytes_transferred, target_bytes
+                                );
                                 break;
                             }
                         }
@@ -264,10 +296,16 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
 
                     // Check duration threshold (starts after first eviction)
                     if let Some(duration_secs) = benchmark_duration_secs {
-                        if let Some(start_time) = *METRICS.benchmark_state.benchmark_start_time.lock().unwrap() {
+                        if let Some(start_time) =
+                            *METRICS.benchmark_state.benchmark_start_time.lock().unwrap()
+                        {
                             let elapsed = start_time.elapsed();
                             if elapsed.as_secs() >= duration_secs {
-                                completion_reason = format!("Duration threshold reached: {:.2} >= {} seconds", elapsed.as_secs_f64(), duration_secs);
+                                completion_reason = format!(
+                                    "Duration threshold reached: {:.2} >= {} seconds",
+                                    elapsed.as_secs_f64(),
+                                    duration_secs
+                                );
                                 break;
                             }
                         }
@@ -275,16 +313,38 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                 }
 
                 // Calculate and print throughput based on which mode completed
-                let final_bytes = METRICS.get_counter("client_request_bytes_total").unwrap_or(0);
+                let final_bytes = METRICS
+                    .get_counter("client_request_bytes_total")
+                    .unwrap_or(0);
                 let (initial_bytes, start_time) = if benchmark_target_bytes.is_some() {
                     // Use bytes-based tracking (from startup)
-                    let bytes_initial = METRICS.benchmark_state.bytes_initial_total.lock().unwrap().unwrap_or(0);
-                    let bytes_start = METRICS.benchmark_state.bytes_benchmark_start_time.lock().unwrap().unwrap();
+                    let bytes_initial = METRICS
+                        .benchmark_state
+                        .bytes_initial_total
+                        .lock()
+                        .unwrap()
+                        .unwrap_or(0);
+                    let bytes_start = METRICS
+                        .benchmark_state
+                        .bytes_benchmark_start_time
+                        .lock()
+                        .unwrap()
+                        .unwrap();
                     (bytes_initial, bytes_start)
                 } else {
                     // Use duration-based tracking (from first eviction)
-                    let duration_initial = METRICS.benchmark_state.initial_bytes_total.lock().unwrap().unwrap_or(0);
-                    let duration_start = METRICS.benchmark_state.benchmark_start_time.lock().unwrap().unwrap();
+                    let duration_initial = METRICS
+                        .benchmark_state
+                        .initial_bytes_total
+                        .lock()
+                        .unwrap()
+                        .unwrap_or(0);
+                    let duration_start = METRICS
+                        .benchmark_state
+                        .benchmark_start_time
+                        .lock()
+                        .unwrap()
+                        .unwrap();
                     (duration_initial, duration_start)
                 };
 
@@ -355,7 +415,10 @@ impl<T: RemoteBackend + Send + Sync + 'static> Server<T> {
                             crate::eviction::EvictionPolicyWrapper::Promotional(_) => "Promotional",
                             crate::eviction::EvictionPolicyWrapper::Chunk(_) => "Chunk",
                         };
-                        tracing::info!("\n=== FINAL EVICTION METRICS SUMMARY ===\n{}", metrics.generate_report(policy_name));
+                        tracing::info!(
+                            "\n=== FINAL EVICTION METRICS SUMMARY ===\n{}",
+                            metrics.generate_report(policy_name)
+                        );
                     }
                 }
             }
@@ -409,8 +472,13 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                 match request {
                     request::Request::Get(req) => {
-                        tracing::debug!("REQ[{}] Processing GET request for key={}, offset={}, size={}",
-                                     request_id, req.key, req.offset, req.size);
+                        tracing::debug!(
+                            "REQ[{}] Processing GET request for key={}, offset={}, size={}",
+                            request_id,
+                            req.key,
+                            req.offset,
+                            req.size
+                        );
                         if let Err(e) = req.validate(chunk_size) {
                             tracing::warn!("REQ[{}] Validation failed: {}", request_id, e);
                             let encoded = bincode::serde::encode_to_vec(
@@ -451,75 +519,120 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let request_offset = request_offset;
                                 let request_size = request_size;
                                 let request_uuid = request_uuid.clone();
-                                move |pin_guard| async move {
-                                    tracing::debug!("REQ[{}] CACHE HIT - entering read path", request_id);
-                                    let location = pin_guard.location().clone();
+                                move |data_source| async move {
+                                    match data_source {
+                                        DataSource::Ram(buffer_data) => {
+                                            // Fast path: serve from RAM buffer
+                                            tracing::debug!("REQ[{}] CACHE HIT (buffer) - serving from RAM", request_id);
 
-                                    let (tx, rx) = flume::bounded(1);
-                                    let read_req = ReadRequest {
-                                        location,
-                                        responder: tx,
-                                        _pin_guard: pin_guard,
-                                        read_offset: request_offset,
-                                        read_size: request_size,
-                                    };
-                                    tracing::debug!("REQ[{}] Sending read request to reader pool", request_id);
-                                    reader_pool.send(read_req).await.map_err(|e| {
-                                        tracing::error!("REQ[{}] Failed to send read request: {}", request_id, e);
-                                        std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read request: {}", e))
-                                    })?;
+                                            // Extract requested subset
+                                            let chunked_resp = buffer_data.slice(
+                                                request_offset as usize..(request_offset + request_size) as usize
+                                            );
 
-                                    tracing::debug!("REQ[{}] Waiting for read response", request_id);
-                                    let recv_err = rx.recv_async().await;
-                                    let (header, data) = match recv_err {
-                                        Ok(wr) => {
-                                            tracing::debug!("REQ[{}] Received read response from reader pool", request_id);
-                                            match wr.data {
-                                                Ok((header, data)) => (header, data),
-                                                Err(e) => {
-                                                    tracing::error!("REQ[{}] Read data error: {}", request_id, e);
-                                                    return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("read data error: {}", e)));
-                                                }
+                                            let encoded = bincode::serde::encode_to_vec(
+                                                request::GetResponse::Response(chunked_resp),
+                                                bincode::config::standard()
+                                            ).unwrap();
+
+                                            // Update metrics BEFORE sending (to exclude network send time)
+                                            METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                            METRICS.update_metric_counter("hit", 1);
+                                            METRICS.update_metric_counter("buffer_hit", 1);
+                                            METRICS.update_hitratio(HitType::Hit);
+                                            METRICS.update_metric_counter("read_bytes_total", request_size);
+                                            METRICS.update_metric_counter("bytes_total", request_size);
+                                            METRICS.update_metric_counter("client_request_bytes_total", request_size);
+                                            METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                            METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
+
+                                            // Now send the response (can take as long as needed, metrics already recorded)
+                                            {
+                                                let mut w = writer.lock().await;
+                                                w.send(Bytes::from(encoded)).await.map_err(|e| {
+                                                    std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send buffer response: {}", e))
+                                                })?;
                                             }
-                                        },
-                                        Err(e) => {
-                                            tracing::error!("REQ[{}] recv_async failed for read: {}", request_id, e);
-                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("recv_async failed for read: {}", e)));
+
+                                            tracing::debug!("REQ[{}] CACHE HIT (buffer) completed successfully", request_id);
+                                            Ok(())
                                         }
-                                    };
 
-                                    // Validate read response - pin_guard must stay alive until here!
-                                    // Note: We validate against the original chunk that was stored (0, chunk_size),
-                                    // not the subset request (request_offset, request_size)
-                                    #[cfg(debug_assertions)]
-                                    validate_read_response(&header, &request_uuid, 0, chunk_size);
+                                        DataSource::Disk(pin_guard) => {
+                                            // Slow path: read from disk
+                                            tracing::debug!("REQ[{}] CACHE HIT (disk) - entering read path", request_id);
+                                            let location = pin_guard.location().clone();
 
-                                    // Return only the data portion (header is just for validation)
-                                    let chunked_resp = data;
+                                            let (tx, rx) = flume::bounded(1);
+                                            let read_req = ReadRequest {
+                                                location,
+                                                responder: tx,
+                                                _pin_guard: pin_guard,
+                                                read_offset: request_offset,
+                                                read_size: request_size,
+                                            };
 
-                                    let encoded = bincode::serde::encode_to_vec(
-                                        request::GetResponse::Response(chunked_resp.clone()),
-                                        bincode::config::standard()
-                                    ).unwrap();
-                                    {
-                                        tracing::debug!("REQ[{}] Sending response to client", request_id);
-                                        let mut w = writer.lock().await;
-                                        w.send(Bytes::from(encoded)).await.map_err(|e| {
-                                            tracing::error!("REQ[{}] Failed to send read response: {}", request_id, e);
-                                            std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read response: {}", e))
-                                        })?;
+                                            tracing::debug!("REQ[{}] Sending read request to reader pool", request_id);
+                                            reader_pool.send(read_req).await.map_err(|e| {
+                                                tracing::error!("REQ[{}] Failed to send read request: {}", request_id, e);
+                                                std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read request: {}", e))
+                                            })?;
+
+                                            tracing::debug!("REQ[{}] Waiting for read response", request_id);
+                                            let recv_err = rx.recv_async().await;
+                                            let (header, data) = match recv_err {
+                                                Ok(wr) => {
+                                                    tracing::debug!("REQ[{}] Received read response from reader pool", request_id);
+                                                    match wr.data {
+                                                        Ok((header, data)) => (header, data),
+                                                        Err(e) => {
+                                                            tracing::error!("REQ[{}] Read data error: {}", request_id, e);
+                                                            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("read data error: {}", e)));
+                                                        }
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    tracing::error!("REQ[{}] recv_async failed for read: {}", request_id, e);
+                                                    return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("recv_async failed for read: {}", e)));
+                                                }
+                                            };
+
+                                            // Validate read response
+                                            #[cfg(debug_assertions)]
+                                            validate_read_response(&header, &request_uuid, 0, chunk_size);
+
+                                            let chunked_resp = data;
+
+                                            let encoded = bincode::serde::encode_to_vec(
+                                                request::GetResponse::Response(chunked_resp.clone()),
+                                                bincode::config::standard()
+                                            ).unwrap();
+
+                                            // Update metrics BEFORE sending (to exclude network send time)
+                                            METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                            METRICS.update_metric_counter("hit", 1);
+                                            METRICS.update_metric_counter("disk_hit", 1);
+                                            METRICS.update_hitratio(HitType::Hit);
+                                            METRICS.update_metric_counter("read_bytes_total", request_size);
+                                            METRICS.update_metric_counter("bytes_total", request_size);
+                                            METRICS.update_metric_counter("client_request_bytes_total", request_size);
+                                            METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
+                                            METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
+
+                                            // Now send the response (can take as long as needed, metrics already recorded)
+                                            {
+                                                tracing::debug!("REQ[{}] Sending response to client", request_id);
+                                                let mut w = writer.lock().await;
+                                                w.send(Bytes::from(encoded)).await.map_err(|e| {
+                                                    tracing::error!("REQ[{}] Failed to send read response: {}", request_id, e);
+                                                    std::io::Error::new(std::io::ErrorKind::Other, format!("failed to send read response: {}", e))
+                                                })?;
+                                            }
+
+                                            tracing::debug!("REQ[{}] CACHE HIT (disk) completed successfully", request_id);
+                                            Ok(())
+                                        }
                                     }
-
-                                    METRICS.update_metric_histogram_latency("get_hit_latency_ms", start.elapsed(), MetricType::MsLatency);
-                                    METRICS.update_metric_counter("hit", 1);
-                                    METRICS.update_hitratio(HitType::Hit);
-                                    METRICS.update_metric_counter("read_bytes_total", request_size);
-                                    METRICS.update_metric_counter("bytes_total", request_size);
-                                    METRICS.update_metric_counter("client_request_bytes_total", request_size);
-                                    METRICS.update_metric_histogram_latency("get_total_latency_ms", start.elapsed(), MetricType::MsLatency);
-                                    METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
-                                    tracing::debug!("REQ[{}] CACHE HIT completed successfully", request_id);
-                                    Ok(())
                                 }
                             },
                             {
@@ -530,13 +643,10 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let request_offset = request_offset;
                                 let request_size = request_size;
                                 let request_uuid = request_uuid.clone();
-                                move || async move {
+                                move |buffer_ref, notify_ref| async move {
                                     tracing::debug!("REQ[{}] CACHE MISS - entering remote fetch path", request_id);
                                     let resp = match remote.get(request_uuid.as_str(), 0, chunk_size).await {
-                                        Ok(resp) => {
-                                            tracing::debug!("REQ[{}] Remote fetch completed successfully", request_id);
-                                            resp
-                                        },
+                                        Ok(resp) => resp,
                                         Err(e) => {
                                             tracing::error!("REQ[{}] Remote fetch failed: {}", request_id, e);
                                             let encoded = bincode::serde::encode_to_vec(
@@ -553,8 +663,16 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("remote.get failed: {}", e)));
                                         }
                                     };
-                                    // Sent to client, record time
-                                    METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
+
+                                    // CRITICAL: Populate buffer and notify waiters IMMEDIATELY
+                                    // This allows concurrent requests to be served from RAM
+                                    {
+                                        let mut buf = buffer_ref.write().await;
+                                        *buf = Some(resp.clone());
+                                    }
+                                    notify_ref.notify_waiters();
+
+                                    tracing::debug!("REQ[{}] Buffer populated, waiters notified", request_id);
 
                                     // Will implicitly fail if size larger than chunk
                                     let chunked_resp = resp.slice(request_offset as usize..(request_offset + request_size) as usize);
@@ -562,6 +680,11 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                         request::GetResponse::Response(chunked_resp),
                                         bincode::config::standard()
                                     ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("serialization failed: {}", e)))?;
+
+                                    // Record response latency BEFORE sending (to exclude network send time)
+                                    METRICS.update_metric_histogram_latency("get_response_latency_ms", start.elapsed(), MetricType::MsLatency);
+
+                                    // Now send the response (can take as long as needed, metrics already recorded)
                                     {
                                         tracing::debug!("REQ[{}] Sending remote response to client", request_id);
                                         let mut w = writer.lock().await;

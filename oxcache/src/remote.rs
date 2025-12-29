@@ -8,7 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::time::Duration;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 #[async_trait]
 pub trait RemoteBackend: Send + Sync {
@@ -111,7 +111,8 @@ impl EmulatedBackend {
 
         // Check size
         assert_eq!(
-            buffer.len() as u64, capacity,
+            buffer.len() as u64,
+            capacity,
             "Buffer should be exactly capacity-sized"
         );
 

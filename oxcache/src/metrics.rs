@@ -1,21 +1,16 @@
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
+use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use once_cell::sync::Lazy;
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{event, info, Level};
-use metrics::{counter, gauge, histogram};
-use once_cell::sync::Lazy;
+use tracing::{Level, event};
 
-use tracing_appender::rolling;
-use tracing_appender::non_blocking;
-use tracing_subscriber::fmt;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 
-pub static METRICS: Lazy<MetricsRecorder> = Lazy::new(|| {
-    MetricsRecorder::new()
-});
+pub static METRICS: Lazy<MetricsRecorder> = Lazy::new(|| MetricsRecorder::new());
 
 pub struct HitRatio {
     hits: u64,
@@ -23,24 +18,19 @@ pub struct HitRatio {
 }
 impl HitRatio {
     pub fn new() -> Self {
-        Self {
-            hits: 0, misses: 0
-        }
+        Self { hits: 0, misses: 0 }
     }
     pub fn update_hitratio(&mut self, hit_type: HitType) {
         match hit_type {
-            HitType::Hit => {
-                self.hits+=1
-            },
-            HitType::Miss => {
-                self.misses+=1
-            }
+            HitType::Hit => self.hits += 1,
+            HitType::Miss => self.misses += 1,
         }
     }
 }
 
 pub enum HitType {
-    Hit, Miss
+    Hit,
+    Miss,
 }
 
 pub struct MetricState {
@@ -50,20 +40,23 @@ pub struct MetricState {
 impl MetricState {
     pub fn new() -> Self {
         Self {
-            hit_ratio: Arc::new(Mutex::new(HitRatio::new()))
+            hit_ratio: Arc::new(Mutex::new(HitRatio::new())),
         }
     }
 }
 
 pub fn init_metrics_exporter(addr: SocketAddr) {
     let builder = PrometheusBuilder::new();
-    let recorder_handle = builder.install_recorder().expect("failed to install recorder");
+    let recorder_handle = builder
+        .install_recorder()
+        .expect("failed to install recorder");
 
     // Spawn HTTP server in a tokio task (green thread)
     tokio::spawn(async move {
-        let app = Router::new().route("/metrics", get(move || async move {
-            recorder_handle.render()
-        }));
+        let app = Router::new().route(
+            "/metrics",
+            get(move || async move { recorder_handle.render() }),
+        );
 
         tracing::info!("Serving metrics at http://{}/metrics", addr);
 
@@ -106,7 +99,7 @@ pub struct MetricsRecorder {
 }
 
 pub enum MetricType {
-    MsLatency
+    MsLatency,
 }
 
 const MILLISECONDS: f64 = 1_000.0;
@@ -129,17 +122,16 @@ impl MetricsRecorder {
         let counters = self.counters.lock().unwrap();
         counters.get(name).copied()
     }
-    pub fn update_metric_histogram_latency(&self, name: &str, value: Duration, metric_type: MetricType) {
+    pub fn update_metric_histogram_latency(
+        &self,
+        name: &str,
+        value: Duration,
+        metric_type: MetricType,
+    ) {
         let id = self.run_id.clone();
         let h = histogram!(format!("{}_{}", self.prefix, name.to_string()), "run_id" => id.clone());
         let v = match metric_type {
-            MetricType::MsLatency => {
-                value.as_secs_f64() * MILLISECONDS
-            },
-            _ => {
-                tracing::warn!("Unknown metric type");
-                return;
-            },
+            MetricType::MsLatency => value.as_secs_f64() * MILLISECONDS,
         };
         h.record(v);
         event!(target: "metrics", Level::INFO, name = name, value=v);
@@ -149,7 +141,7 @@ impl MetricsRecorder {
         let id = self.run_id.clone();
         let h = counter!(format!("{}_{}", self.prefix, name.to_string()), "run_id" => id.clone());
         h.increment(value);
-        
+
         // Update thread-safe counter map
         {
             let mut counters = self.counters.lock().unwrap();
@@ -180,4 +172,3 @@ impl MetricsRecorder {
         self.update_metric_gauge("hitratio", ratio)
     }
 }
-

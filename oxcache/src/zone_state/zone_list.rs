@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, ErrorKind};
 
 type ZoneIndex = nvme::types::Zone;
-type ZonePriority = usize;
 
 #[derive(Debug, Clone)]
 pub struct Zone {
@@ -30,7 +29,7 @@ pub enum ZoneStateDbg {
     ExplicitOpen,
     ImplicitOpen,
     Closed,
-    Full
+    Full,
 }
 
 #[derive(Clone, Debug)]
@@ -48,7 +47,7 @@ impl ZoneDbg {
         Self {
             state: ZoneStateDbg::Empty,
             chunk_ptr: 0,
-            num_writers: 0
+            num_writers: 0,
         }
     }
 }
@@ -58,7 +57,7 @@ pub struct ZoneStateTracker {
     pub state: Vec<ZoneDbg>,
     pub max_chunks: usize,
     pub mar: usize,
-    pub mor: usize
+    pub mor: usize,
 }
 
 impl ZoneStateTracker {
@@ -66,21 +65,30 @@ impl ZoneStateTracker {
         Self {
             state: vec![ZoneDbg::new(); num_zones],
             max_chunks,
-            mar, mor
+            mar,
+            mor,
         }
     }
 
     pub fn open_zone(&mut self, zone_index: ZoneIndex) {
-        self.assert_zone_state(zone_index,
-            &[ZoneStateDbg::Empty, ZoneStateDbg::Closed, ZoneStateDbg::ImplicitOpen]);
+        self.assert_zone_state(
+            zone_index,
+            &[
+                ZoneStateDbg::Empty,
+                ZoneStateDbg::Closed,
+                ZoneStateDbg::ImplicitOpen,
+            ],
+        );
         self.check_zone_count();
         self.state[zone_index as usize].state = ZoneStateDbg::ExplicitOpen;
         self.check_zone_count();
     }
 
     pub fn close_zone(&mut self, zone_index: ZoneIndex) {
-        self.assert_zone_state(zone_index,
-            &[ZoneStateDbg::ImplicitOpen, ZoneStateDbg::ExplicitOpen]);
+        self.assert_zone_state(
+            zone_index,
+            &[ZoneStateDbg::ImplicitOpen, ZoneStateDbg::ExplicitOpen],
+        );
         self.check_zone_count();
         self.state[zone_index as usize].state = ZoneStateDbg::Closed;
         self.check_zone_count();
@@ -93,21 +101,30 @@ impl ZoneStateTracker {
     }
 
     pub fn finish_zone(&mut self, zone_index: ZoneIndex) {
-        self.assert_zone_state(zone_index,
-            &[ZoneStateDbg::ImplicitOpen, ZoneStateDbg::ExplicitOpen, ZoneStateDbg::Closed]);
+        self.assert_zone_state(
+            zone_index,
+            &[
+                ZoneStateDbg::ImplicitOpen,
+                ZoneStateDbg::ExplicitOpen,
+                ZoneStateDbg::Closed,
+            ],
+        );
         self.check_zone_count();
         self.state[zone_index as usize].state = ZoneStateDbg::Empty;
         self.check_zone_count();
     }
 
     pub fn write_zone(&mut self, zone_index: ZoneIndex) {
-        self.assert_zone_state(zone_index,
-            &[ZoneStateDbg::ImplicitOpen,
+        self.assert_zone_state(
+            zone_index,
+            &[
+                ZoneStateDbg::ImplicitOpen,
                 ZoneStateDbg::ExplicitOpen,
                 ZoneStateDbg::Closed,
-                ZoneStateDbg::Empty]);
+                ZoneStateDbg::Empty,
+            ],
+        );
         self.check_zone_count();
-
 
         self.state[zone_index as usize].chunk_ptr += 1;
         self.state[zone_index as usize].state = match self.state[zone_index as usize].state {
@@ -125,11 +142,15 @@ impl ZoneStateTracker {
     }
 
     pub fn finish_write_zone(&mut self, zone_index: ZoneIndex) {
-        self.assert_zone_state(zone_index,
-            &[ZoneStateDbg::ImplicitOpen,
+        self.assert_zone_state(
+            zone_index,
+            &[
+                ZoneStateDbg::ImplicitOpen,
                 ZoneStateDbg::ExplicitOpen,
                 ZoneStateDbg::Closed,
-                ZoneStateDbg::Empty]);
+                ZoneStateDbg::Empty,
+            ],
+        );
         self.check_zone_count();
 
         if self.state[zone_index as usize].num_writers == 0 {
@@ -143,9 +164,11 @@ impl ZoneStateTracker {
     }
 
     fn assert_zone_state(&self, zone_index: ZoneIndex, states: &[ZoneStateDbg]) {
-        assert!(states.iter().any(
-            |state| self.state[zone_index as usize].state == *state
-        ))
+        assert!(
+            states
+                .iter()
+                .any(|state| self.state[zone_index as usize].state == *state)
+        )
     }
 
     fn check_zone_count(&self) {
@@ -154,20 +177,21 @@ impl ZoneStateTracker {
     }
 
     fn open_zone_count(&self) -> usize {
-        self.state.iter()
+        self.state
+            .iter()
             .filter(|zone| {
-                zone.state == ZoneStateDbg::ImplicitOpen ||
-                    zone.state == ZoneStateDbg::ExplicitOpen
+                zone.state == ZoneStateDbg::ImplicitOpen || zone.state == ZoneStateDbg::ExplicitOpen
             })
             .count()
     }
 
     fn active_zone_count(&self) -> usize {
-        self.state.iter()
+        self.state
+            .iter()
             .filter(|zone| {
-                zone.state == ZoneStateDbg::ImplicitOpen ||
-                    zone.state == ZoneStateDbg::ExplicitOpen ||
-                    zone.state == ZoneStateDbg::Closed
+                zone.state == ZoneStateDbg::ImplicitOpen
+                    || zone.state == ZoneStateDbg::ExplicitOpen
+                    || zone.state == ZoneStateDbg::Closed
             })
             .count()
     }
@@ -196,10 +220,15 @@ impl ZoneList {
         // List of all zones, initially all are "free"
         let avail_zones = (0..num_zones).collect();
         let zones = (0..num_zones)
-            .map(|item| (item, Zone {
-                index: item,
-                chunks_available: (0..chunks_per_zone).rev().collect()
-            })) // (key, value)
+            .map(|item| {
+                (
+                    item,
+                    Zone {
+                        index: item,
+                        chunks_available: (0..chunks_per_zone).rev().collect(),
+                    },
+                )
+            }) // (key, value)
             .collect();
 
         ZoneList {
@@ -214,7 +243,8 @@ impl ZoneList {
                 num_zones as usize,
                 chunks_per_zone as usize,
                 max_active_resources,
-                max_active_resources),
+                max_active_resources,
+            ),
         }
     }
 
@@ -224,12 +254,19 @@ impl ZoneList {
     }
 
     // Get a zone to write to, with option to bypass eviction check for eviction operations
-    pub fn remove_with_eviction_bypass(&mut self, is_eviction: bool) -> Result<ZoneIndex, ZoneObtainFailure> {
+    pub fn remove_with_eviction_bypass(
+        &mut self,
+        is_eviction: bool,
+    ) -> Result<ZoneIndex, ZoneObtainFailure> {
         #[cfg(debug_assertions)]
         self.check_invariants();
 
         let remaining_zones = self.free_zones.len() + self.open_zones.len();
-        tracing::debug!("remove_with_eviction_bypass: is_eviction={}, remaining_zones={}", is_eviction, remaining_zones);
+        tracing::debug!(
+            "remove_with_eviction_bypass: is_eviction={}, remaining_zones={}",
+            is_eviction,
+            remaining_zones
+        );
 
         if !is_eviction && self.should_evict() {
             // Need to evict before we run out completely (but not during eviction itself)
@@ -284,7 +321,7 @@ impl ZoneList {
             res
         };
 
-        let mut zone = zone.unwrap();
+        let zone = zone.unwrap();
         let zone_index = zone.index;
 
         if zone.chunks_available.len() <= 0 {
@@ -353,7 +390,8 @@ impl ZoneList {
                 let res = device.finish_zone(zone_index);
                 #[cfg(debug_assertions)]
                 {
-                    let (_nz, zones) = report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
+                    let (_nz, zones) =
+                        report_zones_all(device.get_fd(), device.get_nsid()).unwrap();
                     assert!(
                         zones[zone_index as usize].zone_state == ZoneState::Closed
                             || zones[zone_index as usize].zone_state == ZoneState::Full,
@@ -403,7 +441,7 @@ impl ZoneList {
             z
         };
         let zone_index = zone.unwrap();
-        let mut zone = self.zones.get_mut(&zone_index).unwrap();
+        let zone = self.zones.get_mut(&zone_index).unwrap();
         let chunk = zone.chunks_available.pop().unwrap();
 
         if zone.chunks_available.len() >= 1 {
@@ -431,15 +469,24 @@ impl ZoneList {
         // self.state_tracker.finish_write_zone(chunk.zone);
 
         let zone = self.zones.get_mut(&chunk.zone).unwrap();
-        tracing::debug!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::debug!(
+            "[ZoneList]: Returning chunk {:?} to {:?}",
+            chunk,
+            zone.chunks_available
+        );
 
         debug_assert!(
             !zone.chunks_available.contains(&chunk.index),
             "Zone {} should not contain chunk {} we are trying to return",
-            chunk.zone, chunk.index
+            chunk.zone,
+            chunk.index
         );
 
-        tracing::debug!("[ZoneList]: Returning chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::debug!(
+            "[ZoneList]: Returning chunk {:?} to {:?}",
+            chunk,
+            zone.chunks_available
+        );
 
         // Return it
         zone.chunks_available.push(chunk.index);
@@ -449,7 +496,11 @@ impl ZoneList {
         if zone.chunks_available.len() == 1 {
             self.free_zones.push_back(chunk.zone);
         }
-        tracing::debug!("[ZoneList]: Returned chunk {:?} to {:?}", chunk, zone.chunks_available);
+        tracing::debug!(
+            "[ZoneList]: Returned chunk {:?} to {:?}",
+            chunk,
+            zone.chunks_available
+        );
 
         #[cfg(debug_assertions)]
         self.check_invariants();
@@ -470,10 +521,7 @@ impl ZoneList {
     // Gets the number of open zones by counting the unique
     // zones listed in open_zones and writing_zones
     pub fn get_open_zones(&self) -> usize {
-        let open_zone_list = self
-            .open_zones
-            .iter()
-            .collect::<HashSet<&ZoneIndex>>();
+        let open_zone_list = self.open_zones.iter().collect::<HashSet<&ZoneIndex>>();
 
         self.writing_zones
             .keys()
@@ -490,10 +538,11 @@ impl ZoneList {
         device: &dyn device::Device,
     ) -> std::io::Result<()> {
         if self.writing_zones.contains_key(&idx) {
-            return Err(io::Error::new(ErrorKind::ResourceBusy,
-                "Can't reset because it is being written to"));
+            return Err(io::Error::new(
+                ErrorKind::ResourceBusy,
+                "Can't reset because it is being written to",
+            ));
         }
-
 
         #[cfg(debug_assertions)]
         self.check_invariants();
@@ -505,9 +554,7 @@ impl ZoneList {
         zone.chunks_available = (0..self.chunks_per_zone).rev().collect();
 
         match self.open_zones.iter().position(|zone_i| *zone_i == idx) {
-            Some(open_zone_idx) => {
-                self.open_zones.remove(open_zone_idx)
-            },
+            Some(open_zone_idx) => self.open_zones.remove(open_zone_idx),
             None => None,
         };
         self.free_zones.push_back(idx);
@@ -545,8 +592,7 @@ impl ZoneList {
             .sum();
 
         // Total available chunks in completely free zones
-        let free_zone_chunks: Chunk =
-            (self.free_zones.len() as Chunk) * self.chunks_per_zone;
+        let free_zone_chunks: Chunk = (self.free_zones.len() as Chunk) * self.chunks_per_zone;
 
         // Grand total
         open_zone_chunks + free_zone_chunks
@@ -554,10 +600,8 @@ impl ZoneList {
 
     /// Makes sure that the zone list is consistent with itself.
     fn check_invariants(&self) {
-
         // free_zones & open are unique and dont share elems
         {
-
             let set_free: HashSet<_> = self.free_zones.iter().collect();
             let set_open: HashSet<_> = self.open_zones.iter().collect();
 
@@ -571,10 +615,18 @@ impl ZoneList {
                 println!("free_zones: {:?}", self.free_zones);
                 println!("zones: {:?}", self.zones);
                 // no dupes
-                assert_eq!(set_free.len(), self.free_zones.len(), "Free list has duplicate elements");
+                assert_eq!(
+                    set_free.len(),
+                    self.free_zones.len(),
+                    "Free list has duplicate elements"
+                );
             }
 
-            assert_eq!(set_open.len(), self.open_zones.len(), "Open list has duplicate elements");
+            assert_eq!(
+                set_open.len(),
+                self.open_zones.len(),
+                "Open list has duplicate elements"
+            );
 
             // for zone in &self.open_zones {
             //     assert!(
@@ -622,18 +674,26 @@ mod zone_list_tests {
 
     use std::sync::{Arc, Mutex};
 
+    use super::ZoneList;
+    use crate::eviction::EvictionPolicyWrapper;
     use crate::{
-        cache::{bucket::ChunkLocation, Cache}, device::Device, eviction::EvictTarget, writerpool::WriterPool, zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait}
+        cache::{Cache, bucket::ChunkLocation},
+        device::Device,
+        eviction::EvictTarget,
+        writerpool::WriterPool,
+        zone_state::zone_list::ZoneObtainFailure::{EvictNow, Wait},
     };
     use bytes::Bytes;
     use nvme::types::{Byte, LogicalBlock, NVMeConfig, Zone};
-    use crate::eviction::EvictionPolicyWrapper;
-    use super::ZoneList;
 
     struct MockDevice {}
 
     impl Device for MockDevice {
-        fn append_with_eviction_bypass(&self, _data: Bytes, _is_eviction: bool) -> std::io::Result<ChunkLocation> {
+        fn append_with_eviction_bypass(
+            &self,
+            _data: Bytes,
+            _is_eviction: bool,
+        ) -> std::io::Result<ChunkLocation> {
             Ok(ChunkLocation { zone: 0, index: 0 })
         }
 
@@ -648,7 +708,13 @@ mod zone_list_tests {
         }
 
         /// This is expected to remove elements from the cache as well
-        fn evict(self: Arc<Self>, _cache: Arc<Cache>, _writer_pool: Arc<WriterPool>, _eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>, always_evict: bool) -> std::io::Result<()> {
+        fn evict(
+            self: Arc<Self>,
+            _cache: Arc<Cache>,
+            _writer_pool: Arc<WriterPool>,
+            _eviction_policy: Arc<Mutex<EvictionPolicyWrapper>>,
+            always_evict: bool,
+        ) -> std::io::Result<()> {
             Ok(())
         }
 
@@ -692,7 +758,12 @@ mod zone_list_tests {
             0
         }
 
-        fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)> {
+        fn read_subset(
+            &self,
+            location: ChunkLocation,
+            offset: Byte,
+            size: Byte,
+        ) -> std::io::Result<(Bytes, Bytes)> {
             Ok((Bytes::new(), Bytes::new()))
         }
     }
@@ -729,7 +800,7 @@ mod zone_list_tests {
     }
 
     #[test]
-    #[ignore]  // TODO: FIX AFTER CHUNK EVICT MERGED
+    #[ignore] // TODO: FIX AFTER CHUNK EVICT MERGED
     fn test_basic() {
         let md = MockDevice {};
         let num_zones = 2;
@@ -778,7 +849,7 @@ mod zone_list_tests {
     }
 
     #[test]
-    #[ignore]  // TODO: FIX AFTER CHUNK EVICT MERGED
+    #[ignore] // TODO: FIX AFTER CHUNK EVICT MERGED
     fn test_mar() {
         let md = MockDevice {};
         let num_zones = 2;

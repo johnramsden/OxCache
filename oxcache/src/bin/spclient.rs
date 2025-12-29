@@ -6,13 +6,13 @@ use oxcache::request;
 use oxcache::request::{GetRequest, Request};
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 const MAX_FRAME_LENGTH: usize = 2 * 1024 * 1024 * 1024; // 2 GB
@@ -303,11 +303,9 @@ async fn run_real_mode(
         for qreq in quantized {
             // Validate request size
             if qreq.size > MAX_FRAME_LENGTH as u64 {
-                return Err(format!(
-                    "Request size {} exceeds MAX_FRAME_LENGTH (2GB)",
-                    qreq.size
-                )
-                .into());
+                return Err(
+                    format!("Request size {} exceeds MAX_FRAME_LENGTH (2GB)", qreq.size).into(),
+                );
             }
 
             get_requests.push(GetRequest {
@@ -379,11 +377,18 @@ async fn run_real_mode(
                 }
 
                 // Send request with timeout
-                let encoded =
-                    bincode::serde::encode_to_vec(Request::Get(request), bincode::config::standard())
-                        .unwrap();
+                let encoded = bincode::serde::encode_to_vec(
+                    Request::Get(request),
+                    bincode::config::standard(),
+                )
+                .unwrap();
 
-                match timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), writer.send(Bytes::from(encoded))).await {
+                match timeout(
+                    Duration::from_secs(REQUEST_TIMEOUT_SECS),
+                    writer.send(Bytes::from(encoded)),
+                )
+                .await
+                {
                     Ok(Ok(_)) => {
                         // Send successful
                     }
@@ -396,7 +401,10 @@ async fn run_real_mode(
                     Err(_) => {
                         return Err(std::io::Error::new(
                             ErrorKind::TimedOut,
-                            format!("[Client {}] Send timeout after {} seconds", client_id, REQUEST_TIMEOUT_SECS),
+                            format!(
+                                "[Client {}] Send timeout after {} seconds",
+                                client_id, REQUEST_TIMEOUT_SECS
+                            ),
                         ));
                     }
                 }
@@ -430,16 +438,23 @@ async fn run_real_mode(
                         // Server closed connection gracefully - this is expected behavior
                         // when server reaches benchmark target and shuts down
                         let completed_reqs = counter.load(Ordering::Relaxed);
-                        println!("[Client {}] Server closed connection gracefully after {} requests",
-                                 client_id, completed_reqs);
-                        println!("[Client {}] This is expected when server reaches benchmark target",
-                                 client_id);
+                        println!(
+                            "[Client {}] Server closed connection gracefully after {} requests",
+                            client_id, completed_reqs
+                        );
+                        println!(
+                            "[Client {}] This is expected when server reaches benchmark target",
+                            client_id
+                        );
                         return Ok(());
                     }
                     Err(_) => {
                         return Err(std::io::Error::new(
                             ErrorKind::TimedOut,
-                            format!("[Client {}] Receive timeout after {} seconds", client_id, REQUEST_TIMEOUT_SECS),
+                            format!(
+                                "[Client {}] Receive timeout after {} seconds",
+                                client_id, REQUEST_TIMEOUT_SECS
+                            ),
                         ));
                     }
                 }
@@ -470,10 +485,15 @@ async fn run_real_mode(
 
     println!("\n=== Execution Complete ===");
     if completed_requests < nr_requests {
-        println!("NOTE: Server shutdown before all requests completed (expected for byte-target benchmarks)");
-        println!("Completed {} of {} requests ({:.1}%)",
-                 completed_requests, nr_requests,
-                 (completed_requests as f64 / nr_requests as f64) * 100.0);
+        println!(
+            "NOTE: Server shutdown before all requests completed (expected for byte-target benchmarks)"
+        );
+        println!(
+            "Completed {} of {} requests ({:.1}%)",
+            completed_requests,
+            nr_requests,
+            (completed_requests as f64 / nr_requests as f64) * 100.0
+        );
     } else {
         println!("Completed all {} requests", nr_requests);
     }

@@ -1,5 +1,5 @@
-use bytes::Bytes;
 use bincode::error::DecodeError;
+use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use oxcache::request::{GetRequest, GetResponse, Request};
 use std::time::Duration;
@@ -29,7 +29,12 @@ impl TestClient {
         Ok(Self { reader, writer })
     }
 
-    async fn get(&mut self, key: String, offset: u64, size: u64) -> Result<Bytes, Box<dyn std::error::Error>> {
+    async fn get(
+        &mut self,
+        key: String,
+        offset: u64,
+        size: u64,
+    ) -> Result<Bytes, Box<dyn std::error::Error>> {
         let request = Request::Get(GetRequest { key, offset, size });
 
         let encoded = bincode::serde::encode_to_vec(request, bincode::config::standard())?;
@@ -70,11 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chunk_size = 65536; // 64KB chunk size
     let lba_size = 4096; // 4KB logical block size
     let test_cases = vec![
-        (0, lba_size),           // Read first 4KB (includes header)
-        (lba_size, lba_size),    // Read second 4KB block
-        (lba_size * 2, lba_size), // Read third 4KB block
+        (0, lba_size),                // Read first 4KB (includes header)
+        (lba_size, lba_size),         // Read second 4KB block
+        (lba_size * 2, lba_size),     // Read third 4KB block
         (lba_size * 4, lba_size * 2), // Read 8KB starting at 16KB offset
-        (0, chunk_size),         // Read entire chunk
+        (0, chunk_size),              // Read entire chunk
     ];
 
     for (offset, size) in test_cases {
@@ -108,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test LBA-aligned edge cases
     let edge_cases = vec![
-        (0, lba_size),                    // Single LBA at start
+        (0, lba_size),                     // Single LBA at start
         (chunk_size - lba_size, lba_size), // Single LBA at end
     ];
 
@@ -144,7 +149,11 @@ fn validate_subset_data(data: &Bytes, key: &str, offset: u64, size: u64) -> bool
     println!("Expected data length: {}", size);
 
     if data.len() != size as usize {
-        println!("ERROR: Data length mismatch: expected {}, got {}", size, data.len());
+        println!(
+            "ERROR: Data length mismatch: expected {}, got {}",
+            size,
+            data.len()
+        );
         return false;
     }
 
@@ -154,19 +163,34 @@ fn validate_subset_data(data: &Bytes, key: &str, offset: u64, size: u64) -> bool
 
     // Show more bytes for comparison
     let show_bytes = std::cmp::min(32, std::cmp::min(data.len(), expected_data.len()));
-    println!("Expected first {} bytes: {:02x?}", show_bytes, &expected_data[0..show_bytes]);
-    println!("Actual first {} bytes:   {:02x?}", show_bytes, &data[0..show_bytes]);
+    println!(
+        "Expected first {} bytes: {:02x?}",
+        show_bytes,
+        &expected_data[0..show_bytes]
+    );
+    println!(
+        "Actual first {} bytes:   {:02x?}",
+        show_bytes,
+        &data[0..show_bytes]
+    );
 
     // Find first mismatch
     for (i, (actual, expected)) in data.iter().zip(expected_data.iter()).enumerate() {
         if actual != expected {
-            println!("ERROR: First mismatch at byte {}: expected 0x{:02x}, got 0x{:02x}", i, expected, actual);
+            println!(
+                "ERROR: First mismatch at byte {}: expected 0x{:02x}, got 0x{:02x}",
+                i, expected, actual
+            );
             return false;
         }
     }
 
     if data.len() != expected_data.len() {
-        println!("ERROR: Length mismatch after byte comparison: actual {}, expected {}", data.len(), expected_data.len());
+        println!(
+            "ERROR: Length mismatch after byte comparison: actual {}, expected {}",
+            data.len(),
+            expected_data.len()
+        );
         return false;
     }
 
@@ -179,7 +203,10 @@ fn generate_expected_subset_data(key: &str, offset: u64, size: u64) -> Vec<u8> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    println!("=== DEBUG: Generating expected data for offset={}, size={} ===", offset, size);
+    println!(
+        "=== DEBUG: Generating expected data for offset={}, size={} ===",
+        offset, size
+    );
 
     const EMULATED_BUFFER_SEED: u64 = 1;
     const CHUNK_SIZE: u64 = 65536; // Match our test chunk size
@@ -194,8 +221,8 @@ fn generate_expected_subset_data(key: &str, offset: u64, size: u64) -> Vec<u8> {
     println!("Key hash: 0x{:016x}", key_hash);
 
     let mut full_chunk = Vec::new();
-    full_chunk.extend_from_slice(&key_hash.to_be_bytes());  // 8 bytes
-    full_chunk.extend_from_slice(&0u64.to_be_bytes());      // 8 bytes - offset=0
+    full_chunk.extend_from_slice(&key_hash.to_be_bytes()); // 8 bytes
+    full_chunk.extend_from_slice(&0u64.to_be_bytes()); // 8 bytes - offset=0
     full_chunk.extend_from_slice(&CHUNK_SIZE.to_be_bytes()); // 8 bytes - size=chunk_size
 
     println!("Header (24 bytes): {:02x?}", &full_chunk[0..24]);
@@ -217,7 +244,10 @@ fn generate_expected_subset_data(key: &str, offset: u64, size: u64) -> Vec<u8> {
 
     let result = full_chunk[start..end].to_vec();
     println!("Extracted subset length: {}", result.len());
-    println!("Extracted first 32 bytes: {:02x?}", &result[0..std::cmp::min(32, result.len())]);
+    println!(
+        "Extracted first 32 bytes: {:02x?}",
+        &result[0..std::cmp::min(32, result.len())]
+    );
 
     result
 }

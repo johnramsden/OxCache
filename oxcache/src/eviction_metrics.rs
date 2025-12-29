@@ -1,8 +1,8 @@
 use crate::cache::bucket::ChunkLocation;
 use dashmap::DashMap;
 use nvme::types::{Chunk, Zone};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// Metrics for a single zone
@@ -233,19 +233,20 @@ impl EvictionMetrics {
 
         // Build report
         let mut report = String::new();
-        report.push_str("================================================================================\n");
+        report.push_str(
+            "================================================================================\n",
+        );
         report.push_str(&format!(
             "EVICTION METRICS REPORT - {} Policy\n",
             policy_name
         ));
-        report.push_str("================================================================================\n");
+        report.push_str(
+            "================================================================================\n",
+        );
         report.push_str(&format!("Runtime: {:.2}s\n", runtime));
         report.push_str(&format!("Total Zones: {}\n", self.num_zones));
         report.push_str(&format!("Total Evictions: {} zones\n", total_evictions));
-        report.push_str(&format!(
-            "Total Chunks Evicted: {}\n",
-            total_chunks_evicted
-        ));
+        report.push_str(&format!("Total Chunks Evicted: {}\n", total_chunks_evicted));
         report.push_str(&format!(
             "Total Unique Chunks Accessed: {}\n",
             total_unique_chunks
@@ -253,14 +254,20 @@ impl EvictionMetrics {
         report.push_str("\n");
 
         // Top 20 hottest zones
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         report.push_str("TOP 20 HOTTEST ZONES (by read count):\n");
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         report.push_str(&format!(
             "{:<8} {:<12} {:<18} {:<12} {:<12} {:<12}\n",
             "Zone", "Evictions", "Chunks Evicted", "Reads", "Writes", "Hot Chunks"
         ));
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         for (zone, evict_count, evict_chunk_count, read_count, write_count, hot_chunks) in
             top_20_hottest
         {
@@ -272,14 +279,20 @@ impl EvictionMetrics {
         report.push_str("\n");
 
         // Top 20 most evicted zones
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         report.push_str("TOP 20 MOST EVICTED ZONES:\n");
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         report.push_str(&format!(
             "{:<8} {:<12} {:<18} {:<12} {:<12} {:<12}\n",
             "Zone", "Evictions", "Chunks Evicted", "Reads", "Writes", "Hot Chunks"
         ));
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         for (zone, evict_count, evict_chunk_count, read_count, write_count, hot_chunks) in
             top_20_evicted
         {
@@ -291,9 +304,13 @@ impl EvictionMetrics {
         report.push_str("\n");
 
         // Summary analysis
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         report.push_str("SUMMARY ANALYSIS (zones divided into thirds):\n");
-        report.push_str("--------------------------------------------------------------------------------\n");
+        report.push_str(
+            "--------------------------------------------------------------------------------\n",
+        );
         report.push_str(&format!(
             "Early Zones (0-{}):      {} evictions, {} hot chunks, {} reads\n",
             early_end - 1,
@@ -332,7 +349,9 @@ impl EvictionMetrics {
         ));
         report.push_str("\n");
         report.push_str(&format!("VERDICT: {}\n", verdict));
-        report.push_str("================================================================================\n");
+        report.push_str(
+            "================================================================================\n",
+        );
 
         report
     }

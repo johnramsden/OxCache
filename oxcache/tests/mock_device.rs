@@ -1,14 +1,23 @@
-use std::{io::{Error, ErrorKind}, sync::{atomic::AtomicUsize, Arc, Condvar}};
+use std::{
+    io::{Error, ErrorKind},
+    sync::{Arc, Condvar, atomic::AtomicUsize},
+};
 
 use bytes::Bytes;
 use flume::Sender;
-use nvme::{ops::zns_append, types::{Byte, LogicalBlock, NVMeConfig}};
-use std::sync::Mutex;
-use oxcache::{
-    cache::bucket::ChunkLocation, device::Device, eviction::EvictorMessage, zone_state::zone_list::{self, ZoneList, ZoneObtainFailure}
+use nvme::{
+    ops::zns_append,
+    types::{Byte, LogicalBlock, NVMeConfig},
 };
 use oxcache::eviction::EvictionPolicyWrapper;
 use oxcache::writerpool::WriterPool;
+use oxcache::{
+    cache::bucket::ChunkLocation,
+    device::Device,
+    eviction::EvictorMessage,
+    zone_state::zone_list::{self, ZoneList, ZoneObtainFailure},
+};
+use std::sync::Mutex;
 
 struct Chunk {
     zone_index: usize,
@@ -110,15 +119,17 @@ impl MockZonedDevice {
     }
 }
 
-
-
 /// Does not actually write data. Only validates that the state of things are correct
 impl Device for MockZonedDevice {
     fn append(&self, data: Bytes) -> std::io::Result<oxcache::cache::bucket::ChunkLocation> {
         Ok(ChunkLocation { zone: 1, index: 2 })
     }
 
-    fn append_with_eviction_bypass(&self, data: bytes::Bytes, _: bool) -> Result<ChunkLocation, std::io::Error> {
+    fn append_with_eviction_bypass(
+        &self,
+        data: bytes::Bytes,
+        _: bool,
+    ) -> Result<ChunkLocation, std::io::Error> {
         self.append(data)
     }
 
@@ -130,7 +141,7 @@ impl Device for MockZonedDevice {
         _nvme_config: &NVMeConfig,
     ) -> std::io::Result<()> {
         // no-op
-        return Ok(())
+        return Ok(());
     }
 
     fn evict(
@@ -190,7 +201,12 @@ impl Device for MockZonedDevice {
         todo!()
     }
 
-    fn read_subset(&self, location: ChunkLocation, offset: Byte, size: Byte) -> std::io::Result<(Bytes, Bytes)> {
+    fn read_subset(
+        &self,
+        location: ChunkLocation,
+        offset: Byte,
+        size: Byte,
+    ) -> std::io::Result<(Bytes, Bytes)> {
         todo!()
     }
 }

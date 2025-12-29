@@ -1,12 +1,12 @@
+use crate::cache::bucket::PinGuard;
 use crate::eviction::EvictionPolicyWrapper;
+use crate::metrics::{METRICS, MetricType};
 use crate::{cache, device};
 use bytes::Bytes;
 use flume::{Receiver, Sender, unbounded};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use crate::metrics::{MetricType, METRICS};
-use crate::cache::bucket::PinGuard;
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -17,7 +17,7 @@ pub struct ReadResponse {
 pub struct ReadRequest {
     pub location: cache::bucket::ChunkLocation,
     pub responder: Sender<ReadResponse>,
-    pub _pin_guard: PinGuard, // Keep pin alive during disk I/O
+    pub _pin_guard: PinGuard,           // Keep pin alive during disk I/O
     pub read_offset: nvme::types::Byte, // Offset within the chunk to start reading
     pub read_size: nvme::types::Byte,   // Number of bytes to read from the chunk
 }
@@ -50,8 +50,14 @@ impl Reader {
         while let Ok(msg) = self.receiver.recv() {
             // println!("Reader {} processing: {:?}", self.id, msg);
             let start = std::time::Instant::now();
-            let result = self.device.read_subset(msg.location.clone(), msg.read_offset, msg.read_size);
-            METRICS.update_metric_histogram_latency("device_read_latency_ms", start.elapsed(), MetricType::MsLatency);
+            let result =
+                self.device
+                    .read_subset(msg.location.clone(), msg.read_offset, msg.read_size);
+            METRICS.update_metric_histogram_latency(
+                "device_read_latency_ms",
+                start.elapsed(),
+                MetricType::MsLatency,
+            );
             if result.is_ok() {
                 let mtx = Arc::clone(&self.eviction_policy);
                 let policy = mtx.lock().unwrap();
