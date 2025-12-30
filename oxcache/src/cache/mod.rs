@@ -429,6 +429,18 @@ impl Cache {
             }
         };
 
+        // Populate buffers so concurrent readers can serve from RAM
+        // while we're writing to the new zone location
+        for (key, data) in &payloads {
+            if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| k == key) {
+                let mut st = entry.write().await;
+                if let ChunkState::Waiting { buffer, notify } = &*st {
+                    *buffer.write().await = Some(data.clone());
+                    notify.notify_waiters();  // Wake readers to serve from buffer
+                }
+            }
+        }
+
         // Write data out using reserved space
         let new_locs = writer(payloads).await?;
 
