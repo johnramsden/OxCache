@@ -11,6 +11,7 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{collections::HashMap, io};
 use tokio::sync::{Notify, RwLock};
 
@@ -119,8 +120,14 @@ impl Cache {
                             drop(buffer_data);
                             drop(bucket_state_guard);
 
+                            let wait_start = Instant::now();
                             let notified = notify.notified();
                             notified.await;
+                            let wait_elapsed = wait_start.elapsed();
+                            if wait_elapsed.as_millis() > 10 {
+                                tracing::warn!("Reader waited {}ms for buffer to be populated for chunk {:?}",
+                                    wait_elapsed.as_millis(), key);
+                            }
                             None // Loop back to re-check
                         }
                     }
@@ -177,8 +184,14 @@ impl Cache {
                             drop(buffer_data);
                             drop(bucket_state_guard);
 
+                            let wait_start = Instant::now();
                             let notified = notify.notified();
                             notified.await;
+                            let wait_elapsed = wait_start.elapsed();
+                            if wait_elapsed.as_millis() > 10 {
+                                tracing::warn!("Reader waited {}ms for buffer to be populated for chunk {:?}",
+                                    wait_elapsed.as_millis(), key);
+                            }
                             None // Loop back to re-check
                         }
                     }
@@ -313,8 +326,8 @@ impl Cache {
         writer: W,
     ) -> io::Result<()>
     where
-        R: Fn(Vec<(CacheKey, ChunkLocation)>) -> RFut + Send,
-        RFut: Future<Output = io::Result<Vec<(CacheKey, Bytes)>>> + Send,
+        R: Fn(CacheKey, ChunkLocation) -> RFut + Send,
+        RFut: Future<Output = io::Result<Bytes>> + Send,
         W: FnOnce(Vec<(CacheKey, Bytes)>) -> WFut + Send,
         WFut: Future<Output = io::Result<Vec<(CacheKey, ChunkLocation, Bytes)>>> + Send,
     {
@@ -356,6 +369,7 @@ impl Cache {
             };
 
             // Wait for pins to be released before proceeding
+            let unpin_start = Instant::now();
             let actual_old_loc = loop {
                 let st = entry.write().await;
                 match &*st {
@@ -382,12 +396,17 @@ impl Cache {
                     }
                 }
             };
+            let unpin_elapsed = unpin_start.elapsed();
+            if unpin_elapsed.as_millis() > 10 {
+                tracing::warn!("Waited {}ms for unpin of {:?}", unpin_elapsed.as_millis(), key);
+            }
 
             // Create notify and buffer for this chunk
             let notify = Arc::new(Notify::new());
             let buffer = Arc::new(RwLock::new(None));
 
             // Transition to Waiting state
+            let transition_start = Instant::now();
             {
                 let mut st = entry.write().await;
                 *st = ChunkState::Waiting {
@@ -396,30 +415,28 @@ impl Cache {
                 };
             }
 
-            // Read THIS chunk
-            let read_input = vec![(key.clone(), actual_old_loc.clone())];
-            let chunk_data = match reader(read_input).await {
-                Ok(mut payloads) => {
-                    if payloads.len() != 1 {
-                        // TODO: Implement proper rollback
-                        panic!(
-                            "Reader returned {} chunks, expected 1 for key {:?}",
-                            payloads.len(),
-                            key
-                        );
-                    }
-                    payloads.pop().unwrap().1 // Extract the Bytes
-                }
+            // Read THIS chunk immediately
+            let read_start = Instant::now();
+            let chunk_data = match reader(key.clone(), actual_old_loc.clone()).await {
+                Ok(bytes) => bytes,
                 Err(e) => {
                     // TODO: Implement proper rollback for previously processed chunks
-                    // Current state: some chunks in Waiting with buffers populated,
-                    // this chunk failed to read
                     panic!("Failed to read chunk {:?} during zone cleaning: {}", key, e);
                 }
             };
+            let read_elapsed = read_start.elapsed();
+            if read_elapsed.as_millis() > 10 {
+                tracing::warn!("Reader took {}ms for {:?}", read_elapsed.as_millis(), key);
+            }
 
             // Populate buffer
             *buffer.write().await = Some(chunk_data.clone());
+
+            let total_waiting_window = transition_start.elapsed();
+            if total_waiting_window.as_millis() > 10 {
+                tracing::warn!("Chunk {:?} had Waiting state with None buffer for {}ms",
+                    key, total_waiting_window.as_millis());
+            }
 
             // Notify waiters
             notify.notify_waiters();

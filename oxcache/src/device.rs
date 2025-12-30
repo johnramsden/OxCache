@@ -692,59 +692,23 @@ impl Device for Zoned {
 
                     RUNTIME.block_on(cache_clone.clean_zone_and_update_map(
                         zone.clone(),
-                        // Reads all valid chunks in zone and returns buffer [(Chunk, Bytes)]
-                        // which is the list of chunks that need to be written back
+                        // Reader callback - reads a single chunk
                         {
                             let self_clone = self_clone.clone();
-                            move |items: Vec<(CacheKey, ChunkLocation)>| {
+                            move |key: CacheKey, loc: ChunkLocation| {
                                 let self_clone = self_clone.clone();
                                 async move {
-                                    let mut items = items;
-                                    items.sort_by_key(|(_, loc)| loc.index);
-
-                                    if items.is_empty() {
-                                        return Ok(Vec::new());
-                                    }
-
-                                    // Batch reads to avoid overwhelming the device
-                                    const BATCH_SIZE: usize = 16;
-                                    let mut all_results = Vec::with_capacity(items.len());
-
-                                    for chunk in items.chunks(BATCH_SIZE) {
-                                        let futures: Vec<_> = chunk
-                                            .iter()
-                                            .map(|(key, loc)| {
-                                                let self_clone = self_clone.clone();
-                                                let key = key.clone();
-                                                let loc = loc.clone();
-
-                                                tokio::task::spawn_blocking(move || {
-                                                    tracing::trace!("Reading chunk at {:?}", loc);
-                                                    self_clone
-                                                        .read(loc.clone())
-                                                        .map(|bytes| (key, bytes))
-                                                })
-                                            })
-                                            .collect();
-
-                                        let batch_results: Result<Vec<_>, _> =
-                                            futures::future::join_all(futures)
-                                                .await
-                                                .into_iter()
-                                                .map(|join_result| {
-                                                    join_result.map_err(|e| {
-                                                        std::io::Error::new(
-                                                            std::io::ErrorKind::Other,
-                                                            format!("Task join error: {}", e),
-                                                        )
-                                                    })?
-                                                })
-                                                .collect();
-
-                                        all_results.extend(batch_results?);
-                                    }
-
-                                    Ok(all_results)
+                                    tokio::task::spawn_blocking(move || {
+                                        tracing::trace!("Reading chunk {:?} at {:?}", key, loc);
+                                        self_clone.read(loc)
+                                    })
+                                    .await
+                                    .map_err(|e| {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::Other,
+                                            format!("Task join error: {}", e)
+                                        )
+                                    })?
                                 }
                             }
                         },
