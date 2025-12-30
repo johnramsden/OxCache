@@ -518,7 +518,10 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let start = Arc::clone(&start);
                                 let request_offset = request_offset;
                                 let request_size = request_size;
+
+                                #[cfg(debug_assertions)]
                                 let request_uuid = request_uuid.clone();
+
                                 move |data_source| async move {
                                     match data_source {
                                         DataSource::Ram(buffer_data) => {
@@ -580,7 +583,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                             tracing::debug!("REQ[{}] Waiting for read response", request_id);
                                             let recv_err = rx.recv_async().await;
-                                            let (header, data) = match recv_err {
+                                            let (_header, data) = match recv_err {
                                                 Ok(wr) => {
                                                     tracing::debug!("REQ[{}] Received read response from reader pool", request_id);
                                                     match wr.data {
@@ -599,7 +602,7 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
 
                                             // Validate read response
                                             #[cfg(debug_assertions)]
-                                            validate_read_response(&header, &request_uuid, 0, chunk_size);
+                                            validate_read_response(&_header, &request_uuid, 0, chunk_size);
 
                                             let chunked_resp = data;
 
@@ -642,7 +645,10 @@ async fn handle_connection<T: RemoteBackend + Send + Sync + 'static>(
                                 let start = Arc::clone(&start);
                                 let request_offset = request_offset;
                                 let request_size = request_size;
+
+                                #[cfg(debug_assertions)]
                                 let request_uuid = request_uuid.clone();
+
                                 move |buffer_ref, notify_ref| async move {
                                     tracing::debug!("REQ[{}] CACHE MISS - entering remote fetch path", request_id);
                                     let resp = match remote.get(request_uuid.as_str(), 0, chunk_size).await {

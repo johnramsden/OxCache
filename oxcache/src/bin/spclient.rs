@@ -53,16 +53,16 @@ struct Cli {
 
 #[derive(Debug, Clone)]
 struct TraceEntry {
-    device: String,
+    _device: String,
     lba: u64,
     size: u64,
-    rw: String,
-    timestamp: String,
+    _rw: String,
+    _timestamp: String,
 }
 
 #[derive(Debug, Clone)]
 struct QuantizedRequest {
-    original_lba: u64,
+    _original_lba: u64,
     chunk_key: String,
     offset: u64,
     size: u64,
@@ -118,11 +118,11 @@ fn parse_trace(path: &str) -> Result<Vec<TraceEntry>, Box<dyn std::error::Error>
                     continue;
                 }
                 entries.push(TraceEntry {
-                    device: fields[0].to_string(),
+                    _device: fields[0].to_string(),
                     lba,
                     size,
-                    rw: fields[3].to_string(),
-                    timestamp: fields[4].to_string(),
+                    _rw: fields[3].to_string(),
+                    _timestamp: fields[4].to_string(),
                 });
             }
             _ => {
@@ -185,7 +185,7 @@ fn quantize_request(entry: &TraceEntry, chunk_size: u64) -> Vec<QuantizedRequest
         let chunk_key = format!("chunk_{}", chunk_num);
 
         results.push(QuantizedRequest {
-            original_lba: aligned_lba,
+            _original_lba: aligned_lba,
             chunk_key,
             offset: offset_in_chunk,
             size: request_size,
@@ -571,11 +571,11 @@ mod tests {
     #[test]
     fn test_quantize_single_chunk() {
         let entry = TraceEntry {
-            device: "dev0".to_string(),
+            _device: "dev0".to_string(),
             lba: 0,
             size: 4096,
-            rw: "R".to_string(),
-            timestamp: "0".to_string(),
+            _rw: "R".to_string(),
+            _timestamp: "0".to_string(),
         };
 
         let result = quantize_request(&entry, 65536);
@@ -588,11 +588,11 @@ mod tests {
     #[test]
     fn test_quantize_spanning_chunks() {
         let entry = TraceEntry {
-            device: "dev0".to_string(),
+            _device: "dev0".to_string(),
             lba: 4096,
             size: 20480,
-            rw: "R".to_string(),
-            timestamp: "0".to_string(),
+            _rw: "R".to_string(),
+            _timestamp: "0".to_string(),
         };
 
         let result = quantize_request(&entry, 8192);
@@ -617,11 +617,11 @@ mod tests {
     #[test]
     fn test_quantize_unaligned() {
         let entry = TraceEntry {
-            device: "dev0".to_string(),
+            _device: "dev0".to_string(),
             lba: 100,
             size: 100,
-            rw: "R".to_string(),
-            timestamp: "0".to_string(),
+            _rw: "R".to_string(),
+            _timestamp: "0".to_string(),
         };
 
         let result = quantize_request(&entry, 8192);
@@ -635,11 +635,11 @@ mod tests {
     #[test]
     fn test_quantize_chunk_boundary() {
         let entry = TraceEntry {
-            device: "dev0".to_string(),
+            _device: "dev0".to_string(),
             lba: 8192,
             size: 16384,
-            rw: "R".to_string(),
-            timestamp: "0".to_string(),
+            _rw: "R".to_string(),
+            _timestamp: "0".to_string(),
         };
 
         let result = quantize_request(&entry, 8192);

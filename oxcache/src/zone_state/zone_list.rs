@@ -1,5 +1,8 @@
+#[cfg(debug_assertions)]
 use nvme::info::report_zones_all;
-use nvme::types::{Chunk, ZoneState};
+#[cfg(debug_assertions)]
+use nvme::types::ZoneState;
+use nvme::types::Chunk;
 
 use crate::cache::bucket::ChunkLocation;
 use crate::device;
@@ -599,6 +602,7 @@ impl ZoneList {
     }
 
     /// Makes sure that the zone list is consistent with itself.
+    #[cfg(debug_assertions)]
     fn check_invariants(&self) {
         // free_zones & open are unique and dont share elems
         {
