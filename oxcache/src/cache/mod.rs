@@ -11,7 +11,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::sync::Arc;
-use std::time::Instant;
 use std::{collections::HashMap, io};
 use tokio::sync::{Notify, RwLock};
 
@@ -120,14 +119,8 @@ impl Cache {
                             drop(buffer_data);
                             drop(bucket_state_guard);
 
-                            let wait_start = Instant::now();
                             let notified = notify.notified();
                             notified.await;
-                            let wait_elapsed = wait_start.elapsed();
-                            if wait_elapsed.as_millis() > 10 {
-                                tracing::warn!("Reader waited {}ms for buffer to be populated for chunk {:?}",
-                                    wait_elapsed.as_millis(), key);
-                            }
                             None // Loop back to re-check
                         }
                     }
@@ -184,14 +177,9 @@ impl Cache {
                             drop(buffer_data);
                             drop(bucket_state_guard);
 
-                            let wait_start = Instant::now();
                             let notified = notify.notified();
                             notified.await;
-                            let wait_elapsed = wait_start.elapsed();
-                            if wait_elapsed.as_millis() > 10 {
-                                tracing::warn!("Reader waited {}ms for buffer to be populated for chunk {:?}",
-                                    wait_elapsed.as_millis(), key);
-                            }
+
                             None // Loop back to re-check
                         }
                     }
@@ -369,7 +357,6 @@ impl Cache {
             };
 
             // Wait for pins to be released before proceeding
-            let unpin_start = Instant::now();
             let actual_old_loc = loop {
                 let st = entry.write().await;
                 match &*st {
@@ -396,17 +383,12 @@ impl Cache {
                     }
                 }
             };
-            let unpin_elapsed = unpin_start.elapsed();
-            if unpin_elapsed.as_millis() > 10 {
-                tracing::warn!("Waited {}ms for unpin of {:?}", unpin_elapsed.as_millis(), key);
-            }
 
             // Create notify and buffer for this chunk
             let notify = Arc::new(Notify::new());
             let buffer = Arc::new(RwLock::new(None));
 
             // Transition to Waiting state
-            let transition_start = Instant::now();
             {
                 let mut st = entry.write().await;
                 *st = ChunkState::Waiting {
@@ -416,7 +398,6 @@ impl Cache {
             }
 
             // Read THIS chunk immediately
-            let read_start = Instant::now();
             let chunk_data = match reader(key.clone(), actual_old_loc.clone()).await {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -424,19 +405,9 @@ impl Cache {
                     panic!("Failed to read chunk {:?} during zone cleaning: {}", key, e);
                 }
             };
-            let read_elapsed = read_start.elapsed();
-            if read_elapsed.as_millis() > 10 {
-                tracing::warn!("Reader took {}ms for {:?}", read_elapsed.as_millis(), key);
-            }
 
             // Populate buffer
             *buffer.write().await = Some(chunk_data.clone());
-
-            let total_waiting_window = transition_start.elapsed();
-            if total_waiting_window.as_millis() > 10 {
-                tracing::warn!("Chunk {:?} had Waiting state with None buffer for {}ms",
-                    key, total_waiting_window.as_millis());
-            }
 
             // Notify waiters
             notify.notify_waiters();
