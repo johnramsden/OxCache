@@ -1,7 +1,9 @@
 use crate::cache::bucket::Chunk as CacheKey;
 use crate::cache::bucket::{Chunk, ChunkLocation, ChunkState, PinnedChunkLocation};
-use crate::server::validate_read_response;
 use bytes::Bytes;
+
+#[cfg(debug_assertions)]
+use crate::server::validate_read_response;
 use ndarray::{Array2, ArrayBase, s};
 use nvme::types::{self, Zone};
 use std::collections::hash_map::DefaultHasher;
@@ -311,142 +313,141 @@ impl Cache {
         writer: W,
     ) -> io::Result<()>
     where
-        R: FnOnce(Vec<(CacheKey, ChunkLocation)>) -> RFut + Send,
+        R: Fn(Vec<(CacheKey, ChunkLocation)>) -> RFut + Send,
         RFut: Future<Output = io::Result<Vec<(CacheKey, Bytes)>>> + Send,
         W: FnOnce(Vec<(CacheKey, Bytes)>) -> WFut + Send,
         WFut: Future<Output = io::Result<Vec<(CacheKey, ChunkLocation, Bytes)>>> + Send,
     {
-        // Reset the existing entries
-        // Collect items and corresponding notifiers
-        let (items, notifies) = {
-            let mut out = Vec::new();
-            let mut notifies = Vec::new();
-
+        // Collect all chunks that need cleaning (without transitioning states)
+        // We don't need to worry about state transition yet because nothing is going to change since the zone is full
+        let keys_to_clean = {
             // Get zone_to_entry mapping to find all chunks in this zone
-            let mut zone_mapping = self.zone_to_entry.write().await;
+            let zone_mapping = self.zone_to_entry.read().await;
             let zone_slice = s![zone as usize, ..];
 
-            // Collect all keys in this zone and group by shard
-            let mut keys_by_shard: Vec<Vec<(Chunk, ChunkLocation)>> =
-                vec![Vec::new(); self.num_shards];
+            // Collect all keys in this zone
+            let mut keys = Vec::new();
             for (chunk_idx, opt_key) in zone_mapping.slice(zone_slice).iter().enumerate() {
                 if let Some(key) = opt_key.clone() {
                     let old_loc = ChunkLocation::new(zone, chunk_idx as nvme::types::Chunk);
-                    let shard_idx = self.get_shard_index(&key);
-                    keys_by_shard[shard_idx].push((key, old_loc));
-                }
-            }
-
-            // Process each shard
-            for (shard_idx, keys) in keys_by_shard.iter().enumerate() {
-                if keys.is_empty() {
-                    continue;
-                }
-
-                for (key, _old_loc) in keys {
-                    let shard_guard = self.shards[shard_idx].read().await;
-                    let entry = shard_guard
-                        .buckets
-                        .get(&key)
-                        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
-                        .clone();
-                    drop(shard_guard);
-
-                    // Wait for pins to be released before proceeding
-                    loop {
-                        let mut st = entry.write().await;
-                        let actual_old_loc = match &*st {
-                            ChunkState::Ready(pinned_loc) => {
-                                // Wait for this location to be unpinned
-                                if !pinned_loc.can_evict() {
-                                    let pinned_loc_clone = Arc::clone(pinned_loc);
-                                    drop(st); // Release lock before waiting
-
-                                    pinned_loc_clone.wait_for_unpin().await;
-                                    continue; // Retry after being notified
-                                }
-                                pinned_loc.location.clone()
-                            }
-                            ChunkState::Waiting { .. } => {
-                                // TODO: Shouldnt occur since zone was full
-                                tracing::debug!(
-                                    "Encountered invalid waiting state during zone cleaning"
-                                );
-                                return Err(io::Error::new(
-                                    ErrorKind::Other,
-                                    "Encountered invalid waiting state during zone cleaning",
-                                ));
-                            }
-                        };
-
-                        let notify = Arc::new(Notify::new());
-                        let buffer = Arc::new(RwLock::new(None));
-                        // Update state to waiting
-                        *st = ChunkState::Waiting {
-                            notify: Arc::clone(&notify),
-                            buffer,
-                        };
-                        drop(st);
-
-                        out.push((key.clone(), actual_old_loc, entry));
-                        notifies.push(notify);
-                        break; // Successfully processed this entry
-                    }
-                }
-            }
-
-            // Clear old reverse slots
-            for (key, old_loc, _) in &out {
-                if zone_mapping[old_loc.as_index()].as_ref() == Some(key) {
-                    zone_mapping[old_loc.as_index()] = None;
+                    keys.push((key, old_loc));
                 }
             }
 
             drop(zone_mapping);
-            (out, notifies)
+            keys
         };
 
-        // Read the valid chunks from the zone
-        // Buffer all chunks
-        let read_input: Vec<_> = items
-            .iter()
-            .map(|(k, l, _)| (k.clone(), l.clone()))
-            .collect();
+        // Process each chunk individually, reading into buffer
+        let mut all_payloads = Vec::new();
+        let mut all_entries = Vec::new();
+        let mut all_notifies = Vec::new();
 
-        let payloads = match reader(read_input).await {
-            Ok(p) => p,
-            Err(e) => {
-                // TODO: Should we bother? Probably still fatal
-                // rollback
-                for (_, old_loc, entry) in &items {
-                    let mut st = entry.write().await;
-                    *st = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(old_loc.clone())));
-                }
-                for n in notifies {
-                    n.notify_waiters();
-                }
-                return Err(e);
-            }
-        };
+        for (key, _old_loc) in &keys_to_clean {
+            // Get entry from appropriate shard
+            let shard_idx = self.get_shard_index(key);
+            let entry = {
+                let shard_guard = self.shards[shard_idx].read().await;
+                shard_guard
+                    .buckets
+                    .get(key)
+                    .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Missing entry"))?
+                    .clone()
+            };
 
-        // Populate buffers so concurrent readers can serve from RAM
-        // while we're writing to the new zone location
-        for (key, data) in &payloads {
-            if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| k == key) {
+            // Wait for pins to be released before proceeding
+            let actual_old_loc = loop {
+                let st = entry.write().await;
+                match &*st {
+                    ChunkState::Ready(pinned_loc) => {
+                        // Wait for this location to be unpinned
+                        if !pinned_loc.can_evict() {
+                            let pinned_loc_clone = Arc::clone(pinned_loc);
+                            drop(st); // Release lock before waiting
+
+                            pinned_loc_clone.wait_for_unpin().await;
+                            continue; // Retry after being notified
+                        }
+                        break pinned_loc.location.clone();
+                    }
+                    ChunkState::Waiting { .. } => {
+                        // TODO: Shouldnt occur since zone was full
+                        tracing::debug!(
+                            "Encountered invalid waiting state during zone cleaning"
+                        );
+                        return Err(io::Error::new(
+                            ErrorKind::Other,
+                            "Encountered invalid waiting state during zone cleaning",
+                        ));
+                    }
+                }
+            };
+
+            // Create notify and buffer for this chunk
+            let notify = Arc::new(Notify::new());
+            let buffer = Arc::new(RwLock::new(None));
+
+            // Transition to Waiting state
+            {
                 let mut st = entry.write().await;
-                if let ChunkState::Waiting { buffer, notify } = &*st {
-                    *buffer.write().await = Some(data.clone());
-                    notify.notify_waiters();  // Wake readers to serve from buffer
+                *st = ChunkState::Waiting {
+                    notify: Arc::clone(&notify),
+                    buffer: Arc::clone(&buffer),
+                };
+            }
+
+            // Read THIS chunk
+            let read_input = vec![(key.clone(), actual_old_loc.clone())];
+            let chunk_data = match reader(read_input).await {
+                Ok(mut payloads) => {
+                    if payloads.len() != 1 {
+                        // TODO: Implement proper rollback
+                        panic!(
+                            "Reader returned {} chunks, expected 1 for key {:?}",
+                            payloads.len(),
+                            key
+                        );
+                    }
+                    payloads.pop().unwrap().1 // Extract the Bytes
+                }
+                Err(e) => {
+                    // TODO: Implement proper rollback for previously processed chunks
+                    // Current state: some chunks in Waiting with buffers populated,
+                    // this chunk failed to read
+                    panic!("Failed to read chunk {:?} during zone cleaning: {}", key, e);
+                }
+            };
+
+            // Populate buffer
+            *buffer.write().await = Some(chunk_data.clone());
+
+            // Notify waiters
+            notify.notify_waiters();
+
+            // Store for bulk write
+            all_payloads.push((key.clone(), chunk_data));
+            all_entries.push(entry);
+            all_notifies.push(notify);
+        }
+
+        // Clear old reverse mappings now that all chunks are in Waiting state
+        // Safe because we will return everything from buffer
+        {
+            let mut zone_mapping = self.zone_to_entry.write().await;
+            for (key, old_loc) in &keys_to_clean {
+                if zone_mapping[old_loc.as_index()].as_ref() == Some(key) {
+                    zone_mapping[old_loc.as_index()] = None;
                 }
             }
         }
 
-        // Write data out using reserved space
-        let new_locs = writer(payloads).await?;
+        // Write data in bulk
+        let new_locs = writer(all_payloads).await?;
 
         // Update states & reverse map
-        for (key, new_loc, b) in &new_locs {
-            if let Some((_, _, entry)) = items.iter().find(|(k, _, _)| *k == *key) {
+        for (i, (key, new_loc, _b)) in new_locs.iter().enumerate() {
+            if i < all_entries.len() {
+                let entry = &all_entries[i];
                 let mut st = entry.write().await;
                 *st = ChunkState::Ready(Arc::new(PinnedChunkLocation::new(new_loc.clone())));
             } else {
@@ -457,7 +458,7 @@ impl Cache {
             }
 
             #[cfg(debug_assertions)]
-            validate_read_response(&b, &key.uuid, key.offset, key.size);
+            validate_read_response(&_b, &key.uuid, key.offset, key.size);
         }
 
         // Batch update reverse map
@@ -468,7 +469,7 @@ impl Cache {
             }
         }
 
-        for n in notifies {
+        for n in all_notifies {
             n.notify_waiters();
         }
 

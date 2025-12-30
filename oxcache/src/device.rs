@@ -696,7 +696,8 @@ impl Device for Zoned {
                         // which is the list of chunks that need to be written back
                         {
                             let self_clone = self_clone.clone();
-                            |items: Vec<(CacheKey, ChunkLocation)>| {
+                            move |items: Vec<(CacheKey, ChunkLocation)>| {
+                                let self_clone = self_clone.clone();
                                 async move {
                                     let mut items = items;
                                     items.sort_by_key(|(_, loc)| loc.index);
