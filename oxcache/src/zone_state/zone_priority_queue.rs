@@ -48,14 +48,27 @@ impl ZonePriorityQueue {
         zones
     }
 
-    pub fn modify_priority(&mut self, ind: ZoneIndex, priority_increase: ZonePriority) {
-        // Only account for it if the entry exists
-        if self
-            .invalid_queue
-            .change_priority_by(&ind, |p| *p += priority_increase)
-        {
-            self.invalid_count = self.invalid_count.saturating_add(priority_increase);
+    pub fn modify_priority(&mut self, ind: ZoneIndex, priority_change: i64) {
+        // Handle both increments and decrements
+        if priority_change > 0 {
+            let increase = priority_change as ZonePriority;
+            if self
+                .invalid_queue
+                .change_priority_by(&ind, |p| *p += increase)
+            {
+                self.invalid_count = self.invalid_count.saturating_add(increase);
+            }
+        } else if priority_change < 0 {
+            let decrease = (-priority_change) as ZonePriority;
+            if self
+                .invalid_queue
+                .change_priority_by(&ind, |p| *p = p.saturating_sub(decrease))
+            {
+                self.invalid_count = self.invalid_count.saturating_sub(decrease);
+            }
         }
+        // priority_change == 0: no-op
+
         #[cfg(debug_assertions)]
         self.assert_consistent();
     }
