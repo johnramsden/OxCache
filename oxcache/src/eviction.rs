@@ -232,7 +232,7 @@ pub struct ChunkEvictionPolicy {
     nr_chunks_per_zone: Chunk,
     lru: LruCache<ChunkLocation, ()>,
     pq: ZonePriorityQueue,
-    validity: Array2<AtomicBool>,
+    validity: Array2<bool>,
     #[cfg(feature = "eviction-metrics")]
     pub metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
 }
@@ -255,7 +255,7 @@ impl ChunkEvictionPolicy {
         // Initialize all chunks as invalid (false) - become valid on first write
         let validity = Array2::from_shape_fn(
             (nr_zones as usize, nr_chunks_per_zone as usize),
-            |_| AtomicBool::new(false)
+            |_| false
         );
 
         Self {
@@ -276,23 +276,20 @@ impl ChunkEvictionPolicy {
         // Bounds check - zones/chunks outside our range
         assert!(!(loc.zone >= self.nr_zones || loc.index >= self.nr_chunks_per_zone));
         self.validity[[loc.zone as usize, loc.index as usize]]
-            .load(Ordering::Relaxed)
     }
 
     /// Mark chunk as valid (actively tracked)
-    fn mark_valid(&self, loc: &ChunkLocation) {
+    fn mark_valid(&mut self, loc: &ChunkLocation) {
         // Bounds check - zones/chunks outside our range
         assert!(!(loc.zone >= self.nr_zones || loc.index >= self.nr_chunks_per_zone));
-        self.validity[[loc.zone as usize, loc.index as usize]]
-            .store(true, Ordering::Relaxed);
+        self.validity[[loc.zone as usize, loc.index as usize]] = true;
     }
 
     /// Mark chunk as invalid (evicted but not yet cleaned)
-    fn mark_invalid(&self, loc: &ChunkLocation) {
+    fn mark_invalid(&mut self, loc: &ChunkLocation) {
         // Bounds check - ignore out of range chunks
         assert!(!(loc.zone >= self.nr_zones || loc.index >= self.nr_chunks_per_zone));
-        self.validity[[loc.zone as usize, loc.index as usize]]
-            .store(false, Ordering::Relaxed);
+        self.validity[[loc.zone as usize, loc.index as usize]] = false
     }
 }
 
