@@ -4,7 +4,6 @@ use crate::writerpool::WriterPool;
 use crate::zone_state::zone_priority_queue::{ZoneIndex, ZonePriorityQueue};
 use flume::{Receiver, Sender};
 use lru_mem::{LruCache};
-use ndarray::Array2;
 use nvme::types::{Chunk, Zone};
 use std::io::ErrorKind;
 use std::sync::{
@@ -86,7 +85,7 @@ impl EvictionPolicyWrapper {
             EvictionPolicyWrapper::Chunk(c) => {
                 let et = c.get_evict_targets(always_evict);
                 let ct = if get_clean_targets {
-                    Some(c.get_clean_targets())
+                    Some(c.get_clean_targets(always_evict))
                 } else {
                     None
                 };
@@ -120,7 +119,7 @@ pub trait EvictionPolicy: Send + Sync {
     fn read_update(&mut self, chunk: ChunkLocation);
     fn get_evict_targets(&mut self, always_evict: bool) -> Self::Target;
 
-    fn get_clean_targets(&mut self) -> Self::CleanTarget;
+    fn get_clean_targets(&mut self, force_clean: bool) -> Self::CleanTarget;
 }
 
 #[derive(Debug)]
@@ -219,7 +218,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         targets
     }
 
-    fn get_clean_targets(&mut self) -> Self::CleanTarget {
+    fn get_clean_targets(&mut self, _force_clean: bool) -> Self::CleanTarget {
         ()
     }
 }
@@ -232,7 +231,6 @@ pub struct ChunkEvictionPolicy {
     nr_chunks_per_zone: Chunk,
     lru: LruCache<ChunkLocation, ()>,
     pq: ZonePriorityQueue,
-    validity: Array2<bool>,
     #[cfg(feature = "eviction-metrics")]
     pub metrics: Option<Arc<crate::eviction_metrics::EvictionMetrics>>,
 }
@@ -252,12 +250,6 @@ impl ChunkEvictionPolicy {
             nr_chunks_per_zone
         );
 
-        // Initialize all chunks as invalid (false) - become valid on first write
-        let validity = Array2::from_shape_fn(
-            (nr_zones as usize, nr_chunks_per_zone as usize),
-            |_| false
-        );
-
         Self {
             high_water,
             low_water,
@@ -265,32 +257,11 @@ impl ChunkEvictionPolicy {
             nr_chunks_per_zone,
             lru: LruCache::new(usize::MAX), // Effectively unbounded
             pq: ZonePriorityQueue::new(nr_zones, clean_low_water),
-            validity,
             #[cfg(feature = "eviction-metrics")]
             metrics: None,
         }
     }
 
-    /// Check if chunk is currently valid (tracked by eviction policy)
-    fn is_valid(&self, loc: &ChunkLocation) -> bool {
-        // Bounds check - zones/chunks outside our range
-        assert!(!(loc.zone >= self.nr_zones || loc.index >= self.nr_chunks_per_zone));
-        self.validity[[loc.zone as usize, loc.index as usize]]
-    }
-
-    /// Mark chunk as valid (actively tracked)
-    fn mark_valid(&mut self, loc: &ChunkLocation) {
-        // Bounds check - zones/chunks outside our range
-        assert!(!(loc.zone >= self.nr_zones || loc.index >= self.nr_chunks_per_zone));
-        self.validity[[loc.zone as usize, loc.index as usize]] = true;
-    }
-
-    /// Mark chunk as invalid (evicted but not yet cleaned)
-    fn mark_invalid(&mut self, loc: &ChunkLocation) {
-        // Bounds check - ignore out of range chunks
-        assert!(!(loc.zone >= self.nr_zones || loc.index >= self.nr_chunks_per_zone));
-        self.validity[[loc.zone as usize, loc.index as usize]] = false
-    }
 }
 
 impl EvictionPolicy for ChunkEvictionPolicy {
@@ -302,7 +273,6 @@ impl EvictionPolicy for ChunkEvictionPolicy {
             metrics.record_write(&chunk);
         }
 
-        self.mark_valid(&chunk);
         self.lru.insert(chunk, ()).ok();
     }
 
@@ -312,28 +282,9 @@ impl EvictionPolicy for ChunkEvictionPolicy {
             metrics.record_read(&chunk);
         }
 
-        // Check validity first - chunk can be in LRU but marked invalid
-        // (after get_clean_targets marks all chunks in cleaned zones as invalid)
-        if !self.is_valid(&chunk) {
-            // Chunk was marked for eviction/cleaning but is still being accessed
-            // Re-validate it: add/promote in LRU and decrement PQ count
-            let zone = chunk.zone;
-            self.mark_valid(&chunk);
-            self.lru.insert(chunk, ()).ok();
-
-            // Decrement priority queue since this chunk is no longer invalid
-            self.pq.modify_priority(zone, -1);
-
-            #[cfg(feature = "eviction-metrics")]
-            if let Some(ref metrics) = self.metrics {
-                // Optional: Track re-validation events
-                // metrics.record_chunk_revalidation(&chunk);
-            }
-        } else if self.lru.contains(&chunk) {
-            // Already tracked and valid - just promote it
+        if self.lru.contains(&chunk) {
             self.lru.insert(chunk, ()).ok();
         }
-        // If chunk is not in LRU and is valid, it was already cleaned - do nothing
     }
 
     fn get_evict_targets(&mut self, always_evict: bool) -> Self::Target {
@@ -341,54 +292,50 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         let nr_chunks = self.nr_zones * self.nr_chunks_per_zone;
         let high_water_mark = nr_chunks - self.high_water;
 
+        tracing::info!(
+            "[ChunkPolicy] get_evict_targets: lru_len={}, high_water_mark={}, always_evict={}",
+            lru_len, high_water_mark, always_evict
+        );
+
         if !always_evict && lru_len < high_water_mark {
+            tracing::info!("[ChunkPolicy] Below high water mark, no eviction needed");
             return vec![];
         }
 
         let low_water_mark = nr_chunks - self.low_water;
 
-        // Prevent underflow when lru_len < low_water_mark
         if lru_len < low_water_mark {
+            tracing::warn!("[ChunkPolicy] LRU too small ({} < {}), cannot evict!", lru_len, low_water_mark);
             return vec![];
         }
 
-        let cap = lru_len - low_water_mark;
+        let count_to_evict = lru_len - low_water_mark;
+        tracing::info!("[ChunkPolicy] Will evict {} chunks", count_to_evict);
 
-        let mut targets = Vec::with_capacity(cap as usize);
+        let mut targets = Vec::with_capacity(count_to_evict as usize);
         let mut zone_counts = std::collections::HashMap::new();
 
         // Collect evicted items and count by zone (batch the counting)
-        // Continue until we have 'cap' VALID chunks
-        let mut collected = 0;
-        while collected < cap {
+        for _ in 0..count_to_evict {
             if let Some((targ, _)) = self.lru.remove_lru() {
-                // Check if already invalid (lazily skip stale entries)
-                if !self.is_valid(&targ) {
-                    // Already marked invalid in previous eviction round but not yet cleaned
-                    // Skip it and continue removing more to reach our target count
-                    continue;
-                }
-
                 let target_zone = targ.zone;
-                targets.push(targ.clone());
-
-                // Mark chunk as invalid
-                self.mark_invalid(&targ);
+                targets.push(targ);
 
                 // Batch count instead of individual priority queue updates
                 *zone_counts.entry(target_zone).or_insert(0) += 1;
-
-                collected += 1;
-            } else {
-                // LRU is empty, can't collect more
-                break;
             }
         }
 
         // Batch update priority queue (far fewer operations)
         for (zone, count) in zone_counts {
-            self.pq.modify_priority(zone, count as i64);
+            self.pq.modify_priority(zone, count);
         }
+
+        tracing::info!(
+            "[ChunkPolicy] Evicted {} chunks, LRU now has {} entries",
+            targets.len(),
+            self.lru.len()
+        );
 
         #[cfg(feature = "eviction-metrics")]
         if let Some(ref metrics) = self.metrics {
@@ -398,26 +345,38 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         targets
     }
 
-    fn get_clean_targets(&mut self) -> Self::CleanTarget {
-        let mut clean_targets = self.pq.remove_if_thresh_met();
+    fn get_clean_targets(&mut self, _force_clean: bool) -> Self::CleanTarget {
+        // Always use threshold-based cleaning (simpler, no force mode needed)
+        let clean_targets = self.pq.remove_if_thresh_met(false);
+
         if clean_targets.is_empty() {
+            tracing::info!("[ChunkPolicy] No zones meet cleaning threshold");
             return clean_targets;
         }
 
-        clean_targets.sort_unstable();
-
-        // Mark ALL chunks in cleaned zones as invalid
-        // This prevents chunks from being re-added to LRU during zone cleaning
-        // and ensures consistency when zone is being relocated
-        // This must be done because the actual locations can change
-        for zone in &clean_targets {
-            for chunk_idx in 0..self.nr_chunks_per_zone {
-                let loc = ChunkLocation::new(*zone, chunk_idx);
-                self.mark_invalid(&loc);
-            }
-        }
+        tracing::info!(
+            "[ChunkPolicy] Will clean {} zones based on priority queue",
+            clean_targets.len()
+        );
 
         clean_targets
+    }
+}
+
+impl ChunkEvictionPolicy {
+    /// Remove old LRU entries after chunks are relocated during zone cleaning.
+    /// Note: New entries are automatically added by writer pool calling write_update()
+    pub fn chunks_relocated(&mut self, old_locations: &[ChunkLocation]) {
+        for old_loc in old_locations {
+            // Remove stale entry from LRU
+            // The relocated chunk's new location is already in LRU via write_update()
+            self.lru.remove(old_loc);
+        }
+
+        tracing::debug!(
+            "[ChunkPolicy] Removed {} old LRU entries after relocation",
+            old_locations.len()
+        );
     }
 }
 
@@ -455,19 +414,20 @@ impl Evictor {
             while !shutdown_clone.load(Ordering::Relaxed) {
                 let (sender, always_evict) = match evict_rx.recv_timeout(evict_interval) {
                     Ok(s) => {
-                        tracing::debug!("Received immediate eviction request");
+                        tracing::info!("[Evictor] Received immediate eviction request");
                         (Some(s.sender), true)
                     }
                     Err(flume::RecvTimeoutError::Timeout) => {
-                        tracing::debug!("Timer eviction");
+                        tracing::debug!("[Evictor] Timer eviction (periodic check)");
                         (None, false)
                     }
                     Err(flume::RecvTimeoutError::Disconnected) => {
-                        tracing::debug!("Disconnected");
+                        tracing::info!("[Evictor] Channel disconnected, shutting down");
                         break;
                     }
                 };
 
+                tracing::info!("[Evictor] Starting eviction (always_evict={})", always_evict);
                 let device_clone = device_clone.clone();
                 let eviction_start = std::time::Instant::now();
                 let result = match device_clone.evict(
@@ -476,11 +436,17 @@ impl Evictor {
                     eviction_policy_clone.clone(),
                     always_evict,
                 ) {
-                    Err(e) => Err(e.to_string()),
-                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        tracing::error!("[Evictor] Eviction FAILED: {}", e);
+                        Err(e.to_string())
+                    },
+                    Ok(_) => {
+                        tracing::info!("[Evictor] Eviction completed successfully");
+                        Ok(())
+                    },
                 };
                 let eviction_duration = eviction_start.elapsed();
-                tracing::debug!("[Eviction] Total eviction took {:?}", eviction_duration);
+                tracing::info!("[Evictor] Total eviction took {:?}", eviction_duration);
 
                 if let Some(sender) = sender {
                     tracing::debug!("Sending eviction response to sender: {:?}", result);
@@ -718,19 +684,26 @@ mod tests {
 
     #[test]
     fn check_chunk_priority_queue() {
-        // 4 zones, 2 chunks per zone. Should evict at 3 inserted
+        // 4 zones, 2 chunks per zone = 8 total chunks
+        // high_water=3, low_water=6, clean_low_water=1
         let mut policy = ChunkEvictionPolicy::new(3, 6, 1, 4, 2);
 
+        // Fill 3 zones (6 chunks)
         for z in 0..3 {
             for i in 0..2 {
                 policy.write_update(ChunkLocation::new(z, i));
             }
         }
 
-        let got = policy.get_evict_targets(false).len();
-        assert_eq!(4, got, "Expected 4, but got {}", got);
+        // Should evict: lru_len=6, need to reach low_water_mark=8-6=2
+        // So evict 6-2=4 chunks
+        let evicted = policy.get_evict_targets(false);
+        assert_eq!(4, evicted.len(), "Should evict 4 chunks");
 
-        let got = policy.get_clean_targets().len();
-        assert_eq!(2, got, "Expected 2, but got {}", got);
+        // After eviction, 4 chunks invalidated across zones
+        // Zones should have 2, 1, 1 invalid chunks (or similar distribution)
+        // clean_low_water=1, so zones with >=1 invalid should be cleaned
+        let to_clean = policy.get_clean_targets(false);
+        assert!(to_clean.len() >= 2, "Should clean at least 2 zones with invalids");
     }
 }

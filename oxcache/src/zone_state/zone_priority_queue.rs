@@ -36,15 +36,58 @@ impl ZonePriorityQueue {
     }
 
     // If above high watermark, clean until strictly below low watermark
-    pub fn remove_if_thresh_met(&mut self) -> Vec<ZoneIndex> {
+    // If force_all=true, clean ALL zones with invalid chunks (desperate/always_evict mode)
+    pub fn remove_if_thresh_met(&mut self, force_all: bool) -> Vec<ZoneIndex> {
         let mut zones = Vec::new();
-        tracing::trace!(
-            "[evict:Chunk] Cleaning zones, invalid={}",
-            self.invalid_count
+
+        // Count how many zones have invalid chunks
+        let zones_with_invalids = self.invalid_queue.iter().filter(|(_, p)| **p > 0).count();
+
+        tracing::info!(
+            "[PriorityQueue] remove_if_thresh_met called: invalid_count={}, low_water_thresh={}, force_all={}, zones_with_invalids={}, will_clean={}",
+            self.invalid_count,
+            self.low_water_thresh,
+            force_all,
+            zones_with_invalids,
+            force_all || self.invalid_count >= self.low_water_thresh
         );
-        while self.invalid_count >= self.low_water_thresh {
-            zones.push(self.pop_reset());
+
+        if force_all && zones_with_invalids > 0 {
+            // Desperate mode: clean ALL zones with invalid chunks
+            tracing::warn!(
+                "[PriorityQueue] ⚠️  FORCE CLEANING all {} zones with invalid chunks (always_evict=true)!",
+                zones_with_invalids
+            );
+            while let Some((zone, prio)) = self.invalid_queue.peek() {
+                if *prio == 0 {
+                    break; // No more zones with invalid chunks
+                }
+                tracing::info!(
+                    "[PriorityQueue] Force cleaning zone {} with {} invalid chunks",
+                    zone, prio
+                );
+                zones.push(self.pop_reset());
+            }
+        } else {
+            // Normal mode: clean until below threshold
+            while self.invalid_count >= self.low_water_thresh {
+                let (zone, prio) = self.invalid_queue.peek().unwrap();
+                tracing::info!(
+                    "[PriorityQueue] Cleaning zone {} with {} invalid chunks (invalid_count={} >= thresh={})",
+                    zone, prio, self.invalid_count, self.low_water_thresh
+                );
+                zones.push(self.pop_reset());
+            }
         }
+
+        let zones_with_invalids_after = self.invalid_queue.iter().filter(|(_, p)| **p > 0).count();
+        tracing::info!(
+            "[PriorityQueue] After cleaning: returning {} zones, invalid_count={}, {} zones still have invalid chunks",
+            zones.len(),
+            self.invalid_count,
+            zones_with_invalids_after
+        );
+
         zones
     }
 
