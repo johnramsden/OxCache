@@ -85,7 +85,7 @@ impl EvictionPolicyWrapper {
             EvictionPolicyWrapper::Chunk(c) => {
                 let et = c.get_evict_targets(always_evict);
                 let ct = if get_clean_targets {
-                    Some(c.get_clean_targets(always_evict))
+                    Some(c.get_clean_targets())
                 } else {
                     None
                 };
@@ -119,7 +119,7 @@ pub trait EvictionPolicy: Send + Sync {
     fn read_update(&mut self, chunk: ChunkLocation);
     fn get_evict_targets(&mut self, always_evict: bool) -> Self::Target;
 
-    fn get_clean_targets(&mut self, force_clean: bool) -> Self::CleanTarget;
+    fn get_clean_targets(&mut self) -> Self::CleanTarget;
 }
 
 #[derive(Debug)]
@@ -218,7 +218,7 @@ impl EvictionPolicy for PromotionalEvictionPolicy {
         targets
     }
 
-    fn get_clean_targets(&mut self, _force_clean: bool) -> Self::CleanTarget {
+    fn get_clean_targets(&mut self) -> Self::CleanTarget {
         ()
     }
 }
@@ -337,7 +337,7 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         targets
     }
 
-    fn get_clean_targets(&mut self, _force_clean: bool) -> Self::CleanTarget {
+    fn get_clean_targets(&mut self) -> Self::CleanTarget {
         let clean_targets = self.pq.remove_if_thresh_met();
 
         if clean_targets.is_empty() {
@@ -678,7 +678,7 @@ mod tests {
         // After eviction, 4 chunks invalidated across zones
         // Zones should have 2, 1, 1 invalid chunks (or similar distribution)
         // clean_low_water=1, so zones with >=1 invalid should be cleaned
-        let to_clean = policy.get_clean_targets(false);
+        let to_clean = policy.get_clean_targets();
         assert!(to_clean.len() >= 2, "Should clean at least 2 zones with invalids");
     }
 }
