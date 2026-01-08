@@ -216,10 +216,6 @@ fn check_first_evict_bench() {
 }
 
 fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> {
-    tracing::info!(
-        "[trigger_eviction] Thread {:?} triggering eviction and BLOCKING for response",
-        std::thread::current().id()
-    );
     let (resp_tx, resp_rx) = flume::bounded(1);
     if let Err(e) = eviction_channel.send(EvictorMessage { sender: resp_tx }) {
         tracing::error!("[append] Failed to send eviction message: {}", e);
@@ -229,18 +225,9 @@ fn trigger_eviction(eviction_channel: Sender<EvictorMessage>) -> io::Result<()> 
         ));
     };
 
-    tracing::info!(
-        "[trigger_eviction] Thread {:?} WAITING for eviction response...",
-        std::thread::current().id()
-    );
     match resp_rx.recv() {
         Ok(result) => match result {
-            Ok(_) => {
-                tracing::info!(
-                    "[trigger_eviction] Thread {:?} eviction completed successfully, UNBLOCKING",
-                    std::thread::current().id()
-                );
-            }
+            Ok(_) => { }
             Err(e) => {
                 tracing::error!(
                     "[trigger_eviction] Thread {:?} eviction FAILED: {}",
@@ -292,21 +279,13 @@ impl Zoned {
             },
             Err(error) => match error {
                 ZoneObtainFailure::EvictNow => {
-                    tracing::warn!("[get_free_zone] Thread {:?} got EvictNow (is_eviction={})",
-                        std::thread::current().id(), is_eviction);
                     Err(io::Error::new(ErrorKind::StorageFull, "Cache is full"))
                 }
                 ZoneObtainFailure::Wait => {
-                    tracing::info!("[get_free_zone] Thread {:?} entering condvar wait (is_eviction={}, free={}, open={})",
-                        std::thread::current().id(), is_eviction, zone_list.free_zones.len(), zone_list.open_zones.len());
                     loop {
                         zone_list = wait_notify.wait(zone_list).unwrap();
-                        tracing::info!("[get_free_zone] Thread {:?} woke up from condvar (is_eviction={}, free={}, open={})",
-                            std::thread::current().id(), is_eviction, zone_list.free_zones.len(), zone_list.open_zones.len());
                         match zone_list.remove_with_eviction_bypass(is_eviction) {
                             Ok(idx) => {
-                                tracing::info!("[get_free_zone] Thread {:?} got zone {} after wait",
-                                    std::thread::current().id(), idx);
                                 return Ok(idx);
                             },
                             Err(err) => match err {
@@ -316,8 +295,6 @@ impl Zoned {
                                     return Err(io::Error::new(ErrorKind::Other, "Cache is full"));
                                 }
                                 ZoneObtainFailure::Wait => {
-                                    tracing::info!("[get_free_zone] Thread {:?} needs to wait again",
-                                        std::thread::current().id());
                                     continue;
                                 },
                             },
@@ -342,12 +319,7 @@ impl Zoned {
         // come and try to open a new zone if needed.
         // Skip notification during eviction batch writes to avoid race condition
         if !suppress_notify {
-            tracing::info!("[complete_write] Zone {} finished, notifying ALL waiters (free={}, open={})",
-                zone_idx, zone_list.free_zones.len(), zone_list.open_zones.len());
             notify.notify_all();
-        } else {
-            tracing::info!("[complete_write] Zone {} finished during eviction, SUPPRESSING notify (free={}, open={})",
-                zone_idx, zone_list.free_zones.len(), zone_list.open_zones.len());
         }
 
         Ok(())
@@ -735,7 +707,6 @@ impl Device for Zoned {
                         // Remove from open_zones so no new chunks can be allocated from this zone
                         zones.open_zones.retain(|z| z != zone);
                     }
-                    tracing::info!("[Evict:Chunk] Locked {} zones for cleaning", clean_locations.len());
                 }
 
                 // Cleaning
@@ -791,12 +762,6 @@ impl Device for Zoned {
                             // Writer callback
                             |payloads: Vec<(CacheKey, bytes::Bytes)>| {
                                 async move {
-                                    tracing::info!(
-                                        "[evict:Chunk] Starting zone {} cleaning, {} valid chunks to relocate",
-                                        zone,
-                                        payloads.len()
-                                    );
-
                                     // Remove old LRU entries FIRST, before reset_zone makes the zone available again
                                     // This prevents relocated chunks from being accidentaly added then removed
                                     {
@@ -813,11 +778,7 @@ impl Device for Zoned {
                                             .unwrap();
                                         let (zone_mtx, cv) = &*self_clone.zones;
                                         let mut zones = zone_mtx.lock().unwrap();
-                                        tracing::info!("[evict:Chunk] Resetting zone {} (free={}, open={} before reset)",
-                                            zone, zones.free_zones.len(), zones.open_zones.len());
                                         zones.reset_zone(*zone, &*self_clone)?;
-                                        tracing::info!("[evict:Chunk] Zone {} reset complete (free={}, open={} after reset)",
-                                            zone, zones.free_zones.len(), zones.open_zones.len());
                                         cv
                                     }; // Drop the mutex, so we don't have to put it in an await
 
@@ -827,9 +788,6 @@ impl Device for Zoned {
                                     let data_vec: Vec<_> =
                                         payloads.iter().map(|(_, data)| data.clone()).collect();
 
-                                    // Used to verify no RACE, TODO: Remove!
-                                    // tokio::time::sleep(Duration::from_secs(5)).await;
-
                                     let (batch_tx, batch_rx) = flume::bounded(1);
 
                                     let batch_request = BatchWriteRequest {
@@ -837,7 +795,6 @@ impl Device for Zoned {
                                         responder: batch_tx,
                                     };
 
-                                    tracing::info!("[evict:Chunk] Sending batch write for zone {} with {} chunks", zone, batch_request.data.len());
                                     writer_pool.send_priority_batch(batch_request).await?;
 
                                     let batch_response =
@@ -865,12 +822,6 @@ impl Device for Zoned {
                                         .collect();
 
                                     let write_results = write_results?;
-
-                                    tracing::info!(
-                                        "[evict:Chunk] Batch write completed for zone {}, {} chunks written, notifying ALL waiters",
-                                        zone,
-                                        write_results.len()
-                                    );
 
                                     // Notify waiting writers AFTER batch write completes successfully
                                     cv.notify_all();

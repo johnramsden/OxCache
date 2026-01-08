@@ -116,7 +116,6 @@ impl Writer {
     }
     fn receive_priority(&self) {
         while let Ok(batch_msg) = self.priority_receiver.recv() {
-            tracing::info!("[WriterPool] Priority-only writer {} received batch request", self.id);
             self.process_batch_request(batch_msg);
         }
     }
@@ -184,19 +183,11 @@ impl Writer {
 
     fn process_batch_request(&self, batch_req: BatchWriteRequest) {
         let data_len = batch_req.data.len(); // Store length before moving
-        tracing::info!("[WriterPool] Priority writer {} starting batch of {} chunks", self.id, data_len);
         let mut locations = Vec::with_capacity(data_len);
 
         for (i, data) in batch_req.data.into_iter().enumerate() {
-            tracing::info!("[WriterPool] Priority writer {} processing chunk {}/{}", self.id, i+1, data_len);
             // Use eviction bypass for priority batch requests (eviction writes)
             let result = self.device.append_with_eviction_bypass(data, true);
-
-            if let Err(ref e) = result {
-                tracing::error!("[WriterPool] Priority writer {} chunk {}/{} FAILED: {}", self.id, i+1, data_len, e);
-            } else {
-                tracing::info!("[WriterPool] Priority writer {} chunk {}/{} succeeded", self.id, i+1, data_len);
-            }
 
             if let Ok(ref loc) = result {
                 let mtx = Arc::clone(&self.eviction);
@@ -235,12 +226,9 @@ impl Writer {
         }
 
         let resp = BatchWriteResponse { locations };
-        tracing::info!("[WriterPool] Priority writer {} completed batch, sending response", self.id);
         let snd = batch_req.responder.send(resp);
         if snd.is_err() {
             tracing::error!("Failed to send batch response from writer");
-        } else {
-            tracing::info!("[WriterPool] Priority writer {} batch response sent successfully", self.id);
         }
     }
 }

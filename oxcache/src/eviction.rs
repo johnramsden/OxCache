@@ -298,7 +298,6 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         );
 
         if !always_evict && lru_len < high_water_mark {
-            tracing::info!("[ChunkPolicy] Below high water mark, no eviction needed");
             return vec![];
         }
 
@@ -310,7 +309,6 @@ impl EvictionPolicy for ChunkEvictionPolicy {
         }
 
         let count_to_evict = lru_len - low_water_mark;
-        tracing::info!("[ChunkPolicy] Will evict {} chunks", count_to_evict);
 
         let mut targets = Vec::with_capacity(count_to_evict as usize);
         let mut zone_counts = std::collections::HashMap::new();
@@ -331,12 +329,6 @@ impl EvictionPolicy for ChunkEvictionPolicy {
             self.pq.modify_priority(zone, count);
         }
 
-        tracing::info!(
-            "[ChunkPolicy] Evicted {} chunks, LRU now has {} entries",
-            targets.len(),
-            self.lru.len()
-        );
-
         #[cfg(feature = "eviction-metrics")]
         if let Some(ref metrics) = self.metrics {
             metrics.record_chunk_evictions(&targets);
@@ -346,18 +338,11 @@ impl EvictionPolicy for ChunkEvictionPolicy {
     }
 
     fn get_clean_targets(&mut self, _force_clean: bool) -> Self::CleanTarget {
-        // Always use threshold-based cleaning (simpler, no force mode needed)
-        let clean_targets = self.pq.remove_if_thresh_met(false);
+        let clean_targets = self.pq.remove_if_thresh_met();
 
         if clean_targets.is_empty() {
-            tracing::info!("[ChunkPolicy] No zones meet cleaning threshold");
             return clean_targets;
         }
-
-        tracing::info!(
-            "[ChunkPolicy] Will clean {} zones based on priority queue",
-            clean_targets.len()
-        );
 
         clean_targets
     }
@@ -365,18 +350,12 @@ impl EvictionPolicy for ChunkEvictionPolicy {
 
 impl ChunkEvictionPolicy {
     /// Remove old LRU entries after chunks are relocated during zone cleaning.
-    /// Note: New entries are automatically added by writer pool calling write_update()
     pub fn chunks_relocated(&mut self, old_locations: &[ChunkLocation]) {
         for old_loc in old_locations {
             // Remove stale entry from LRU
             // The relocated chunk's new location is already in LRU via write_update()
             self.lru.remove(old_loc);
         }
-
-        tracing::debug!(
-            "[ChunkPolicy] Removed {} old LRU entries after relocation",
-            old_locations.len()
-        );
     }
 }
 
@@ -427,9 +406,7 @@ impl Evictor {
                     }
                 };
 
-                tracing::info!("[Evictor] Starting eviction (always_evict={})", always_evict);
                 let device_clone = device_clone.clone();
-                let eviction_start = std::time::Instant::now();
                 let result = match device_clone.evict(
                     cache_clone.clone(),
                     writer_pool.clone(),
@@ -445,8 +422,6 @@ impl Evictor {
                         Ok(())
                     },
                 };
-                let eviction_duration = eviction_start.elapsed();
-                tracing::info!("[Evictor] Total eviction took {:?}", eviction_duration);
 
                 if let Some(sender) = sender {
                     tracing::debug!("Sending eviction response to sender: {:?}", result);
