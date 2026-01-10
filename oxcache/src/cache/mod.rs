@@ -37,7 +37,7 @@ pub struct Cache {
     num_shards: usize,
     // Shared reverse mapping (zone, chunk_index) -> key
     // This needs to be shared because we look up by location, not by key
-    zone_to_entry: RwLock<Array2<Option<Chunk>>>,
+    pub zone_to_entry: RwLock<Array2<Option<Chunk>>>,
 }
 
 impl Cache {

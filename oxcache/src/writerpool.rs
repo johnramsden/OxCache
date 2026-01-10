@@ -185,7 +185,7 @@ impl Writer {
         let data_len = batch_req.data.len(); // Store length before moving
         let mut locations = Vec::with_capacity(data_len);
 
-        for data in batch_req.data.into_iter() {
+        for (_i, data) in batch_req.data.into_iter().enumerate() {
             // Use eviction bypass for priority batch requests (eviction writes)
             let result = self.device.append_with_eviction_bypass(data, true);
 
