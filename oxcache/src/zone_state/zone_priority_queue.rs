@@ -36,15 +36,15 @@ impl ZonePriorityQueue {
     }
 
     // If above high watermark, clean until strictly below low watermark
+    // If force_all=true, clean ALL zones with invalid chunks (desperate/always_evict mode)
     pub fn remove_if_thresh_met(&mut self) -> Vec<ZoneIndex> {
         let mut zones = Vec::new();
-        tracing::trace!(
-            "[evict:Chunk] Cleaning zones, invalid={}",
-            self.invalid_count
-        );
+
+        // Clean until below threshold
         while self.invalid_count >= self.low_water_thresh {
             zones.push(self.pop_reset());
         }
+
         zones
     }
 

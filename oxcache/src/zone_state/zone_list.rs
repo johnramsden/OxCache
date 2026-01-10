@@ -279,7 +279,7 @@ impl ZoneList {
 
         if is_eviction && self.is_full() {
             // Even eviction can't proceed if completely full
-            tracing::debug!("Completely full, even eviction cannot proceed");
+            tracing::warn!("Completely full, even eviction cannot proceed");
             return Err(EvictNow);
         }
 
