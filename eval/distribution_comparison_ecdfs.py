@@ -50,8 +50,8 @@ EVICTION_TYPE_LABELS = {
 
 # Device colors (same as box plots)
 DEVICE_COLORS = {
-    "ZNS": "lightcoral",
-    "Block": "lightblue"
+    "ZNS": "#a65628",
+    "Block": "#f781bf"
 }
 
 # Line styles for eviction types
@@ -114,16 +114,17 @@ LATENCY_METRICS = {
 
 def find_eviction_start_time(run_path):
     """
-    Find the timestamp when eviction begins by finding peak usage.
+    Find the timestamp when eviction begins.
 
-    Eviction starts when usage_percentage reaches its maximum value.
-    This indicates the cache became full.
+    Eviction starts at either:
+    1. The peak right before the first reduction in usage
+    2. OR if usage never reduces, where it first reaches its maximum value
 
     Args:
         run_path: Path to run directory containing usage_percentage.json
 
     Returns:
-        float: Unix timestamp when usage peaks, or None if no data available
+        float: Unix timestamp when eviction starts, or None if no data available
     """
     usage_file = run_path / "usage_percentage.json"
 
@@ -150,15 +151,30 @@ def find_eviction_start_time(run_path):
         print(f"    WARNING: No usage data found in {run_name}")
         return None
 
-    # Find the index where usage reaches its maximum
-    max_usage_index = usage_values.argmax()
-    max_usage = usage_values[max_usage_index]
-    eviction_start_time = timestamps[max_usage_index]
+    import numpy as np
 
-    print(f"    ✓ Peak usage at index {max_usage_index}/{len(usage_values)} "
-          f"(usage: {max_usage:.6f}%)")
+    # Look for the first decrease in usage
+    for i in range(len(usage_values) - 1):
+        if usage_values[i] > usage_values[i + 1]:
+            # Found first decrease, eviction starts at this peak
+            eviction_start_time = timestamps[i]
+            print(f"    ✓ First decrease at index {i}/{len(usage_values)} "
+                  f"(usage: {usage_values[i]:.6f} -> {usage_values[i+1]:.6f})")
+            return eviction_start_time
 
-    return eviction_start_time
+    # No decrease found, find where we first reach maximum
+    max_val = usage_values.max()
+    first_max_idx = np.where(usage_values >= max_val)[0]
+
+    if len(first_max_idx) > 0:
+        eviction_start_index = first_max_idx[0]
+        eviction_start_time = timestamps[eviction_start_index]
+        print(f"    ✓ No decrease found, max reached at index {eviction_start_index}/{len(usage_values)} "
+              f"(usage: {usage_values[eviction_start_index]:.6f})")
+        return eviction_start_time
+
+    print(f"    WARNING: Could not determine eviction start for {run_name}")
+    return None
 
 
 def parse_directory_name(dirname):
@@ -455,13 +471,13 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
     # Create figure-level legend at bottom
     legend_lines = [
-        Line2D([0], [0], color='lightcoral', linestyle='-', linewidth=LINE_WIDTH,
+        Line2D([0], [0], color='#a65628', linestyle='-', linewidth=LINE_WIDTH,
                label='ZNS (Zone LRU)', alpha=0.8),
-        Line2D([0], [0], color='lightcoral', linestyle='--', linewidth=LINE_WIDTH,
+        Line2D([0], [0], color='#a65628', linestyle='--', linewidth=LINE_WIDTH,
                label='ZNS (Chunk LRU)', alpha=0.8),
-        Line2D([0], [0], color='lightblue', linestyle='-', linewidth=LINE_WIDTH,
+        Line2D([0], [0], color='#f781bf', linestyle='-', linewidth=LINE_WIDTH,
                label='Block (Zone LRU)', alpha=0.8),
-        Line2D([0], [0], color='lightblue', linestyle='--', linewidth=LINE_WIDTH,
+        Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
                label='Block (Chunk LRU)', alpha=0.8),
     ]
     fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, 0.02),

@@ -17,6 +17,21 @@ import data_cache
 # Increase all font sizes by 4 points
 rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
+# Device colors
+DEVICE_COLORS = {
+    "ZNS": "#a65628",
+    "Block": "#f781bf"
+}
+
+
+def get_color_for_label(label):
+    """Get color based on label content."""
+    if "ZNS" in label:
+        return DEVICE_COLORS["ZNS"]
+    elif "Block" in label or "SSD" in label:
+        return DEVICE_COLORS["Block"]
+    return None  # Let matplotlib choose
+
 
 def parse_timestamp(timestamp_str):
     """Parse ISO timestamp string to datetime object."""
@@ -51,6 +66,57 @@ def normalize_filename(filename):
     # Replace timestamp pattern (DD_HH:MM:SS) with a placeholder
     normalized = re.sub(r'-\d+_\d+:\d+:\d+-', '-XX_XX:XX:XX-', normalized)
     return normalized
+
+
+def find_device_fill_time(data_dir):
+    """
+    Find the timestamp when the device fills completely for the first time.
+
+    Device fill is determined by finding where usage first decreases (indicating
+    the device filled and eviction began), or if no decrease, where usage first
+    reaches its maximum value.
+
+    Args:
+        data_dir: Path to data directory containing usage_percentage.json
+
+    Returns:
+        float: Unix timestamp when device fills, or None if no data available
+    """
+    usage_file = data_dir / "usage_percentage.json"
+
+    if not usage_file.exists():
+        return None
+
+    try:
+        # Load usage_percentage data
+        timestamps_unix, usage_values = data_cache.load_metric_data(
+            usage_file,
+            filter_minutes=None,  # Don't filter, we need all data
+            use_cache=True
+        )
+
+        if len(usage_values) == 0:
+            return None
+
+        # Look for the first decrease in usage
+        for i in range(len(usage_values) - 1):
+            if usage_values[i] > usage_values[i + 1]:
+                # Found first decrease, device filled at this peak
+                fill_time = timestamps_unix[i]
+                return fill_time
+
+        # No decrease found, find where we first reach maximum
+        max_val = usage_values.max()
+        first_max_idx = np.where(usage_values >= max_val)[0]
+
+        if len(first_max_idx) > 0:
+            fill_time = timestamps_unix[first_max_idx[0]]
+            return fill_time
+
+    except Exception as e:
+        print(f"Warning: Failed to determine device fill time: {e}")
+
+    return None
 
 
 def filter_last_n_minutes(timestamps, values, minutes=5):
@@ -177,7 +243,7 @@ def calculate_chunk_global_max_latency(normalized_groups, metric_name):
     return float(np.min(all_values)), float(np.max(all_values)), loaded_data
 
 
-def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir, y_min, y_max, loaded_data):
+def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir, y_min, y_max, loaded_data, mark_device_fill=False):
     """Create a single latency plot for a normalized group.
 
     OPTIMIZED: Reuses pre-loaded data instead of re-reading files.
@@ -190,6 +256,7 @@ def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir
         y_min: Minimum y-axis value
         y_max: Maximum y-axis value
         loaded_data: Dict of pre-loaded data {file_path: (timestamps, values)}
+        mark_device_fill: If True, mark the point where device fills completely
     """
     plt.figure(figsize=(12, 4))
     has_data = False
@@ -216,8 +283,20 @@ def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir
         start_time_unix = timestamps_unix[0]
         time_minutes = (timestamps_unix - start_time_unix) / 60.0
 
-        plt.plot(time_minutes, values, alpha=0.8, linewidth=0.8, label=label)
+        # Plot the workload line and get its color
+        color = get_color_for_label(label)
+        line = plt.plot(time_minutes, values, alpha=0.8, linewidth=0.8, label=label, color=color)
+        line_color = line[0].get_color()
         has_data = True
+
+        # Mark device fill time if requested (per workload)
+        if mark_device_fill:
+            fill_time = find_device_fill_time(data_dir)
+            if fill_time is not None:
+                # Convert fill time to minutes from this workload's start
+                fill_time_minutes = (fill_time - start_time_unix) / 60.0
+                plt.axvline(x=fill_time_minutes, color=line_color, linestyle='--',
+                           linewidth=2, alpha=0.7)
 
     if has_data:
         plt.xlabel('Time (minutes)')
@@ -239,7 +318,7 @@ def plot_latency_group(normalized_name, dir_label_pairs, metric_name, output_dir
     plt.close()
 
 
-def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
+def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None, mark_device_fill=False):
     """Plot latency values for a specific metric with chunk-size-based scaling."""
     # Handle single directory case (backward compatibility)
     if isinstance(split_data_dirs, (str, Path)):
@@ -292,7 +371,7 @@ def plot_metric_latency(split_data_dirs, metric_name, output_dir, labels=None):
         for normalized_name, dir_label_pairs in normalized_groups.items():
             plot_latency_group(
                 normalized_name, dir_label_pairs, metric_name,
-                chunk_output_dir, y_min, y_max, loaded_data
+                chunk_output_dir, y_min, y_max, loaded_data, mark_device_fill
             )
 
 
@@ -301,24 +380,26 @@ def main():
     parser.add_argument('split_data_dirs', nargs='+', help='Directory(s) containing split data output')
     parser.add_argument('--output-dir', '-o', default='plots',
                        help='Output directory for plots (default: plots)')
-    parser.add_argument('--metrics', '-m', nargs='+', 
+    parser.add_argument('--metrics', '-m', nargs='+',
                        default=['device_write_latency_ms', 'disk_write_latency_ms', 'device_read_latency_ms', 'disk_read_latency_ms',
                                'get_miss_latency_ms', 'get_total_latency_ms'],
                        help='Latency metrics to plot')
     parser.add_argument('--labels', '-l', nargs='+',
                        help='Labels for each directory (must match number of directories)')
-    
+    parser.add_argument('--mark-device-fill', action='store_true',
+                       help='Mark the point where device fills completely for the first time')
+
     args = parser.parse_args()
-    
+
     if len(args.split_data_dirs) == 1:
         print("Plotting raw latency metrics...")
     else:
         print(f"Comparing raw latency metrics across {len(args.split_data_dirs)} datasets...")
-    
+
     for metric in args.metrics:
         print(f"\nPlotting {metric}...")
-        plot_metric_latency(args.split_data_dirs, metric, args.output_dir, args.labels)
-    
+        plot_metric_latency(args.split_data_dirs, metric, args.output_dir, args.labels, args.mark_device_fill)
+
     print(f"\nAll plots saved to {args.output_dir}/")
 
 

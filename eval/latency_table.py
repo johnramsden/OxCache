@@ -57,6 +57,10 @@ LATENCY_METRICS = {
     "disk_write": {
         "file": "disk_write_latency_ms.json",
         "label": "Disk Write",
+    },
+    "get_response_latency_ms": {
+        "file": "get_response_latency_ms.json",
+        "label": "Get Response",
     }
 }
 
@@ -282,7 +286,7 @@ def generate_latex_table(block_runs, zns_runs, metric_key, output_file, filter_m
         # Write table header
         f.write("\\begin{table}[htbp]\n")
         f.write("\\centering\n")
-        f.write(f"\\caption{{Latency Comparison: ZNS vs Block Devices ({metric_label}, ms)}}\n")
+        f.write(f"\\caption{{Latency statistics for Zone LRU and Chunk LRU eviction policies. Each entry reports ZNS / block-interface latency, with the percentage indicating the relative change when using the block-interface device. (ms)}}\n")
         f.write("\\label{tab:latency_comparison}\n")
         f.write("\\begin{tabular}{|l|c|c|}\n")
         f.write("\\hline\n")

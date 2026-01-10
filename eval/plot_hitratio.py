@@ -15,6 +15,21 @@ from matplotlib import rcParams
 # Increase all font sizes by 4 points
 rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
+# Device colors
+DEVICE_COLORS = {
+    "ZNS": "#a65628",
+    "Block": "#f781bf"
+}
+
+
+def get_color_for_label(label):
+    """Get color based on label content."""
+    if "ZNS" in label:
+        return DEVICE_COLORS["ZNS"]
+    elif "Block" in label or "SSD" in label:
+        return DEVICE_COLORS["Block"]
+    return None  # Let matplotlib choose
+
 
 def parse_timestamp(timestamp_str):
     """Parse ISO timestamp string to datetime object."""
@@ -177,7 +192,8 @@ def plot_hitratio_group(normalized_name, dir_label_pairs, output_dir):
         start_time = filtered_timestamps[0]
         time_minutes = [(t - start_time).total_seconds() / 60 for t in filtered_timestamps]
 
-        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=1.2, label=label)
+        color = get_color_for_label(label)
+        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=1.2, label=label, color=color)
         has_data = True
 
     if has_data:

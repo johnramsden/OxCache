@@ -96,18 +96,20 @@ echo "📈 Generating Block WT individual plots..."
 python3 plot_throughput.py "$BLOCK_SPLIT_DIR" \
     --bucket-seconds $BUCKET_SECONDS \
     --output-dir "${OUTPUT_DIR}/block_individual" \
-    --metrics bytes_total written_bytes_total read_bytes_total client_request_bytes_total
+    --metrics client_request_bytes_total \
+    --mark-device-fill
 
 # Raw latency plots
 python3 plot_latency.py "$BLOCK_SPLIT_DIR" \
     --output-dir "${OUTPUT_DIR}/block_individual" \
-    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms
+    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms
 
 # Smoothed latency plots
 python3 plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
     --window-seconds $WINDOW_SECONDS \
     --output-dir "${OUTPUT_DIR}/block_individual" \
-    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms
+    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
+    --mark-device-fill
 
 # Hit ratio plots
 python3 plot_hitratio.py "$BLOCK_SPLIT_DIR" \
@@ -121,18 +123,20 @@ echo "📈 Generating ZNS WT individual plots..."
 python3 plot_throughput.py "$ZNS_SPLIT_DIR" \
     --bucket-seconds $BUCKET_SECONDS \
     --output-dir "${OUTPUT_DIR}/zns_individual" \
-    --metrics bytes_total written_bytes_total read_bytes_total client_request_bytes_total
+    --metrics bytes_total written_bytes_total read_bytes_total client_request_bytes_total \
+    --mark-device-fill
 
 # Raw latency plots
 python3 plot_latency.py "$ZNS_SPLIT_DIR" \
     --output-dir "${OUTPUT_DIR}/zns_individual" \
-    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms
+    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms
 
 # Smoothed latency plots
 python3 plot_latency_smoothed.py "$ZNS_SPLIT_DIR" \
     --window-seconds $WINDOW_SECONDS \
     --output-dir "${OUTPUT_DIR}/zns_individual" \
-    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms
+    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
+    --mark-device-fill
 
 # Hit ratio plots
 python3 plot_hitratio.py "$ZNS_SPLIT_DIR" \
@@ -153,14 +157,23 @@ python3 plot_throughput.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
     --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
     --bucket-seconds $BUCKET_SECONDS \
     --output-dir "${OUTPUT_DIR}/comparison" \
-    --metrics bytes_total written_bytes_total read_bytes_total client_request_bytes_total
+    --metrics written_bytes_total read_bytes_total client_request_bytes_total \
+    --mark-device-fill
 
+# Smoothed latency comparison plots
+python3 plot_latency.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
+    --output-dir "${OUTPUT_DIR}/comparison" \
+    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
+    --mark-device-fill
+#
 # Smoothed latency comparison plots
 python3 plot_latency_smoothed.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
     --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
     --window-seconds $WINDOW_SECONDS \
     --output-dir "${OUTPUT_DIR}/comparison" \
-    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms
+    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
+    --mark-device-fill
 
 # Hit ratio comparison plots
 python3 plot_hitratio.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
@@ -201,7 +214,7 @@ echo "Step 5: Generating ECDF plots"
 echo "=============================="
 
 # ECDF plots for different latency metrics
-LATENCY_METRICS=("disk_read" "disk_write")
+LATENCY_METRICS=("disk_read" "disk_write" "get_response_latency_ms")
 
 # Fill phase (whole run)
 echo "📊 Generating ECDF plots for fill phase..."
@@ -239,7 +252,7 @@ echo "Step 6: Generating latency comparison tables"
 echo "=============================================="
 
 # Latency metrics for tables
-TABLE_METRICS=("disk_read" "disk_write")
+TABLE_METRICS=("disk_read" "disk_write" "get_response_latency_ms")
 
 echo "📊 Generating latency comparison tables (excluding last 5 minutes)..."
 mkdir -p "${OUTPUT_DIR}/tables"

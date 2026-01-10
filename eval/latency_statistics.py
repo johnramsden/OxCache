@@ -50,13 +50,15 @@ DEVICE_MAPPINGS = {
 
 def find_eviction_start_time(run_path):
     """
-    Find the timestamp when eviction begins by finding peak usage.
+    Find the timestamp when eviction begins.
+
+    Returns the peak before first decrease, or first max if no decrease.
 
     Args:
         run_path: Path to run directory containing usage_percentage.json
 
     Returns:
-        float: Unix timestamp when usage peaks, or None if no data available
+        float: Unix timestamp when eviction starts, or None if no data available
     """
     usage_file = run_path / "usage_percentage.json"
 
@@ -75,11 +77,20 @@ def find_eviction_start_time(run_path):
     if len(usage_values) == 0:
         return None
 
-    # Find the index where usage reaches its maximum
-    max_usage_index = usage_values.argmax()
-    eviction_start_time = timestamps[max_usage_index]
+    import numpy as np
 
-    return eviction_start_time
+    # Look for the first decrease in usage
+    for i in range(len(usage_values) - 1):
+        if usage_values[i] > usage_values[i + 1]:
+            return timestamps[i]
+
+    # No decrease found, find where we first reach maximum
+    max_val = usage_values.max()
+    first_max_idx = np.where(usage_values >= max_val)[0]
+    if len(first_max_idx) > 0:
+        return timestamps[first_max_idx[0]]
+
+    return None
 
 
 def parse_directory_name(dirname):

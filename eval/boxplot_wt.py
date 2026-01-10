@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """
-Generate ECDF plot for OxCache WT workload latency metrics.
+Generate boxplot graph for OxCache WT workload throughput.
 Compares ZNS vs Block devices for chunk and promotional eviction types.
 """
 
 import argparse
 from pathlib import Path
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
+from matplotlib import patches as mpatches
 from matplotlib import rcParams
-from matplotlib.ticker import LogLocator, FuncFormatter, MaxNLocator
-import numpy as np
 import data_cache
 
 # Increase all font sizes by 8 points from their defaults
@@ -35,63 +32,16 @@ EVICTION_TYPE_LABELS = {
     "chunk": "Chunk-LRU"
 }
 
-# Device colors (matching distribution_comparison_ecdfs.py)
+# Device colors (matching distribution_comparison_boxplots.py)
 DEVICE_COLORS = {
     "ZNS": "#a65628",
     "Block": "#f781bf"
 }
 
-# Line styles for eviction types
-EVICTION_LINE_STYLE = {
-    "promotional": "-",      # Solid line for Zone-LRU
-    "chunk": "--"           # Dashed line for Chunk-LRU
-}
-
-# Line width
-LINE_WIDTH = 3.5
-
-# Supported latency metrics
-LATENCY_METRICS = {
-    "get_total": {
-        "file": "get_total_latency_ms.json",
-        "label": "Get Total Latency (ms)",
-        "short_label": "Get Total"
-    },
-    "get_hit": {
-        "file": "get_hit_latency_ms.json",
-        "label": "Get Hit Latency (ms)",
-        "short_label": "Get Hit"
-    },
-    "get_miss": {
-        "file": "get_miss_latency_ms.json",
-        "label": "Get Miss Latency (ms)",
-        "short_label": "Get Miss"
-    },
-    "device_read": {
-        "file": "device_read_latency_ms.json",
-        "label": "Device Read Latency (ms)",
-        "short_label": "Device Read"
-    },
-    "device_write": {
-        "file": "device_write_latency_ms.json",
-        "label": "Device Write Latency (ms)",
-        "short_label": "Device Write"
-    },
-    "disk_read": {
-        "file": "disk_read_latency_ms.json",
-        "label": "Disk Read Latency (ms)",
-        "short_label": "Disk Read"
-    },
-    "disk_write": {
-        "file": "disk_write_latency_ms.json",
-        "label": "Disk Write Latency (ms)",
-        "short_label": "Disk Write"
-    },
-    "get_response_latency_ms": {
-        "file": "get_response_latency_ms.json",
-        "label": "Get Response Latency (ms)",
-        "short_label": "Get Response"
-    }
+# Eviction type hatching
+EVICTION_HATCH = {
+    "promotional": "",      # No hatch for Zone-LRU
+    "chunk": "///"         # Hash marks for Chunk-LRU
 }
 
 # ============================================================================
@@ -247,67 +197,31 @@ def match_runs(block_runs, zns_runs, eviction_type):
 
 
 # ============================================================================
-# ECDF GENERATION
+# BOXPLOT GENERATION
 # ============================================================================
 
-def compute_ecdf(data):
+def generate_boxplot(block_dir, zns_dir, output_file, sample_size=None, show_outliers=False, from_eviction_start=False, filter_minutes=None):
     """
-    Compute ECDF coordinates for a dataset.
-
-    Args:
-        data: NumPy array or list of values
-
-    Returns:
-        tuple: (x_values, y_values) for plotting ECDF
-               x_values: sorted data points
-               y_values: cumulative probabilities (0 to 1)
-    """
-    data = np.asarray(data)
-    n = len(data)
-
-    if n == 0:
-        return np.array([]), np.array([])
-
-    # Sort the data
-    x = np.sort(data)
-
-    # Compute cumulative probabilities
-    y = np.arange(1, n + 1) / n
-
-    return x, y
-
-
-def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", sample_size=None, from_eviction_start=False, filter_minutes=None, log_scale=False):
-    """
-    Generate single ECDF plot for WT workload latency.
+    Generate single boxplot comparing ZNS vs Block for throughput across eviction types.
 
     Args:
         block_dir: Path to block device split_output directory
         zns_dir: Path to ZNS device split_output directory
         output_file: Output filename for the plot
-        metric_type: Type of latency metric to plot (from LATENCY_METRICS)
         sample_size: If provided, sample every Nth line from JSON files for faster processing
+        show_outliers: If True, display outliers beyond 1.5×IQR from quartiles
         from_eviction_start: If True, only include data from when eviction begins
         filter_minutes: Number of minutes to exclude from end of run
-        log_scale: If True, use logarithmic scale for x-axis
     """
-    # Get metric configuration
-    if metric_type not in LATENCY_METRICS:
-        raise ValueError(f"Unknown metric type: {metric_type}. Choose from: {list(LATENCY_METRICS.keys())}")
-
-    metric_config = LATENCY_METRICS[metric_type]
-    metric_file = metric_config["file"]
-    metric_label = metric_config["label"]
-
-    print(f"\nGenerating WT {metric_config['short_label']} ECDF plot...")
+    print(f"\nGenerating WT throughput boxplot...")
     if from_eviction_start:
         print("  Filtering data from eviction start...")
     if filter_minutes:
         print(f"  Excluding last {filter_minutes} minutes of data...")
-    if log_scale:
-        print("  Using logarithmic x-axis scale...")
 
-    scale = 1.0  # Already in ms
+    metric_file = "client_request_bytes_total.json"
+    metric_label = "Throughput (MiB/s)"
+    scale = 1 / (2**20)  # Convert bytes to MiB
 
     # Collect runs from both directories
     block_runs = collect_runs(block_dir)
@@ -317,6 +231,12 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
 
     # Create figure with single subplot
     fig, ax = plt.subplots(1, 1, figsize=(5, 5.38))
+
+    # Prepare data: 4 boxes (ZNS-promotional, ZNS-chunk, Block-promotional, Block-chunk)
+    current_data = []
+    labels = []
+    colors = []
+    hatches = []
 
     # For each device and eviction type combination
     for device in ["ZNS", "Block"]:
@@ -335,14 +255,14 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
             if matching_run:
                 data_file = matching_run["path"] / metric_file
                 if data_file.exists():
-                    print(f"  Loading {metric_config['short_label']} for {device} {EVICTION_TYPE_LABELS[eviction_type]}...")
+                    print(f"  Loading {metric_file} for {device} {EVICTION_TYPE_LABELS[eviction_type]}...")
 
                     # Find eviction start time if filtering is enabled
                     eviction_start_time = None
                     if from_eviction_start:
                         eviction_start_time = find_eviction_start_time(matching_run["path"])
 
-                    # Load latency data with filtering using data_cache
+                    # Load with timestamps and calculate throughput using data_cache
                     ts, vals = data_cache.load_metric_data(
                         data_file,
                         filter_minutes=filter_minutes,
@@ -352,116 +272,80 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
 
                     # Filter from eviction start if enabled
                     if from_eviction_start and eviction_start_time is not None:
+                        import numpy as np
                         mask = ts >= eviction_start_time
                         ts = ts[mask]
                         vals = vals[mask]
                         print(f"    Filtered to {len(vals)} points from eviction start")
 
-                    # Scale data
-                    vals = vals * scale
-
-                    # Compute ECDF
-                    x, y = compute_ecdf(vals)
-
-                    # Plot ECDF
-                    label = f"{device} {EVICTION_TYPE_LABELS[eviction_type]}"
-                    color = DEVICE_COLORS[device]
-                    linestyle = EVICTION_LINE_STYLE[eviction_type]
-
-                    ax.plot(x, y * 100,  # Convert to percentage
-                           label=label,
-                           color=color,
-                           linestyle=linestyle,
-                           linewidth=LINE_WIDTH,
-                           alpha=0.8)
-
-                    # Add p99 marker
-                    if len(x) > 0 and len(y) > 0:
-                        # Find p99 value (where y >= 0.99)
-                        p99_idx = np.searchsorted(y, 0.99)
-                        if p99_idx < len(x):
-                            p99_value = x[p99_idx]
-                            # Draw vertical line at p99 with same style as curve but thinner
-                            ax.axvline(x=p99_value, color=color,
-                                      linestyle=linestyle, linewidth=1.5, alpha=0.6)
-
+                    # Calculate throughput in 60-second bins (vectorized)
+                    throughput = data_cache.calculate_throughput_bins(ts, vals, bin_seconds=60)
+                    # Scale and convert to list for matplotlib
+                    current_data.append((throughput * scale).tolist())
                 else:
                     print(f"Warning: Missing {metric_file} for {device} {eviction_type}")
+                    current_data.append([])
             else:
                 print(f"Warning: No run found for {device} {eviction_type}")
+                current_data.append([])
 
-    # Configure subplot
-    # ax.set_xlabel("64KiB", fontsize=16, weight='bold')
-    ax.set_ylabel('Cumulative Probability (%)', fontsize=18)
-    ax.set_ylim(0, 100)
+            # Add styling info
+            labels.append(f"{device}-{EVICTION_TYPE_LABELS[eviction_type]}")
+            colors.append(DEVICE_COLORS[device])
+            hatches.append(EVICTION_HATCH[eviction_type])
 
-    # Configure x-axis scale
-    if log_scale:
-        ax.set_xscale('log')
-        # Use exponential notation for tick labels
-        ax.xaxis.set_major_locator(LogLocator(base=10.0, numticks=10))
-        # Don't show minor ticks to keep it clean
-        ax.xaxis.set_minor_locator(plt.NullLocator())
+    # Create boxplot (identical to distribution_comparison_boxplots.py)
+    if current_data:
+        bp = ax.boxplot(current_data,
+                        showfliers=show_outliers,
+                        widths=0.8,
+                        medianprops=dict(linewidth=2, color='black'),
+                        patch_artist=True)
 
-        # Format tick labels to show exponents (e.g., 10^0, 10^1, etc.)
-        def exp_formatter(x, pos):
-            if x == 0:
-                return '0'
-            exponent = int(np.log10(x))
-            # Show 10^n format
-            if x == 10**exponent:
-                if exponent == 0:
-                    return '1'
-                elif exponent == 1:
-                    return '10'
-                else:
-                    return f'$10^{{{exponent}}}$'
-            else:
-                # For intermediate values, show the number
-                return f'{x:.0f}' if x >= 1 else f'{x:.1f}'
+        # Apply colors and hatches
+        for i, (box, color, hatch) in enumerate(zip(bp['boxes'], colors, hatches)):
+            box.set_facecolor(color)
+            box.set_hatch(hatch)
+            box.set_alpha(0.7)
 
-        ax.xaxis.set_major_formatter(FuncFormatter(exp_formatter))
-    else:
-        ax.set_xlim(left=0)
-        # Use MaxNLocator to ensure nice, evenly-spaced tick intervals
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=False, prune=None))
+        # Set x-axis labels (empty for cleaner look)
+        ax.set_xticks(range(1, len(labels) + 1))
+        ax.set_xticklabels([], rotation=45, fontsize=10)
 
-    ax.grid(True, alpha=0.3, linestyle='--')
+        # Add label below subplot
+        # ax.set_xlabel("64KiB", fontsize=16, weight='bold')
 
-    # Rotate y-axis labels
-    for label in ax.get_yticklabels():
-        label.set_rotation(45)
+        # Set y-axis label
+        ax.set_ylabel(metric_label, fontsize=22, weight='bold')
 
-    # Adjust layout (matching distribution_comparison_ecdfs.py proportions)
+        # Rotate y-axis labels
+        for label in ax.get_yticklabels():
+            label.set_rotation(45)
+
+        # Set y-axis range (start at 0)
+        ax.set_ylim(bottom=0)
+
+    # Add legend at bottom (matching distribution_comparison_boxplots.py)
+    legend_patches = [
+        mpatches.Patch(facecolor='#a65628', label='ZNS (Zone LRU)', alpha=0.7),
+        mpatches.Patch(facecolor='#a65628', hatch='///', label='ZNS (Chunk LRU)', alpha=0.7),
+        mpatches.Patch(facecolor='#f781bf', label='Block (Zone LRU)', alpha=0.7),
+        mpatches.Patch(facecolor='#f781bf', hatch='///', label='Block (Chunk LRU)', alpha=0.7),
+    ]
+
+    fig.legend(
+        ncols=4,
+        handles=legend_patches,
+        bbox_to_anchor=(0.5, 0.08),
+        loc='center',
+        fontsize="large",
+        columnspacing=2.0,
+        frameon=False
+    )
+
+    # Adjust layout (matching distribution_comparison_boxplots.py proportions)
     plt.tight_layout(pad=0.0)
     plt.subplots_adjust(top=0.851, bottom=0.279)
-
-    # Make sure layout is finalized
-    fig.canvas.draw()
-
-    # Get subplot center for legend and label positioning
-    ax_bbox = ax.get_position().bounds  # (x, y, w, h)
-    subplot_center = ax_bbox[0] + ax_bbox[2] / 2
-
-    # Create figure-level legend at bottom (matching distribution_comparison_ecdfs.py)
-    legend_lines = [
-        Line2D([0], [0], color='#a65628', linestyle='-', linewidth=LINE_WIDTH,
-               label='ZNS (Zone LRU)', alpha=0.8),
-        Line2D([0], [0], color='#a65628', linestyle='--', linewidth=LINE_WIDTH,
-               label='ZNS (Chunk LRU)', alpha=0.8),
-        Line2D([0], [0], color='#f781bf', linestyle='-', linewidth=LINE_WIDTH,
-               label='Block (Zone LRU)', alpha=0.8),
-        Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
-               label='Block (Chunk LRU)', alpha=0.8),
-    ]
-    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, 0.02),
-               loc='center', fontsize="large", columnspacing=2.0, frameon=False)
-
-    # Add a background box for the x-axis label to make it stand out
-    label_y = 0.08
-    # Add x-axis label at the bottom, centered over the subplot
-    fig.text(subplot_center, label_y, 'Latency (ms)', ha='center', va='center',
-             fontsize=18, weight='bold', zorder=11)
 
     # Save figure
     plt.savefig(output_file, bbox_inches='tight', dpi=100)
@@ -475,7 +359,7 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate ECDF plot for OxCache WT workload latency metrics."
+        description="Generate throughput boxplot comparing ZNS vs Block devices for OxCache WT workload."
     )
     parser.add_argument(
         '--block-dir',
@@ -499,26 +383,20 @@ def main():
         help='Sample every Nth line from JSON files for faster testing (e.g., --sample 100)'
     )
     parser.add_argument(
+        '--show-outliers',
+        action='store_true',
+        help='Show outliers in box plots (points beyond 1.5×IQR from quartiles)'
+    )
+    parser.add_argument(
         '--from-eviction-start',
         action='store_true',
-        help='Only plot data from when eviction begins (detected by peak usage_percentage)'
+        help='Only plot data from when eviction begins (detected by usage_percentage peak)'
     )
     parser.add_argument(
         '--filter-minutes',
         type=int,
         default=None,
         help='Exclude last N minutes of data from each run (use 0 for no filtering)'
-    )
-    parser.add_argument(
-        '--metric',
-        choices=list(LATENCY_METRICS.keys()),
-        required=True,
-        help='Latency metric to plot'
-    )
-    parser.add_argument(
-        '--log-scale',
-        action='store_true',
-        help='Use logarithmic scale for x-axis (latency)'
     )
 
     args = parser.parse_args()
@@ -543,15 +421,12 @@ def main():
     # Convert filter_minutes=0 to None for data_cache
     filter_min = args.filter_minutes if args.filter_minutes and args.filter_minutes > 0 else None
 
-    # Get metric short label for filename
-    metric_short = LATENCY_METRICS[args.metric]['short_label'].lower().replace(' ', '_')
+    # Generate throughput boxplot
+    output_file = output_dir / "wt_throughput.png"
+    generate_boxplot(block_split, zns_split, output_file, args.sample, args.show_outliers,
+                     args.from_eviction_start, filter_min)
 
-    # Generate ECDF plot
-    output_file = output_dir / f"wt_{metric_short}_ecdf.png"
-    generate_ecdf(block_split, zns_split, output_file, args.metric, args.sample,
-                  args.from_eviction_start, filter_min, args.log_scale)
-
-    print("\nWT ECDF plot generated successfully!")
+    print("\nWT throughput boxplot generated successfully!")
     return 0
 
 

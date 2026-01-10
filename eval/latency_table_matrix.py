@@ -73,7 +73,7 @@ def parse_directory_name(dirname):
     Or: chunk_size,distribution,eviction_type,device-timestamp
     Or: chunk_size,L=...,NZ=...,eviction_type,device-timestamp
 
-    Returns dict with: chunk_size, eviction_type, device, distribution (if present)
+    Returns dict with: chunk_size, eviction_type, device, distribution (if present), ratio (if present)
     """
     parts = dirname.split(",")
 
@@ -85,11 +85,17 @@ def parse_directory_name(dirname):
 
         # Determine format by checking parts
         distribution = None
+        ratio = None
         eviction_idx = None
 
         # Format 1: chunk_size,L=...,DISTRIBUTION,R=...,I=...,NZ=...,eviction_type,device-timestamp
         if parts[1].startswith("L=") and len(parts) >= 7 and not parts[2].startswith(("R=", "I=", "NZ=")):
             distribution = parts[2].upper()
+            # Extract ratio (R=...) parameter
+            for part in parts:
+                if part.startswith("R="):
+                    ratio = int(part[2:])
+                    break
             # Find eviction_type (should be second to last before device)
             eviction_idx = len(parts) - 2
         # Format 2: chunk_size,L=...,NZ=...,eviction_type,device-timestamp (WT workload)
@@ -125,6 +131,9 @@ def parse_directory_name(dirname):
 
         if distribution:
             result["distribution"] = distribution
+
+        if ratio is not None:
+            result["ratio"] = ratio
 
         return result
     except (ValueError, IndexError):
@@ -264,7 +273,7 @@ def format_chunk_size(size_bytes):
         return str(size_bytes)
 
 
-def generate_latex_table(runs, chunk_sizes, distributions, eviction_type, metric_key,
+def generate_latex_table(runs, chunk_sizes, distributions, ratios, eviction_type, metric_key,
                          output_file, filter_minutes=None, sample_size=None):
     """
     Generate LaTeX table comparing ZNS and Block latencies across configurations.
@@ -273,6 +282,7 @@ def generate_latex_table(runs, chunk_sizes, distributions, eviction_type, metric
         runs: List of all runs
         chunk_sizes: List of chunk sizes to include
         distributions: List of distribution names to include
+        ratios: List of ratio values to include (e.g., [2, 10])
         eviction_type: Eviction type to use ("promotional" or "chunk")
         metric_key: Metric key to include (from LATENCY_METRICS)
         output_file: Output file path for LaTeX table
@@ -295,33 +305,36 @@ def generate_latex_table(runs, chunk_sizes, distributions, eviction_type, metric
     distributions_normalized = [d.upper() for d in distributions]
 
     # Collect statistics for all configurations
-    # Structure: data[chunk_size][distribution][device] = stats
+    # Structure: data[chunk_size][distribution][ratio][device] = stats
     data = {}
 
     for chunk_size in chunk_sizes:
         data[chunk_size] = {}
         for distribution in distributions_normalized:
             data[chunk_size][distribution] = {}
+            for ratio in ratios:
+                data[chunk_size][distribution][ratio] = {}
 
-            # Find matching ZNS and Block runs
-            for device in ["ZNS", "Block"]:
-                matching_run = None
-                for run in runs:
-                    if (run.get("chunk_size") == chunk_size and
-                        run.get("distribution") == distribution and
-                        run.get("eviction_type") == eviction_type and
-                        run.get("device") == device):
-                        matching_run = run
-                        break
+                # Find matching ZNS and Block runs
+                for device in ["ZNS", "Block"]:
+                    matching_run = None
+                    for run in runs:
+                        if (run.get("chunk_size") == chunk_size and
+                            run.get("distribution") == distribution and
+                            run.get("ratio") == ratio and
+                            run.get("eviction_type") == eviction_type and
+                            run.get("device") == device):
+                            matching_run = run
+                            break
 
-                if matching_run:
-                    print(f"  Loading {device} - {format_chunk_size(chunk_size)} - {distribution}...")
-                    stats = load_metric_stats(matching_run["path"], metric_file,
-                                            filter_minutes, sample_size)
-                    data[chunk_size][distribution][device] = stats
-                else:
-                    print(f"  Warning: No run found for {device} - {format_chunk_size(chunk_size)} - {distribution}")
-                    data[chunk_size][distribution][device] = None
+                    if matching_run:
+                        print(f"  Loading {device} - {format_chunk_size(chunk_size)} - {distribution} - R={ratio}...")
+                        stats = load_metric_stats(matching_run["path"], metric_file,
+                                                filter_minutes, sample_size)
+                        data[chunk_size][distribution][ratio][device] = stats
+                    else:
+                        print(f"  Warning: No run found for {device} - {format_chunk_size(chunk_size)} - {distribution} - R={ratio}")
+                        data[chunk_size][distribution][ratio][device] = None
 
     # Generate LaTeX table
     print(f"\nGenerating LaTeX table: {output_file}")
@@ -330,20 +343,34 @@ def generate_latex_table(runs, chunk_sizes, distributions, eviction_type, metric
         # Write table header
         f.write("\\begin{table}[htbp]\n")
         f.write("\\centering\n")
-        f.write(f"\\caption{{Latency Comparison: ZNS vs Block Devices ({metric_label}, {eviction_label}, ms)}}\n")
+        f.write(f"\\caption{{Latency statistics for Zone LRU and Chunk LRU eviction policies. Each entry reports ZNS / block-interface latency, with the percentage indicating the relative change when using the block-interface device. (ms)}}\n")
         f.write("\\label{tab:latency_comparison_matrix}\n")
 
-        # Number of columns: Statistic + (distributions × 1 column each)
-        num_cols = 1 + len(distributions_normalized)
-        col_spec = "|l|" + "c|" * len(distributions_normalized)
+        # Number of columns: Statistic + (distributions × ratios)
+        num_data_cols = len(distributions_normalized) * len(ratios)
+        num_cols = 1 + num_data_cols
+        col_spec = "|l|" + "c|" * num_data_cols
         f.write(f"\\begin{{tabular}}{{{col_spec}}}\n")
         f.write("\\hline\n")
 
-        # Column headers
+        # Column headers - first row (distributions)
         f.write("\\textbf{Chunk / Stat}")
         for dist in distributions_normalized:
-            f.write(f" & \\textbf{{{dist}}}")
+            if len(ratios) > 1:
+                f.write(f" & \\multicolumn{{{len(ratios)}}}{{c|}}{{\\textbf{{{dist}}}}}")
+            else:
+                f.write(f" & \\textbf{{{dist}}}")
         f.write(" \\\\\n")
+
+        # Column headers - second row (ratios) if there are multiple ratios
+        if len(ratios) > 1:
+            f.write("\\cline{2-" + str(num_cols) + "}\n")
+            f.write(" ")
+            for dist in distributions_normalized:
+                for ratio in ratios:
+                    f.write(f" & \\textbf{{R={ratio}}}")
+            f.write(" \\\\\n")
+
         f.write("\\hline\n")
 
         # Statistics to display
@@ -366,16 +393,17 @@ def generate_latex_table(runs, chunk_sizes, distributions, eviction_type, metric
                 f.write(f"{stat_label}")
 
                 for distribution in distributions_normalized:
-                    zns_stats = data[chunk_size][distribution].get("ZNS")
-                    block_stats = data[chunk_size][distribution].get("Block")
+                    for ratio in ratios:
+                        zns_stats = data[chunk_size][distribution][ratio].get("ZNS")
+                        block_stats = data[chunk_size][distribution][ratio].get("Block")
 
-                    if zns_stats and block_stats:
-                        zns_val = zns_stats[stat_key]
-                        block_val = block_stats[stat_key]
-                        pct = format_percentage_increase(zns_val, block_val)
-                        f.write(f" & {format_stat_value(zns_val)} / {format_stat_value(block_val)} ({pct})")
-                    else:
-                        f.write(" & N/A")
+                        if zns_stats and block_stats:
+                            zns_val = zns_stats[stat_key]
+                            block_val = block_stats[stat_key]
+                            pct = format_percentage_increase(zns_val, block_val)
+                            f.write(f" & {format_stat_value(zns_val)} / {format_stat_value(block_val)} ({pct})")
+                        else:
+                            f.write(" & N/A")
 
                 f.write(" \\\\\n")
 
@@ -414,6 +442,13 @@ def main():
         nargs='+',
         required=True,
         help='Distribution names to include (e.g., zipf normal)'
+    )
+    parser.add_argument(
+        '--ratios',
+        nargs='+',
+        type=int,
+        required=True,
+        help='Ratio values to include (e.g., 2 10)'
     )
     parser.add_argument(
         '--eviction',
@@ -456,8 +491,8 @@ def main():
     filter_min = args.filter_minutes if args.filter_minutes and args.filter_minutes > 0 else None
 
     # Generate LaTeX table
-    generate_latex_table(runs, args.chunk_sizes, args.distributions, args.eviction,
-                        args.metric, args.output_file, filter_min, args.sample)
+    generate_latex_table(runs, args.chunk_sizes, args.distributions, args.ratios,
+                        args.eviction, args.metric, args.output_file, filter_min, args.sample)
 
     print("\nLatency comparison matrix table generated successfully!")
     return 0

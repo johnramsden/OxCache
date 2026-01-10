@@ -26,6 +26,7 @@ ALL_METRICS = [
     "get_miss_latency_ms",
     "get_hit_latency_ms",
     "get_total_latency_ms",
+    "get_response_latency_ms",
     "hitratio",
     "usage_percentage",
     "client_request_bytes_total",

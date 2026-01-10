@@ -115,7 +115,8 @@ echo "📈 Generating BLOCK-PROMO individual plots..."
 python plot_throughput.py "$BLOCK_SPLIT_DIR" \
    --bucket-seconds $BUCKET_SECONDS \
    --output-dir "${OUTPUT_DIR}/block_individual" \
-   --metrics bytes_total written_bytes_total
+   --metrics bytes_total written_bytes_total \
+   --mark-device-fill
 #
 # Raw latency plots
 python plot_latency.py "$BLOCK_SPLIT_DIR" \
@@ -126,7 +127,8 @@ python plot_latency.py "$BLOCK_SPLIT_DIR" \
 python plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
    --window-seconds $WINDOW_SECONDS \
    --output-dir "${OUTPUT_DIR}/block_individual" \
-   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
+   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
+   --mark-device-fill
 
 # Hit ratio plots
 python plot_hitratio.py "$BLOCK_SPLIT_DIR" \
@@ -140,7 +142,8 @@ echo "📈 Generating ZONED-PROMO individual plots..."
 python plot_throughput.py "$ZONED_SPLIT_DIR" \
    --bucket-seconds $BUCKET_SECONDS \
    --output-dir "${OUTPUT_DIR}/zoned_individual" \
-   --metrics bytes_total  written_bytes_total
+   --metrics bytes_total  written_bytes_total \
+   --mark-device-fill
 
 # Raw latency plots
 python plot_latency.py "$ZONED_SPLIT_DIR" \
@@ -151,7 +154,8 @@ python plot_latency.py "$ZONED_SPLIT_DIR" \
 python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" \
    --window-seconds $WINDOW_SECONDS \
    --output-dir "${OUTPUT_DIR}/zoned_individual" \
-   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
+   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
+   --mark-device-fill
 
 # Hit ratio plots
 python plot_hitratio.py "$ZONED_SPLIT_DIR" \
@@ -172,14 +176,16 @@ python plot_throughput.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
    --bucket-seconds $BUCKET_SECONDS \
    --output-dir "${OUTPUT_DIR}/comparison" \
-   --metrics bytes_total written_bytes_total read_bytes_total
+   --metrics bytes_total written_bytes_total read_bytes_total \
+   --mark-device-fill
 
 # Smoothed latency comparison plots
 python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
    --window-seconds $WINDOW_SECONDS \
    --output-dir "${OUTPUT_DIR}/comparison" \
-   --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms
+   --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms \
+   --mark-device-fill
 
 # Hit ratio comparison plots
 python plot_hitratio.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
@@ -298,12 +304,16 @@ CHUNK_SIZES="65536 268435456 1129316352"
 # Distributions to include
 DISTRIBUTIONS="zipfian uniform"
 
+# Ratios to include
+RATIOS="2 10"
+
 # Generate disk_read tables for both eviction types
 echo "  - Generating disk_read Zone LRU matrix table..."
 python3 latency_table_matrix.py \
     --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
     --chunk-sizes $CHUNK_SIZES \
     --distributions $DISTRIBUTIONS \
+    --ratios $RATIOS \
     --eviction promotional \
     --metric disk_read \
     --output-file "${OUTPUT_DIR}/tables/disk_read_zone_lru_matrix.tex" \
@@ -314,6 +324,7 @@ python3 latency_table_matrix.py \
     --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
     --chunk-sizes $CHUNK_SIZES \
     --distributions $DISTRIBUTIONS \
+    --ratios $RATIOS \
     --eviction chunk \
     --metric disk_read \
     --output-file "${OUTPUT_DIR}/tables/disk_read_chunk_lru_matrix.tex" \
@@ -325,6 +336,7 @@ python3 latency_table_matrix.py \
     --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
     --chunk-sizes $CHUNK_SIZES \
     --distributions $DISTRIBUTIONS \
+    --ratios $RATIOS \
     --eviction promotional \
     --metric disk_write \
     --output-file "${OUTPUT_DIR}/tables/disk_write_zone_lru_matrix.tex" \
@@ -335,6 +347,7 @@ python3 latency_table_matrix.py \
     --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
     --chunk-sizes $CHUNK_SIZES \
     --distributions $DISTRIBUTIONS \
+    --ratios $RATIOS \
     --eviction chunk \
     --metric disk_write \
     --output-file "${OUTPUT_DIR}/tables/disk_write_chunk_lru_matrix.tex" \

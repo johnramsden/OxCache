@@ -49,8 +49,8 @@ EVICTION_TYPE_LABELS = {
 
 # Bar colors for different devices (matching boxplot color scheme)
 BAR_COLORS = {
-    "Block": "lightblue",
-    "ZNS": "lightcoral"
+    "Block": "#f781bf",
+    "ZNS": "#a65628"
 }
 
 # Bar hatching patterns to distinguish eviction types
