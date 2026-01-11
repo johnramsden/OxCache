@@ -18,8 +18,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import data_cache
 
-# Increase all font sizes by 8 points from their defaults
-rcParams.update({key: rcParams[key] + 8 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 16 points from their defaults
+rcParams.update({key: rcParams[key] + 16 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -426,8 +426,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                         print(f"Warning: No run found for {device} {eviction_type} chunk={chunk_size} dist={distribution} ratio={ratio}")
 
             # Configure subplot
-            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=16, weight='bold')
-            current_ax.set_ylabel('Cumulative Probability (%)', fontsize=18)
+            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=28, weight='bold')
+            if idx == 0:
+                ylabel = current_ax.set_ylabel('Cumulative Probability (%)', fontsize=25)
+                ylabel.set_position((-0.1, 0.3))
             current_ax.set_ylim(0, 100)
 
             # Configure x-axis scale
@@ -457,7 +459,6 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
                 current_ax.xaxis.set_major_formatter(FuncFormatter(exp_formatter))
             else:
-                current_ax.set_xlim(left=0)
                 # Use MaxNLocator to ensure nice, evenly-spaced tick intervals
                 current_ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=False, prune=None))
 
@@ -496,13 +497,13 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
         Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
                label='Block (Chunk LRU)', alpha=0.8),
     ]
-    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, 0.02),
+    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.09),
                loc='center', fontsize="large", columnspacing=2.0, frameon=False)
 
     # Add a background box for the x-axis label to make it stand out
-    label_y = 0.08
-    label_width = 0.12
-    label_height = 0.04
+    label_y = 0.01
+    label_width = 0.18
+    label_height = 0.08
     fig.add_artist(
         Rectangle(
             (subplot_center - label_width/2, label_y - label_height/2),
@@ -518,7 +519,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
     # Add x-axis label at the bottom, centered over the subplots
     fig.text(subplot_center, label_y, 'Latency (ms)', ha='center', va='center',
-             fontsize=18, weight='bold', zorder=11)
+             fontsize=30, weight='bold', zorder=11)
 
     # First 3 subplots -> Ratio 1:2, next 3 -> Ratio 1:10
     group1 = axes_bboxes[0:3]
@@ -534,8 +535,8 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
     g2_width = g2_right - g2_left
 
     # Vertical placement of the grey boxes in figure coords
-    box_y = 0.93
-    box_h = 0.06
+    box_y = 0.85
+    box_h = 0.10
 
     # Grey box for Ratio 1:2
     fig.add_artist(
@@ -574,7 +575,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
         "Ratio: 1:2",
         ha='center',
         va='center',
-        fontsize=20,
+        fontsize=26,
         weight='bold',
         zorder=2,
     )
@@ -584,7 +585,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
         "Ratio: 1:10",
         ha='center',
         va='center',
-        fontsize=20,
+        fontsize=26,
         weight='bold',
         zorder=2,
     )

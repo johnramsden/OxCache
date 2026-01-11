@@ -9,10 +9,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib import patches as mpatches
 from matplotlib import rcParams
+from matplotlib import ticker
 import data_cache
 
-# Increase all font sizes by 8 points from their defaults
-rcParams.update({key: rcParams[key] + 8 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 16 points from their defaults
+rcParams.update({key: rcParams[key] + 16 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -297,9 +298,14 @@ def generate_boxplot(block_dir, zns_dir, output_file, sample_size=None, show_out
 
     # Create boxplot (identical to distribution_comparison_boxplots.py)
     if current_data:
+        # Adjust box width based on number of boxes so they're consistent across subplots
+        # Base width is 0.8 for 4 boxes, scale proportionally for fewer boxes
+        num_boxes = len(current_data)
+        box_width = 0.8 * (num_boxes / 4) if num_boxes > 0 else 0.8
+
         bp = ax.boxplot(current_data,
                         showfliers=show_outliers,
-                        widths=0.8,
+                        widths=box_width,
                         medianprops=dict(linewidth=2, color='black'),
                         patch_artist=True)
 
@@ -307,6 +313,7 @@ def generate_boxplot(block_dir, zns_dir, output_file, sample_size=None, show_out
         for i, (box, color, hatch) in enumerate(zip(bp['boxes'], colors, hatches)):
             box.set_facecolor(color)
             box.set_hatch(hatch)
+            box.set_hatch_linewidth(3.0)
             box.set_alpha(0.7)
 
         # Set x-axis labels (empty for cleaner look)
@@ -318,6 +325,9 @@ def generate_boxplot(block_dir, zns_dir, output_file, sample_size=None, show_out
 
         # Set y-axis label
         ax.set_ylabel(metric_label, fontsize=22, weight='bold')
+
+        # Use scalar formatter without scientific notation
+        ax.yaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False, useMathText=False))
 
         # Rotate y-axis labels
         for label in ax.get_yticklabels():
