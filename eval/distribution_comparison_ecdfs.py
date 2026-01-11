@@ -105,6 +105,11 @@ LATENCY_METRICS = {
         "file": "disk_write_latency_ms.json",
         "label": "Disk Write Latency (ms)",
         "short_label": "Disk Write"
+    },
+    "get_response": {
+        "file": "get_response_latency_ms.json",
+        "label": "Get Response Latency (ms)",
+        "short_label": "Get Response"
     }
 }
 
@@ -112,16 +117,17 @@ LATENCY_METRICS = {
 # DATA PARSING FUNCTIONS
 # ============================================================================
 
-def find_eviction_start_time(run_path):
+def find_eviction_start_time(run_path, threshold=0.98):
     """
     Find the timestamp when eviction begins.
 
-    Eviction starts at either:
-    1. The peak right before the first reduction in usage
-    2. OR if usage never reduces, where it first reaches its maximum value
+    Eviction starts when usage first crosses a high threshold (default 98%).
+    This threshold-based approach is more robust and consistent across different
+    workload types compared to detecting the first decrease.
 
     Args:
         run_path: Path to run directory containing usage_percentage.json
+        threshold: Usage percentage threshold (0.0-1.0) to detect eviction start (default: 0.98)
 
     Returns:
         float: Unix timestamp when eviction starts, or None if no data available
@@ -153,24 +159,24 @@ def find_eviction_start_time(run_path):
 
     import numpy as np
 
-    # Look for the first decrease in usage
-    for i in range(len(usage_values) - 1):
-        if usage_values[i] > usage_values[i + 1]:
-            # Found first decrease, eviction starts at this peak
-            eviction_start_time = timestamps[i]
-            print(f"    ✓ First decrease at index {i}/{len(usage_values)} "
-                  f"(usage: {usage_values[i]:.6f} -> {usage_values[i+1]:.6f})")
-            return eviction_start_time
+    # Find first time usage crosses threshold
+    above_threshold = np.where(usage_values >= threshold)[0]
 
-    # No decrease found, find where we first reach maximum
+    if len(above_threshold) > 0:
+        eviction_start_index = above_threshold[0]
+        eviction_start_time = timestamps[eviction_start_index]
+        print(f"    ✓ Threshold {threshold} reached at index {eviction_start_index}/{len(usage_values)} "
+              f"(usage: {usage_values[eviction_start_index]:.6f})")
+        return eviction_start_time
+
+    # Threshold never reached, find where we reach maximum instead
     max_val = usage_values.max()
     first_max_idx = np.where(usage_values >= max_val)[0]
 
     if len(first_max_idx) > 0:
         eviction_start_index = first_max_idx[0]
         eviction_start_time = timestamps[eviction_start_index]
-        print(f"    ✓ No decrease found, max reached at index {eviction_start_index}/{len(usage_values)} "
-              f"(usage: {usage_values[eviction_start_index]:.6f})")
+        print(f"    ✓ Threshold not reached, max {max_val:.6f} at index {eviction_start_index}/{len(usage_values)}")
         return eviction_start_time
 
     print(f"    WARNING: Could not determine eviction start for {run_name}")
@@ -246,12 +252,14 @@ def collect_runs(split_output_dir):
 # ECDF GENERATION
 # ============================================================================
 
-def compute_ecdf(data):
+def compute_ecdf(data, max_points=50000):
     """
-    Compute ECDF coordinates for a dataset.
+    Compute ECDF coordinates for a dataset with automatic downsampling.
 
     Args:
         data: NumPy array or list of values
+        max_points: Maximum number of points to use for ECDF (default: 50000)
+                   Datasets larger than this will be randomly sampled
 
     Returns:
         tuple: (x_values, y_values) for plotting ECDF
@@ -263,6 +271,14 @@ def compute_ecdf(data):
 
     if n == 0:
         return np.array([]), np.array([])
+
+    # Downsample if dataset is too large
+    if n > max_points:
+        # Random sample without replacement
+        print(f"    Downsampled from {n} to {max_points} points for ECDF")
+        indices = np.random.choice(n, size=max_points, replace=False)
+        data = data[indices]
+        n = max_points
 
     # Sort the data
     x = np.sort(data)

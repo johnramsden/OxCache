@@ -5,6 +5,7 @@ nvme-loop.json
 /logs/
 /eval/data/
 /eval/plots/
+/eval/plots_wt/
 user-data
 /eval/tables/
 /logs-compressed

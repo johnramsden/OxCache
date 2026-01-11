@@ -114,16 +114,21 @@ def normalize_filename(filename):
     return normalized
 
 
-def find_device_fill_time(data_dir):
+def find_device_fill_time(data_dir, threshold=0.98):
     """
-    Find the timestamp when the device fills completely for the first time.
+    Find the timestamp when the device fills and eviction begins.
 
-    Device fill is determined by finding where usage first decreases (indicating
-    the device filled and eviction began), or if no decrease, where usage first
-    reaches its maximum value.
+    Device fill is determined by finding when usage first crosses a high threshold
+    (default 98%). This threshold-based approach is more robust and consistent
+    across different workload types compared to detecting the first decrease.
+
+    Analysis of actual workload data showed that threshold-based detection provides
+    more consistent results across UNIFORM vs ZIPFIAN distributions, chunk vs
+    promotional policies, and different chunk sizes.
 
     Args:
         data_dir: Path to data directory containing usage_percentage.json
+        threshold: Usage percentage threshold (0.0-1.0) to detect fill (default: 0.98)
 
     Returns:
         float: Unix timestamp when device fills, or None if no data available
@@ -144,14 +149,14 @@ def find_device_fill_time(data_dir):
         if len(usage_values) == 0:
             return None
 
-        # Look for the first decrease in usage
-        for i in range(len(usage_values) - 1):
-            if usage_values[i] > usage_values[i + 1]:
-                # Found first decrease, device filled at this peak
-                fill_time = timestamps_unix[i]
-                return fill_time
+        # Find first time usage crosses threshold
+        above_threshold = np.where(usage_values >= threshold)[0]
 
-        # No decrease found, find where we first reach maximum
+        if len(above_threshold) > 0:
+            fill_time = timestamps_unix[above_threshold[0]]
+            return fill_time
+
+        # Threshold never reached, find where we reach maximum instead
         max_val = usage_values.max()
         first_max_idx = np.where(usage_values >= max_val)[0]
 
