@@ -2378,7 +2378,6 @@ dependencies = [
  "config",
  "console-subscriber",
  "dashmap",
- "flate2",
  "flume",
  "futures",
  "libc",
