@@ -12,12 +12,14 @@ import matplotlib.pyplot as plt
 from matplotlib import patches as mpatches
 from matplotlib.patches import Rectangle
 from matplotlib import rcParams
+from matplotlib import ticker
+from matplotlib.gridspec import GridSpec
 import numpy as np
 from datetime import datetime, timedelta
 import data_cache
 
-# Increase all font sizes by 8 points from their defaults
-rcParams.update({key: rcParams[key] + 8 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 16 points from their defaults
+rcParams.update({key: rcParams[key] + 16 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -246,14 +248,16 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
 
     print(f"Found {len(block_runs)} block runs and {len(zns_runs)} ZNS runs")
 
-    # Create figure with 6 subplots (1 row x 6 columns)
+    # Create figure with 6 subplots (1 row x 6 columns) using GridSpec for custom widths
     # Subplots are 2/5 original height, but all spacing preserved
     num_subplots = len(RATIOS) * len(CHUNK_SIZES)  # 2 ratios * 3 chunk sizes = 6
-    fig, axes = plt.subplots(1, num_subplots, figsize=(5 * num_subplots, 5.38))
 
-    # Ensure axes is always a list
-    if num_subplots == 1:
-        axes = [axes]
+    # Width ratios: 1077MiB subplots (indices 2 and 5) are half as wide since they have 2 boxes instead of 4
+    width_ratios = [1, 1, 0.5, 1, 1, 0.5]
+
+    fig = plt.figure(figsize=(5 * num_subplots, 5.38))
+    gs = GridSpec(1, num_subplots, figure=fig, width_ratios=width_ratios)
+    axes = [fig.add_subplot(gs[0, i]) for i in range(num_subplots)]
 
     # First pass: collect all data to find global maximum for y-axis
     all_subplot_data = []
@@ -390,9 +394,18 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
 
         # Create boxplot for this subplot
         if current_data:
+                # Adjust box width based on number of boxes so they're consistent across subplots
+                # Base width is 0.8 for 4 boxes, scale proportionally for fewer boxes
+                # Exception: 1077MiB boxes are made thicker since they have fewer boxes
+                num_boxes = len(current_data)
+                if chunk_size == 1129316352:  # 1077MiB
+                    box_width = 0.8  # Full width like regular boxplots
+                else:
+                    box_width = 0.8 * (num_boxes / 4) if num_boxes > 0 else 0.8
+
                 bp = axes[idx].boxplot(current_data,
                                       showfliers=show_outliers,
-                                      widths=0.8,
+                                      widths=box_width,
                                       medianprops=dict(linewidth=2, color='black'),
                                       patch_artist=True)
 
@@ -400,6 +413,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
                 for i, (box, color, hatch) in enumerate(zip(bp['boxes'], colors, hatches)):
                     box.set_facecolor(color)
                     box.set_hatch(hatch)
+                    box.set_hatch_linewidth(3.0)
                     box.set_alpha(0.7)
 
                 # Set x-axis labels (empty for cleaner look, or could add device labels)
@@ -407,7 +421,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
                 axes[idx].set_xticklabels([], rotation=45, fontsize=10)
 
                 # Add chunk size label below subplot
-                axes[idx].set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=16, weight='bold')
+                axes[idx].set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=28, weight='bold')
+
+                # Use scalar formatter without scientific notation
+                axes[idx].yaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False, useMathText=False))
 
                 # Rotate y-axis labels
                 for label in axes[idx].get_yticklabels():
@@ -424,10 +441,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
         idx += 1
 
     # Add y-axis label on the far left
-    fig.text(0.02, 0.5, metric_label, va='center', rotation='vertical', fontsize=22, weight='bold')
+    fig.text(-0.005, 0.5, metric_label, va='center', rotation='vertical', fontsize=22, weight='bold')
 
     # Adjust layout (do these BEFORE computing positions) - subplots at 2/5 height with proportional spacing
-    plt.subplots_adjust(wspace=0.05, hspace=0.0)
+    plt.subplots_adjust(wspace=0.2, hspace=0.0)
     plt.tight_layout(pad=0.0)
     plt.subplots_adjust(top=0.851, bottom=0.279, left=0.05)
 
@@ -451,8 +468,8 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
     g2_width = g2_right - g2_left
 
     # Vertical placement of the grey boxes in figure coords
-    box_y = 0.93
-    box_h = 0.06
+    box_y = 0.85
+    box_h = 0.10
 
     # Grey box for Ratio 1:2
     fig.add_artist(
@@ -491,7 +508,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
         "Ratio: 1:2",
         ha='center',
         va='center',
-        fontsize=20,
+        fontsize=26,
         weight='bold',
         zorder=2,
     )
@@ -501,7 +518,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
         "Ratio: 1:10",
         ha='center',
         va='center',
-        fontsize=20,
+        fontsize=26,
         weight='bold',
         zorder=2,
     )
