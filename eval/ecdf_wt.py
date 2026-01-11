@@ -14,8 +14,8 @@ from matplotlib.ticker import LogLocator, FuncFormatter, MaxNLocator
 import numpy as np
 import data_cache
 
-# Increase all font sizes by 8 points from their defaults
-rcParams.update({key: rcParams[key] + 8 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 16 points from their defaults
+rcParams.update({key: rcParams[key] + 16 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -391,8 +391,8 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
                 print(f"Warning: No run found for {device} {eviction_type}")
 
     # Configure subplot
-    # ax.set_xlabel("64KiB", fontsize=16, weight='bold')
-    ax.set_ylabel('Cumulative Probability (%)', fontsize=18)
+    # ax.set_xlabel("64KiB", fontsize=28, weight='bold')
+    ax.set_ylabel('Cumulative Probability (%)', fontsize=25)
     ax.set_ylim(0, 100)
 
     # Configure x-axis scale
@@ -422,7 +422,6 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
 
         ax.xaxis.set_major_formatter(FuncFormatter(exp_formatter))
     else:
-        ax.set_xlim(left=0)
         # Use MaxNLocator to ensure nice, evenly-spaced tick intervals
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=False, prune=None))
 
@@ -454,14 +453,26 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
         Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
                label='Block (Chunk LRU)', alpha=0.8),
     ]
-    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, 0.02),
+    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.09),
                loc='center', fontsize="large", columnspacing=2.0, frameon=False)
 
     # Add a background box for the x-axis label to make it stand out
-    label_y = 0.08
+    label_y = 0.01
+    label_width = 0.18
+    label_height = 0.08
+    fig.add_artist(
+        Rectangle(
+            (subplot_center - label_width/2, label_y - label_height/2),
+            label_width,
+            label_height,
+            facecolor='white',
+            edgecolor='none',
+            zorder=10,
+        )
+    )
     # Add x-axis label at the bottom, centered over the subplot
     fig.text(subplot_center, label_y, 'Latency (ms)', ha='center', va='center',
-             fontsize=18, weight='bold', zorder=11)
+             fontsize=30, weight='bold', zorder=11)
 
     # Save figure
     plt.savefig(output_file, bbox_inches='tight', dpi=100)
