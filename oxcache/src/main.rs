@@ -6,10 +6,8 @@ use oxcache::server::{RUNTIME, Server};
 use std::fs;
 use std::process::exit;
 use std::sync::OnceLock;
-use tracing_appender::non_blocking;
+use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
-use flate2::write::GzEncoder;
-use flate2::Compression;
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CliArgs::parse();
@@ -93,13 +91,11 @@ pub fn init_logging(level: &str, metrics_directory: Option<&str>) {
             .compact()
             .with_filter(EnvFilter::new(format!("{},metrics=off", directive)));
 
-        // Metrics in log dir - always compressed with gzip
+        // Metrics in log dir
         let date = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S").to_string();
-        let filename = format!("{}/metrics-{}.json.gz", metrics_dir, date);
-        let file = fs::File::create(&filename)
-            .expect("Failed to create metrics file");
-        let encoder = GzEncoder::new(file, Compression::default());
-        let (metrics_nb, guard) = non_blocking(encoder);
+        let filename = format!("metrics-{}.json", date);
+        let metrics_file = rolling::never(metrics_dir, filename);
+        let (metrics_nb, guard) = non_blocking(metrics_file);
         let _ = METRICS_GUARD.set(guard);
 
         // JSON formatting for metrics
