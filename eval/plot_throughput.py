@@ -408,6 +408,8 @@ def plot_throughput_group(normalized_name, dir_label_pairs, metric_name,
             plt.legend()
 
         plt.tight_layout()
+        ax = plt.gca()
+        ax.yaxis.set_label_coords(x=-0.1, y=0.35)
 
         # Save with chunk size in path
         output_file = output_dir / f"{normalized_name}_{metric_name}_throughput.png"
