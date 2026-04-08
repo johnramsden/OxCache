@@ -384,7 +384,7 @@ def plot_throughput_group(normalized_name, dir_label_pairs, metric_name,
 
             # Plot the workload line and get its color
             color = get_color_for_label(label)
-            line = plt.plot(time_minutes, scaled_throughputs, label=label, color=color)
+            line = plt.plot(time_minutes, scaled_throughputs, label=label, color=color, linewidth=3)
             line_color = line[0].get_color()
             has_data = True
 

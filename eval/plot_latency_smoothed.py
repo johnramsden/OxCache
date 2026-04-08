@@ -353,7 +353,7 @@ def plot_latency_smoothed_group(normalized_name, dir_label_pairs, metric_name,
 
         # Plot the workload line and get its color
         color = get_color_for_label(label)
-        line = plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=1.5, label=label, color=color)
+        line = plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=2.0, label=label, color=color)
         line_color = line[0].get_color()
         has_data = True
 

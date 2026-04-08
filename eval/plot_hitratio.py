@@ -193,7 +193,7 @@ def plot_hitratio_group(normalized_name, dir_label_pairs, output_dir):
         time_minutes = [(t - start_time).total_seconds() / 60 for t in filtered_timestamps]
 
         color = get_color_for_label(label)
-        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=1.2, label=label, color=color)
+        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=1.5, label=label, color=color)
         has_data = True
 
     if has_data:
