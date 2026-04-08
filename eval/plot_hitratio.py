@@ -199,13 +199,14 @@ def plot_hitratio_group(normalized_name, dir_label_pairs, output_dir):
     if has_data:
         plt.xlabel('Time (minutes)')
         plt.ylabel('Hit Ratio (%)')
-        plt.grid(True, alpha=0.3)
         plt.ylim(0, 100)  # Hit ratio should be between 0 and 100%
 
         if len(dir_label_pairs) > 1:
             plt.legend()
 
         plt.tight_layout()
+        ax = plt.gca()
+        ax.grid(True, linewidth=1.0, alpha=0.5)
 
         # Save plot
         output_file = output_dir / f"{normalized_name}_hitratio.png"
