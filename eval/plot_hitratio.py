@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import rcParams
 
-# Increase all font sizes by 4 points
-rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 12 points
+rcParams.update({key: rcParams[key] + 12 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # Device colors
 DEVICE_COLORS = {

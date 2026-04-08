@@ -15,8 +15,8 @@ from collections import defaultdict
 import numpy as np
 import data_cache
 
-# Increase all font sizes by 4 points
-rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 12 points
+rcParams.update({key: rcParams[key] + 12 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # Device colors
 DEVICE_COLORS = {
