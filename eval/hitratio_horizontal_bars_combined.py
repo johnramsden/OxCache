@@ -381,7 +381,7 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
 
         # Configure Y-axis
         ax.set_yticks(y_ticks)
-        ax.set_yticklabels(y_labels, fontsize=11)
+        ax.set_yticklabels(y_labels, fontsize=15)
 
         # Configure X-axis - use fewer ticks to avoid overlap
         ax.set_xlabel("Hit Ratio (%)", fontsize=13)
@@ -414,7 +414,7 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
 
     # Adjust layout with more space at bottom for legend and left for ratio boxes
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.18, wspace=0.45, left=0.22)
+    plt.subplots_adjust(bottom=0.18, wspace=0.45, left=0.22, right=0.99)
 
     # Make sure layout is finalized before getting positions
     fig.canvas.draw()

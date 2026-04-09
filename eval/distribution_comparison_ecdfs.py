@@ -421,10 +421,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                         print(f"Warning: No run found for {device} {eviction_type} chunk={chunk_size} dist={distribution} ratio={ratio}")
 
             # Configure subplot
-            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=58, weight='bold')
+            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=48, weight='bold')
             if ratio_idx == 0 and chunk_idx == 0:
-                ylabel = current_ax.set_ylabel('Cumulative Probability (%)', fontsize=64)
-                ylabel.set_position((-0.15, 0.5))
+                ylabel = current_ax.set_ylabel('Cumulative Probability (%)', fontsize=48)
+                ylabel.set_position((-0.15, -1.9))
             current_ax.set_ylim(0, 100)
 
             # Configure x-axis scale
@@ -457,6 +457,11 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                 # Use MaxNLocator to ensure nice, evenly-spaced tick intervals
                 current_ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=False, prune=None))
 
+            # Rotate x-axis tick labels
+            for label in current_ax.get_xticklabels():
+                label.set_rotation(45)
+                label.set_ha('right')  # Align right to prevent overlap
+
             current_ax.grid(True, alpha=0.3, linestyle='--')
 
             # Rotate y-axis labels
@@ -465,7 +470,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
     # Adjust layout - subplots at 2/5 height with proportional spacing
     plt.tight_layout(pad=0.0)
-    plt.subplots_adjust(top=0.90, bottom=0.15, left=0.08, hspace=1.2, wspace=0.3)
+    plt.subplots_adjust(top=0.90, bottom=0.18, left=0.08, right=1.3, hspace=1.7, wspace=0.3)
 
     # Make sure layout is finalized
     fig.canvas.draw()
@@ -491,12 +496,12 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
         Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
                label='Block (Chunk LRU)', alpha=0.8),
     ]
-    fig.legend(ncols=2, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.08),
+    fig.legend(ncols=2, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.25),
                loc='center', fontsize="large", columnspacing=2.0, frameon=False)
 
     # Add a background box for the x-axis label to make it stand out
-    label_y = 0.01
-    label_width = 0.18
+    label_y = -0.1
+    label_width = 0.25
     label_height = 0.08
     fig.add_artist(
         Rectangle(
