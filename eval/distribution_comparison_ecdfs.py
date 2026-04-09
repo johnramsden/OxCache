@@ -18,8 +18,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import data_cache
 
-# Increase all font sizes by 16 points from their defaults
-rcParams.update({key: rcParams[key] + 16 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 32 points from their defaults
+rcParams.update({key: rcParams[key] + 32 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -328,22 +328,17 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
 
     print(f"Found {len(block_runs)} block runs and {len(zns_runs)} ZNS runs")
 
-    # Create figure with 6 subplots (1 row x 6 columns)
+    # Create figure with 6 subplots (2 rows x 3 columns)
     # Subplots are 2/5 original height, but all spacing preserved
-    num_subplots = len(RATIOS) * len(CHUNK_SIZES)  # 2 ratios * 3 chunk sizes = 6
-    fig, axes = plt.subplots(1, num_subplots, figsize=(5 * num_subplots, 5.38))
-
-    # Ensure axes is always a list
-    if num_subplots == 1:
-        axes = [axes]
-
-    idx = 0
+    num_ratios = len(RATIOS)
+    num_chunk_sizes = len(CHUNK_SIZES)
+    fig, axes = plt.subplots(num_ratios, num_chunk_sizes, figsize=(5 * num_chunk_sizes, 5.38 * num_ratios))
 
     # Iterate through ratios, then chunk sizes
-    for ratio in RATIOS:
-        for chunk_size in CHUNK_SIZES:
+    for ratio_idx, ratio in enumerate(RATIOS):
+        for chunk_idx, chunk_size in enumerate(CHUNK_SIZES):
             # Prepare data for this subplot
-            current_ax = axes[idx]
+            current_ax = axes[ratio_idx, chunk_idx]
 
             # Determine which eviction types to include
             if chunk_size == 1129316352:  # 1076MiB only has promotional
@@ -426,10 +421,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                         print(f"Warning: No run found for {device} {eviction_type} chunk={chunk_size} dist={distribution} ratio={ratio}")
 
             # Configure subplot
-            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=28, weight='bold')
-            if idx == 0:
-                ylabel = current_ax.set_ylabel('Cumulative Probability (%)', fontsize=25)
-                ylabel.set_position((-0.1, 0.3))
+            current_ax.set_xlabel(CHUNK_SIZE_LABELS[chunk_size], fontsize=48, weight='bold')
+            if ratio_idx == 0 and chunk_idx == 0:
+                ylabel = current_ax.set_ylabel('Cumulative Probability (%)', fontsize=48)
+                ylabel.set_position((-0.15, -1.9))
             current_ax.set_ylim(0, 100)
 
             # Configure x-axis scale
@@ -462,24 +457,28 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
                 # Use MaxNLocator to ensure nice, evenly-spaced tick intervals
                 current_ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=False, prune=None))
 
+            # Rotate x-axis tick labels
+            for label in current_ax.get_xticklabels():
+                label.set_rotation(45)
+                label.set_ha('right')  # Align right to prevent overlap
+
             current_ax.grid(True, alpha=0.3, linestyle='--')
 
             # Rotate y-axis labels
             for label in current_ax.get_yticklabels():
                 label.set_rotation(45)
 
-            idx += 1
-
     # Adjust layout - subplots at 2/5 height with proportional spacing
-    plt.subplots_adjust(wspace=0.15, hspace=0.0)
     plt.tight_layout(pad=0.0)
-    plt.subplots_adjust(top=0.851, bottom=0.279, left=0.05)
+    plt.subplots_adjust(top=0.90, bottom=0.18, left=0.08, right=1.3, hspace=1.7, wspace=0.3)
 
     # Make sure layout is finalized
     fig.canvas.draw()
 
     # Compute positions for ratio boxes and labels based on actual subplot bounds
-    axes_bboxes = [ax.get_position().bounds for ax in axes]  # (x, y, w, h) per axes
+    # Flatten the 2D axes array to get all subplot bounds
+    axes_flat = [axes[i][j] for i in range(num_ratios) for j in range(num_chunk_sizes)]
+    axes_bboxes = [ax.get_position().bounds for ax in axes_flat]  # (x, y, w, h) per axes
 
     # Calculate the true center of all subplots
     leftmost = axes_bboxes[0][0]  # x position of first subplot
@@ -497,12 +496,12 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
         Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
                label='Block (Chunk LRU)', alpha=0.8),
     ]
-    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.09),
+    fig.legend(ncols=2, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.25),
                loc='center', fontsize="large", columnspacing=2.0, frameon=False)
 
     # Add a background box for the x-axis label to make it stand out
-    label_y = 0.01
-    label_width = 0.18
+    label_y = -0.1
+    label_width = 0.25
     label_height = 0.08
     fig.add_artist(
         Rectangle(
@@ -521,7 +520,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
     fig.text(subplot_center, label_y, 'Latency (ms)', ha='center', va='center',
              fontsize=30, weight='bold', zorder=11)
 
-    # First 3 subplots -> Ratio 1:2, next 3 -> Ratio 1:10
+    # First 3 subplots -> Ratio 1:2 (first row), next 3 -> Ratio 1:10 (second row)
     group1 = axes_bboxes[0:3]
     group2 = axes_bboxes[3:6]
 
@@ -534,14 +533,21 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
     g2_right = group2[-1][0] + group2[-1][2]
     g2_width = g2_right - g2_left
 
-    # Vertical placement of the grey boxes in figure coords
-    box_y = 0.85
-    box_h = 0.10
+    # Vertical placement of the grey boxes - position above each row
+    # Get the top y position of each row's subplots and add some padding
+    g1_top = group1[0][1] + group1[0][3]  # y + height of first row
+    g2_top = group2[0][1] + group2[0][3]  # y + height of second row
 
-    # Grey box for Ratio 1:2
+    box_h = 0.06
+    box_y_offset = 0.02  # Space above the subplot
+
+    g1_box_y = g1_top + box_y_offset
+    g2_box_y = g2_top + box_y_offset
+
+    # Grey box for Ratio 1:2 (first row)
     fig.add_artist(
         Rectangle(
-            (g1_left, box_y),
+            (g1_left, g1_box_y),
             g1_width,
             box_h,
             transform=fig.transFigure,
@@ -553,10 +559,10 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
         )
     )
 
-    # Grey box for Ratio 1:10
+    # Grey box for Ratio 1:10 (second row)
     fig.add_artist(
         Rectangle(
-            (g2_left, box_y),
+            (g2_left, g2_box_y),
             g2_width,
             box_h,
             transform=fig.transFigure,
@@ -571,21 +577,21 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, output_fi
     # Centered text in each box
     fig.text(
         g1_left + g1_width / 2,
-        box_y + box_h / 2,
+        g1_box_y + box_h / 2,
         "Ratio: 1:2",
         ha='center',
         va='center',
-        fontsize=26,
+        fontsize=50,
         weight='bold',
         zorder=2,
     )
     fig.text(
         g2_left + g2_width / 2,
-        box_y + box_h / 2,
+        g2_box_y + box_h / 2,
         "Ratio: 1:10",
         ha='center',
         va='center',
-        fontsize=26,
+        fontsize=50,
         weight='bold',
         zorder=2,
     )

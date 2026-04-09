@@ -16,8 +16,8 @@ from collections import defaultdict
 import numpy as np
 import data_cache
 
-# Increase all font sizes by 4 points
-rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 12 points
+rcParams.update({key: rcParams[key] + 12 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # Device colors
 DEVICE_COLORS = {
@@ -384,7 +384,7 @@ def plot_throughput_group(normalized_name, dir_label_pairs, metric_name,
 
             # Plot the workload line and get its color
             color = get_color_for_label(label)
-            line = plt.plot(time_minutes, scaled_throughputs, label=label, color=color)
+            line = plt.plot(time_minutes, scaled_throughputs, label=label, color=color, linewidth=3)
             line_color = line[0].get_color()
             has_data = True
 
@@ -408,6 +408,9 @@ def plot_throughput_group(normalized_name, dir_label_pairs, metric_name,
             plt.legend()
 
         plt.tight_layout()
+        ax = plt.gca()
+        ax.yaxis.set_label_coords(x=-0.1, y=0.35)
+        ax.grid(True, linewidth=1.0, alpha=0.5)
 
         # Save with chunk size in path
         output_file = output_dir / f"{normalized_name}_{metric_name}_throughput.png"

@@ -15,8 +15,8 @@ from collections import defaultdict
 import numpy as np
 import data_cache
 
-# Increase all font sizes by 4 points
-rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 12 points
+rcParams.update({key: rcParams[key] + 12 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # Device colors
 DEVICE_COLORS = {
@@ -353,7 +353,7 @@ def plot_latency_smoothed_group(normalized_name, dir_label_pairs, metric_name,
 
         # Plot the workload line and get its color
         color = get_color_for_label(label)
-        line = plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=1.5, label=label, color=color)
+        line = plt.plot(time_minutes, smooth_values, alpha=0.8, linewidth=2.0, label=label, color=color)
         line_color = line[0].get_color()
         has_data = True
 
@@ -369,7 +369,6 @@ def plot_latency_smoothed_group(normalized_name, dir_label_pairs, metric_name,
     if has_data:
         plt.xlabel('Time (minutes)')
         plt.ylabel(f'Latency (ms)')
-        plt.grid(True, alpha=0.3)
 
         # Apply chunk-level y-axis limits
         plt.ylim(y_min, y_max)
@@ -378,6 +377,8 @@ def plot_latency_smoothed_group(normalized_name, dir_label_pairs, metric_name,
             plt.legend()
 
         plt.tight_layout()
+        ax = plt.gca()
+        ax.grid(True, linewidth=1.0, alpha=0.5)
 
         output_file = output_dir / f"{normalized_name}_{metric_name}_smoothed_{window_seconds}s.png"
         plt.savefig(output_file, dpi=300, bbox_inches='tight', pad_inches=0)

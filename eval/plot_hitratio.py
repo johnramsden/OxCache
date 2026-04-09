@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import rcParams
 
-# Increase all font sizes by 4 points
-rcParams.update({key: rcParams[key] + 4 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
+# Increase all font sizes by 12 points
+rcParams.update({key: rcParams[key] + 12 for key in rcParams if "size" in key and isinstance(rcParams[key], (int, float))})
 
 # Device colors
 DEVICE_COLORS = {
@@ -193,19 +193,20 @@ def plot_hitratio_group(normalized_name, dir_label_pairs, output_dir):
         time_minutes = [(t - start_time).total_seconds() / 60 for t in filtered_timestamps]
 
         color = get_color_for_label(label)
-        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=1.2, label=label, color=color)
+        plt.plot(time_minutes, filtered_values, alpha=0.8, linewidth=1.5, label=label, color=color)
         has_data = True
 
     if has_data:
         plt.xlabel('Time (minutes)')
         plt.ylabel('Hit Ratio (%)')
-        plt.grid(True, alpha=0.3)
         plt.ylim(0, 100)  # Hit ratio should be between 0 and 100%
 
         if len(dir_label_pairs) > 1:
             plt.legend()
 
         plt.tight_layout()
+        ax = plt.gca()
+        ax.grid(True, linewidth=1.0, alpha=0.5)
 
         # Save plot
         output_file = output_dir / f"{normalized_name}_hitratio.png"
