@@ -68,6 +68,59 @@ LATENCY_METRICS = {
 # DATA PARSING FUNCTIONS
 # ============================================================================
 
+def find_eviction_start_time(run_path, threshold=0.98):
+    """
+    Find the timestamp when eviction begins.
+
+    Eviction starts when usage first crosses a high threshold (default 98%).
+    This threshold-based approach is more robust and consistent across different
+    workload types compared to detecting the first decrease.
+
+    Args:
+        run_path: Path to run directory containing usage_percentage.json
+        threshold: Usage percentage threshold (0.0-1.0) to detect eviction start (default: 0.98)
+
+    Returns:
+        float: Unix timestamp when eviction starts, or None if no data available
+    """
+    usage_file = run_path / "usage_percentage.json"
+
+    if not usage_file.exists():
+        return None
+
+    # Load usage_percentage data
+    try:
+        timestamps, usage_values = data_cache.load_metric_data(
+            usage_file,
+            filter_minutes=None,  # Don't filter, we need all data
+            use_cache=True
+        )
+    except Exception as e:
+        return None
+
+    if len(usage_values) == 0:
+        return None
+
+    # Find first time usage crosses threshold
+    above_threshold = np.where(usage_values >= threshold)[0]
+
+    if len(above_threshold) > 0:
+        eviction_start_index = above_threshold[0]
+        eviction_start_time = timestamps[eviction_start_index]
+        return eviction_start_time
+
+    # Threshold never reached, find where we reach maximum instead
+    max_val = usage_values.max()
+    first_max_idx = np.where(usage_values >= max_val)[0]
+
+    if len(first_max_idx) > 0:
+        eviction_start_index = first_max_idx[0]
+        eviction_start_time = timestamps[eviction_start_index]
+        return eviction_start_time
+
+    return None
+
+
 def parse_directory_name(dirname):
     """
     Parse directory name to extract parameters.
@@ -155,7 +208,8 @@ def calculate_statistics(data):
     }
 
 
-def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=None):
+def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=None,
+                      eviction_start_time=None):
     """
     Load metric data and calculate statistics.
 
@@ -164,6 +218,7 @@ def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=No
         metric_file: Name of metric file to load
         filter_minutes: Number of minutes to exclude from end of run
         sample_size: If provided, sample every Nth line from JSON files
+        eviction_start_time: If provided, only include data from this timestamp onward
 
     Returns:
         dict: Statistics dict or None if file doesn't exist
@@ -179,6 +234,11 @@ def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=No
         use_cache=True,
         sample_size=sample_size
     )
+
+    # Filter from eviction start if requested
+    if eviction_start_time is not None and len(ts) > 0:
+        mask = ts >= eviction_start_time
+        vals = vals[mask]
 
     return calculate_statistics(vals)
 
@@ -220,7 +280,8 @@ def format_percentage_increase(zns_value, block_value, precision=1):
         return f"{increase:.{precision}f}\\%"
 
 
-def generate_latex_table(block_runs, zns_runs, metric_key, output_file, filter_minutes=None, sample_size=None):
+def generate_latex_table(block_runs, zns_runs, metric_key, output_file, filter_minutes=None,
+                         sample_size=None, from_eviction_start=False):
     """
     Generate LaTeX table comparing ZNS and Block latencies for a single metric.
 
@@ -234,10 +295,13 @@ def generate_latex_table(block_runs, zns_runs, metric_key, output_file, filter_m
         output_file: Output file path for LaTeX table
         filter_minutes: Number of minutes to exclude from end of run
         sample_size: If provided, sample every Nth line from JSON files
+        from_eviction_start: If True, only include data from when eviction begins (98% usage threshold)
     """
     print("\nGenerating latency comparison table...")
     if filter_minutes:
         print(f"  Excluding last {filter_minutes} minutes of data...")
+    if from_eviction_start:
+        print(f"  Filtering data from eviction start (98% usage threshold)...")
 
     # Get metric configuration
     metric_config = LATENCY_METRICS[metric_key]
@@ -268,11 +332,33 @@ def generate_latex_table(block_runs, zns_runs, metric_key, output_file, filter_m
 
         if zns_run:
             print(f"  Loading ZNS {EVICTION_TYPE_LABELS[eviction_type]}...")
-            zns_stats = load_metric_stats(zns_run["path"], metric_file, filter_minutes, sample_size)
+
+            # Find eviction start time if filtering is enabled
+            eviction_start_time = None
+            if from_eviction_start:
+                eviction_start_time = find_eviction_start_time(zns_run["path"])
+                if eviction_start_time:
+                    print(f"    ZNS eviction detected at timestamp {eviction_start_time}")
+                else:
+                    print(f"    Warning: Could not detect ZNS eviction start, using all data")
+
+            zns_stats = load_metric_stats(zns_run["path"], metric_file, filter_minutes, sample_size,
+                                         eviction_start_time)
 
         if block_run:
             print(f"  Loading Block {EVICTION_TYPE_LABELS[eviction_type]}...")
-            block_stats = load_metric_stats(block_run["path"], metric_file, filter_minutes, sample_size)
+
+            # Find eviction start time if filtering is enabled
+            eviction_start_time = None
+            if from_eviction_start:
+                eviction_start_time = find_eviction_start_time(block_run["path"])
+                if eviction_start_time:
+                    print(f"    Block eviction detected at timestamp {eviction_start_time}")
+                else:
+                    print(f"    Warning: Could not detect Block eviction start, using all data")
+
+            block_stats = load_metric_stats(block_run["path"], metric_file, filter_minutes, sample_size,
+                                           eviction_start_time)
 
         data[eviction_type] = {
             'zns': zns_stats,
@@ -376,6 +462,11 @@ def main():
         default=None,
         help='Exclude last N minutes of data from each run (use 0 for no filtering)'
     )
+    parser.add_argument(
+        '--from-eviction-start',
+        action='store_true',
+        help='Only include latency data from when eviction begins (detected by 98%% usage threshold)'
+    )
 
     args = parser.parse_args()
 
@@ -402,7 +493,8 @@ def main():
     filter_min = args.filter_minutes if args.filter_minutes and args.filter_minutes > 0 else None
 
     # Generate LaTeX table
-    generate_latex_table(block_runs, zns_runs, args.metric, args.output_file, filter_min, args.sample)
+    generate_latex_table(block_runs, zns_runs, args.metric, args.output_file, filter_min, args.sample,
+                        args.from_eviction_start)
 
     print("\nLatency comparison table generated successfully!")
     return 0

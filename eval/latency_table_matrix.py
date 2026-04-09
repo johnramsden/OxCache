@@ -33,7 +33,7 @@ EVICTION_TYPE_LABELS = {
 LATENCY_METRICS = {
     "get_total": {
         "file": "get_total_latency_ms.json",
-        "label": "Get Total",
+        "label": "Total end-to-end latency request latency",
     },
     "get_hit": {
         "file": "get_hit_latency_ms.json",
@@ -58,12 +58,69 @@ LATENCY_METRICS = {
     "disk_write": {
         "file": "disk_write_latency_ms.json",
         "label": "Disk Write",
+    },
+    "get_response": {
+        "file": "get_response_latency_ms.json",
+        "label": "Response latency",
     }
 }
 
 # ============================================================================
 # DATA PARSING FUNCTIONS
 # ============================================================================
+
+def find_eviction_start_time(run_path, threshold=0.98):
+    """
+    Find the timestamp when eviction begins.
+
+    Eviction starts when usage first crosses a high threshold (default 98%).
+    This threshold-based approach is more robust and consistent across different
+    workload types compared to detecting the first decrease.
+
+    Args:
+        run_path: Path to run directory containing usage_percentage.json
+        threshold: Usage percentage threshold (0.0-1.0) to detect eviction start (default: 0.98)
+
+    Returns:
+        float: Unix timestamp when eviction starts, or None if no data available
+    """
+    usage_file = run_path / "usage_percentage.json"
+
+    if not usage_file.exists():
+        return None
+
+    # Load usage_percentage data
+    try:
+        timestamps, usage_values = data_cache.load_metric_data(
+            usage_file,
+            filter_minutes=None,  # Don't filter, we need all data
+            use_cache=True
+        )
+    except Exception as e:
+        return None
+
+    if len(usage_values) == 0:
+        return None
+
+    # Find first time usage crosses threshold
+    above_threshold = np.where(usage_values >= threshold)[0]
+
+    if len(above_threshold) > 0:
+        eviction_start_index = above_threshold[0]
+        eviction_start_time = timestamps[eviction_start_index]
+        return eviction_start_time
+
+    # Threshold never reached, find where we reach maximum instead
+    max_val = usage_values.max()
+    first_max_idx = np.where(usage_values >= max_val)[0]
+
+    if len(first_max_idx) > 0:
+        eviction_start_index = first_max_idx[0]
+        eviction_start_time = timestamps[eviction_start_index]
+        return eviction_start_time
+
+    return None
+
 
 def parse_directory_name(dirname):
     """
@@ -198,7 +255,8 @@ def calculate_statistics(data):
     }
 
 
-def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=None):
+def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=None,
+                      eviction_start_time=None):
     """
     Load metric data and calculate statistics.
 
@@ -207,6 +265,7 @@ def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=No
         metric_file: Name of metric file to load
         filter_minutes: Number of minutes to exclude from end of run
         sample_size: If provided, sample every Nth line from JSON files
+        eviction_start_time: If provided, only include data from this timestamp onward
 
     Returns:
         dict: Statistics dict or None if file doesn't exist
@@ -222,6 +281,11 @@ def load_metric_stats(run_path, metric_file, filter_minutes=None, sample_size=No
         use_cache=True,
         sample_size=sample_size
     )
+
+    # Filter from eviction start if requested
+    if eviction_start_time is not None and len(ts) > 0:
+        mask = ts >= eviction_start_time
+        vals = vals[mask]
 
     return calculate_statistics(vals)
 
@@ -274,7 +338,7 @@ def format_chunk_size(size_bytes):
 
 
 def generate_latex_table(runs, chunk_sizes, distributions, ratios, eviction_type, metric_key,
-                         output_file, filter_minutes=None, sample_size=None):
+                         output_file, filter_minutes=None, sample_size=None, from_eviction_start=False):
     """
     Generate LaTeX table comparing ZNS and Block latencies across configurations.
 
@@ -288,10 +352,13 @@ def generate_latex_table(runs, chunk_sizes, distributions, ratios, eviction_type
         output_file: Output file path for LaTeX table
         filter_minutes: Number of minutes to exclude from end of run
         sample_size: If provided, sample every Nth line from JSON files
+        from_eviction_start: If True, only include data from when eviction begins (98% usage threshold)
     """
     print("\nGenerating latency comparison matrix table...")
     if filter_minutes:
         print(f"  Excluding last {filter_minutes} minutes of data...")
+    if from_eviction_start:
+        print(f"  Filtering data from eviction start (98% usage threshold)...")
 
     # Get metric configuration
     metric_config = LATENCY_METRICS[metric_key]
@@ -329,8 +396,18 @@ def generate_latex_table(runs, chunk_sizes, distributions, ratios, eviction_type
 
                     if matching_run:
                         print(f"  Loading {device} - {format_chunk_size(chunk_size)} - {distribution} - R={ratio}...")
+
+                        # Find eviction start time if filtering is enabled
+                        eviction_start_time = None
+                        if from_eviction_start:
+                            eviction_start_time = find_eviction_start_time(matching_run["path"])
+                            if eviction_start_time:
+                                print(f"    Eviction detected at timestamp {eviction_start_time}")
+                            else:
+                                print(f"    Warning: Could not detect eviction start, using all data")
+
                         stats = load_metric_stats(matching_run["path"], metric_file,
-                                                filter_minutes, sample_size)
+                                                filter_minutes, sample_size, eviction_start_time)
                         data[chunk_size][distribution][ratio][device] = stats
                     else:
                         print(f"  Warning: No run found for {device} - {format_chunk_size(chunk_size)} - {distribution} - R={ratio}")
@@ -343,13 +420,16 @@ def generate_latex_table(runs, chunk_sizes, distributions, ratios, eviction_type
         # Write table header
         f.write("\\begin{table}[htbp]\n")
         f.write("\\centering\n")
-        f.write(f"\\caption{{Latency statistics for Zone LRU and Chunk LRU eviction policies. Each entry reports ZNS / block-interface latency, with the percentage indicating the relative change when using the block-interface device. (ms)}}\n")
-        f.write("\\label{tab:latency_comparison_matrix}\n")
+        f.write(f"\\caption{{{metric_config["label"]} statistics for {eviction_label} eviction policy. Each entry reports ZNS / block-interface latency, with the percentage indicating the relative change when using the block-interface device. (ms)}}\n")
+        f.write(f"\\label{{tab:latency_comparison_matrix_{metric_key}_{eviction_type}}}\n")
 
         # Number of columns: Statistic + (distributions × ratios)
         num_data_cols = len(distributions_normalized) * len(ratios)
         num_cols = 1 + num_data_cols
         col_spec = "|l|" + "c|" * num_data_cols
+
+        # Add resizebox to scale table to page width
+        f.write("\\resizebox{\\textwidth}{!}{%\n")
         f.write(f"\\begin{{tabular}}{{{col_spec}}}\n")
         f.write("\\hline\n")
 
@@ -411,9 +491,54 @@ def generate_latex_table(runs, chunk_sizes, distributions, ratios, eviction_type
 
         # Close table
         f.write("\\end{tabular}\n")
+        f.write("}%\n")  # Close resizebox
         f.write("\\end{table}\n")
 
     print(f"Saved: {output_file}")
+
+    # Calculate and print summary statistics
+    print("\n" + "="*80)
+    print("SUMMARY STATISTICS")
+    print("="*80)
+
+    all_increases = []
+    stat_increases = {'max': [], 'median': [], 'mean': [], 'p99': []}
+
+    for chunk_size in chunk_sizes:
+        for distribution in distributions_normalized:
+            for ratio in ratios:
+                zns_stats = data[chunk_size][distribution][ratio].get("ZNS")
+                block_stats = data[chunk_size][distribution][ratio].get("Block")
+
+                if zns_stats and block_stats:
+                    for stat_key in ['max', 'median', 'mean', 'p99']:
+                        zns_val = zns_stats[stat_key]
+                        block_val = block_stats[stat_key]
+
+                        if zns_val is not None and block_val is not None and zns_val > 0:
+                            increase = ((block_val - zns_val) / zns_val) * 100
+                            all_increases.append(increase)
+                            stat_increases[stat_key].append(increase)
+
+    if all_increases:
+        print(f"\nOverall latency increase (Block vs ZNS):")
+        print(f"  Average increase: {np.mean(all_increases):.1f}%")
+        print(f"  Median increase:  {np.median(all_increases):.1f}%")
+        print(f"  Min increase:     {np.min(all_increases):.1f}%")
+        print(f"  Max increase:     {np.max(all_increases):.1f}%")
+
+        print(f"\nBreakdown by statistic type:")
+        for stat_name, increases in stat_increases.items():
+            if increases:
+                print(f"  {stat_name.upper():8s}: avg={np.mean(increases):6.1f}%, "
+                      f"min={np.min(increases):6.1f}%, max={np.max(increases):6.1f}%")
+
+        print(f"\nTotal comparisons: {len(all_increases)}")
+        print(f"Configurations: {len(chunk_sizes)} chunk sizes × {len(distributions_normalized)} distributions × {len(ratios)} ratios")
+    else:
+        print("\nNo valid comparisons found to calculate summary statistics.")
+
+    print("="*80)
 
 
 # ============================================================================
@@ -479,6 +604,11 @@ def main():
         default=None,
         help='Exclude last N minutes of data from each run (use 0 for no filtering)'
     )
+    parser.add_argument(
+        '--from-eviction-start',
+        action='store_true',
+        help='Only include latency data from when eviction begins (detected by 98%% usage threshold)'
+    )
 
     args = parser.parse_args()
 
@@ -492,7 +622,8 @@ def main():
 
     # Generate LaTeX table
     generate_latex_table(runs, args.chunk_sizes, args.distributions, args.ratios,
-                        args.eviction, args.metric, args.output_file, filter_min, args.sample)
+                        args.eviction, args.metric, args.output_file, filter_min, args.sample,
+                        args.from_eviction_start)
 
     print("\nLatency comparison matrix table generated successfully!")
     return 0
