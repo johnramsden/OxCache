@@ -381,7 +381,7 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
 
         # Configure Y-axis
         ax.set_yticks(y_ticks)
-        ax.set_yticklabels(y_labels, fontsize=15)
+        ax.set_yticklabels(y_labels, fontsize=15, rotation=45)
 
         # Configure X-axis - use fewer ticks to avoid overlap
         ax.set_xlabel("Hit Ratio (%)", fontsize=13)
@@ -506,9 +506,9 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
             )
 
     # Add legend at bottom center (below both subplots)
-    fig.legend(handles=legend_handles, loc='lower center', fontsize=10,
-              ncol=4, frameon=True, fancybox=True, shadow=True,
-              bbox_to_anchor=(0.5, 0.01), columnspacing=1.0)
+    fig.legend(handles=legend_handles, loc='lower center', fontsize=14,
+              ncol=2, frameon=True, fancybox=True, shadow=True,
+              bbox_to_anchor=(0.5, -0.08), columnspacing=1.0)
 
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"Saved: {output_file}")
