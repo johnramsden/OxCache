@@ -404,6 +404,8 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
     # Configure subplot
     # ax.set_xlabel("64KiB", fontsize=28, weight='bold')
     ax.set_ylabel('Cumulative Probability (%)', fontsize=25)
+    # Manually position the y-axis label lower
+    ax.yaxis.set_label_coords(-0.3, 0.3)
     ax.set_ylim(0, 100)
 
     # Configure x-axis scale
@@ -464,7 +466,7 @@ def generate_ecdf(block_dir, zns_dir, output_file, metric_type="get_total", samp
         Line2D([0], [0], color='#f781bf', linestyle='--', linewidth=LINE_WIDTH,
                label='Block (Chunk LRU)', alpha=0.8),
     ]
-    fig.legend(ncols=4, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.09),
+    fig.legend(ncols=2, handles=legend_lines, bbox_to_anchor=(subplot_center, -0.15),
                loc='center', fontsize="large", columnspacing=2.0, frameon=False)
 
     # Add a background box for the x-axis label to make it stand out
