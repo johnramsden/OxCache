@@ -47,6 +47,14 @@ DISTRIBUTION_HATCHES = {
 # Ratios to include
 RATIOS = [2, 10]
 
+# Hit ratio ranges per (distribution, ratio) for annotation
+HIT_RATIO_RANGES = {
+    ("ZIPFIAN", 2):  "~84\u201390%",
+    ("ZIPFIAN", 10): "~64\u201381%",
+    ("UNIFORM", 2):  "~45\u201351%",
+    ("UNIFORM", 10): "~9\u201310%",
+}
+
 # Device name mappings
 DEVICE_MAPPINGS = {
     "nvme0n2": "ZNS",
@@ -375,7 +383,9 @@ def generate_boxplot(block_dir, zns_dir, eviction_type, metric, output_file, sam
 
                 # Add ratio label above boxes
                 ylim = axes[idx].get_ylim()
-                axes[idx].text(1.5, ylim[1], f"Ratio: 1:{ratio}",
+                hr_range = HIT_RATIO_RANGES.get((distribution, ratio), "")
+                hr_suffix = f" | Hit-ratio: {hr_range}" if hr_range else ""
+                axes[idx].text(1.5, ylim[1], f"Ratio: 1:{ratio}{hr_suffix}",
                              ha='center', va='bottom', fontsize=18, weight='bold')
 
                 # Rotate y-axis labels

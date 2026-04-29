@@ -40,6 +40,14 @@ CHUNK_SIZE_LABELS = {
 # Ratios
 RATIOS = [2, 10]
 
+# Hit ratio ranges per (distribution, ratio) for annotation
+HIT_RATIO_RANGES = {
+    ("ZIPFIAN", 2):  "~84\u201390%",
+    ("ZIPFIAN", 10): "~64\u201381%",
+    ("UNIFORM", 2):  "~45\u201351%",
+    ("UNIFORM", 10): "~9\u201310%",
+}
+
 # Eviction types
 EVICTION_TYPES = ["promotional", "chunk"]  # Zone-LRU, Chunk-LRU
 
@@ -503,10 +511,15 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
     )
 
     # Centered text in each box
+    hr_r2  = HIT_RATIO_RANGES.get((distribution, 2), "")
+    hr_r10 = HIT_RATIO_RANGES.get((distribution, 10), "")
+    label_r2  = f"Ratio: 1:2 | Hit-ratio: {hr_r2}"  if hr_r2  else "Ratio: 1:2"
+    label_r10 = f"Ratio: 1:10 | Hit-ratio: {hr_r10}" if hr_r10 else "Ratio: 1:10"
+
     fig.text(
         g1_left + g1_width / 2,
         box_y + box_h / 2,
-        "Ratio: 1:2",
+        label_r2,
         ha='center',
         va='center',
         fontsize=26,
@@ -516,7 +529,7 @@ def generate_distribution_comparison(block_dir, zns_dir, distribution, metric, o
     fig.text(
         g2_left + g2_width / 2,
         box_y + box_h / 2,
-        "Ratio: 1:10",
+        label_r10,
         ha='center',
         va='center',
         fontsize=26,
