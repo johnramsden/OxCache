@@ -67,7 +67,7 @@ mkdir -p "$OUTPUT_DIR"
 check_split_data() {
     local dir="$1"
     local name="$2"
-    
+
     if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
         echo "❌ $name split data not found or empty"
         return 1
@@ -82,7 +82,7 @@ split_data_if_needed() {
     local source_dir="$1"
     local split_dir="$2"
     local name="$3"
-    
+
     if ! check_split_data "$split_dir" "$name"; then
         echo "📊 Splitting $name data..."
         python3 split_data_fast.py "$source_dir"
@@ -111,94 +111,94 @@ echo "===================================="
 
 echo "📈 Generating BLOCK-PROMO individual plots..."
 
-# Throughput plots
-python plot_throughput.py "$BLOCK_SPLIT_DIR" \
-   --bucket-seconds $BUCKET_SECONDS \
-   --output-dir "${OUTPUT_DIR}/block_individual" \
-   --metrics bytes_total written_bytes_total \
-   --mark-device-fill
+# # Throughput plots
+# python plot_throughput.py "$BLOCK_SPLIT_DIR" \
+#    --bucket-seconds $BUCKET_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/block_individual" \
+#    --metrics bytes_total written_bytes_total \
+#    --mark-device-fill
+# #
+# # Raw latency plots
+# python plot_latency.py "$BLOCK_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/block_individual" \
+#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
+
+# # Smoothed latency plots
+# python plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
+#    --window-seconds $WINDOW_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/block_individual" \
+#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
+#    --mark-device-fill
+
+# # Hit ratio plots
+# python plot_hitratio.py "$BLOCK_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/block_individual"
+
+# echo "✅ BLOCK-PROMO individual plots completed"
+
+# echo "📈 Generating ZONED-PROMO individual plots..."
+# #
+# # Throughput plots
+# python plot_throughput.py "$ZONED_SPLIT_DIR" \
+#    --bucket-seconds $BUCKET_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/zoned_individual" \
+#    --metrics bytes_total written_bytes_total read_bytes_total \
+#    --mark-device-fill
+
+# # Raw latency plots
+# python plot_latency.py "$ZONED_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/zoned_individual" \
+#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
+
+# # Smoothed latency plots
+# python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" \
+#    --window-seconds $WINDOW_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/zoned_individual" \
+#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
+#    --mark-device-fill
+
+# # Hit ratio plots
+# python plot_hitratio.py "$ZONED_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/zoned_individual"
+
+# echo "✅ ZONED-PROMO individual plots completed"
+
+# echo ""
+
+#  Step 3: Generate comparison plots
+# echo "Step 3: Generating comparison plots"
+# echo "===================================="
+
+# echo "📊 Generating comparison plots (Block vs ZNS)..."
+
+# # Throughput comparison plots
+# python plot_throughput.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
+#    --bucket-seconds $BUCKET_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/comparison" \
+#    --metrics bytes_total written_bytes_total read_bytes_total \
+#    --mark-device-fill
+
+# # Smoothed latency comparison plots
+# python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
+#    --window-seconds $WINDOW_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/comparison" \
+#    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms \
+#    --mark-device-fill
+
+# # Hit ratio comparison plots
+# python plot_hitratio.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
+#    --output-dir "${OUTPUT_DIR}/comparison"
+
+## Distribution comparison boxplots
+#python distribution_comparison_boxplots.py \
+#    --block-dir "$BLOCK_DIR" \
+#    --zns-dir "$ZONED_DIR" \
+#    --output-dir "${OUTPUT_DIR}/comparison/boxplot-fill" \
+#    --common-y-scale
 #
-# Raw latency plots
-python plot_latency.py "$BLOCK_SPLIT_DIR" \
-   --output-dir "${OUTPUT_DIR}/block_individual" \
-   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
-
-# Smoothed latency plots
-python plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
-   --window-seconds $WINDOW_SECONDS \
-   --output-dir "${OUTPUT_DIR}/block_individual" \
-   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
-   --mark-device-fill
-
-# Hit ratio plots
-python plot_hitratio.py "$BLOCK_SPLIT_DIR" \
-   --output-dir "${OUTPUT_DIR}/block_individual"
-
-echo "✅ BLOCK-PROMO individual plots completed"
-
-echo "📈 Generating ZONED-PROMO individual plots..."
-
-# Throughput plots
-python plot_throughput.py "$ZONED_SPLIT_DIR" \
-   --bucket-seconds $BUCKET_SECONDS \
-   --output-dir "${OUTPUT_DIR}/zoned_individual" \
-   --metrics bytes_total  written_bytes_total \
-   --mark-device-fill
-
-# Raw latency plots
-python plot_latency.py "$ZONED_SPLIT_DIR" \
-   --output-dir "${OUTPUT_DIR}/zoned_individual" \
-   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
-
-# Smoothed latency plots
-python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" \
-   --window-seconds $WINDOW_SECONDS \
-   --output-dir "${OUTPUT_DIR}/zoned_individual" \
-   --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
-   --mark-device-fill
-
-# Hit ratio plots
-python plot_hitratio.py "$ZONED_SPLIT_DIR" \
-   --output-dir "${OUTPUT_DIR}/zoned_individual"
-
-echo "✅ ZONED-PROMO individual plots completed"
-
-echo ""
-
-# Step 3: Generate comparison plots
-echo "Step 3: Generating comparison plots"
-echo "===================================="
-
-echo "📊 Generating comparison plots (Block vs ZNS)..."
-
-# Throughput comparison plots
-python plot_throughput.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-   --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
-   --bucket-seconds $BUCKET_SECONDS \
-   --output-dir "${OUTPUT_DIR}/comparison" \
-   --metrics bytes_total written_bytes_total read_bytes_total \
-   --mark-device-fill
-
-# Smoothed latency comparison plots
-python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-   --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
-   --window-seconds $WINDOW_SECONDS \
-   --output-dir "${OUTPUT_DIR}/comparison" \
-   --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms \
-   --mark-device-fill
-
-# Hit ratio comparison plots
-python plot_hitratio.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-   --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
-   --output-dir "${OUTPUT_DIR}/comparison"
-
-# Distribution comparison boxplots
-python distribution_comparison_boxplots.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/boxplot-fill" \
-    --common-y-scale
-
 python distribution_comparison_boxplots.py \
     --block-dir "$BLOCK_DIR" \
     --zns-dir "$ZONED_DIR" \
@@ -207,85 +207,54 @@ python distribution_comparison_boxplots.py \
     --from-eviction-start
 
 # Hit ratio horizontal bar charts
-python hitratio_horizontal_bars_combined.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison"
+#python hitratio_horizontal_bars_combined.py \
+#    --block-dir "$BLOCK_DIR" \
+#    --zns-dir "$ZONED_DIR" \
+#    --output-dir "${OUTPUT_DIR}/comparison"
 
 # ecdfs lat - split by distribution to avoid memory issues
 
-# Fill phase (whole run)
-echo "📊 Generating ECDF plots for fill phase..."
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
-    --log-scale \
-    --metric disk_write \
-    --distribution ZIPFIAN
-
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
-    --log-scale \
-    --metric disk_write \
-    --distribution UNIFORM
+#echo "📊 Generating ECDF plots..."
+#ECDF_METRICS="get_total get_response disk_write disk_read"
 #
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
-    --log-scale \
-    --metric disk_read \
-    --distribution ZIPFIAN
-
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
-    --log-scale \
-    --metric disk_read \
-    --distribution UNIFORM
-
-# Eviction phase (from eviction start)
-echo "📊 Generating ECDF plots for eviction phase..."
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
-    --log-scale \
-    --metric disk_write \
-    --from-eviction-start \
-    --distribution ZIPFIAN
-
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
-    --log-scale \
-    --metric disk_write \
-    --from-eviction-start \
-    --distribution UNIFORM
-
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
-    --log-scale \
-    --metric disk_read \
-    --from-eviction-start \
-    --distribution ZIPFIAN
-
-python distribution_comparison_ecdfs.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZONED_DIR" \
-    --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
-    --log-scale \
-    --metric disk_read \
-    --from-eviction-start \
-    --distribution UNIFORM
-
+#for m in $ECDF_METRICS; do
+#    # Fill phase (whole run)
+##    python distribution_comparison_ecdfs.py \
+##        --block-dir "$BLOCK_DIR" \
+##        --zns-dir "$ZONED_DIR" \
+##        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
+##        --log-scale \
+##        --metric $m \
+##        --distribution ZIPFIAN
+##
+##    python distribution_comparison_ecdfs.py \
+##        --block-dir "$BLOCK_DIR" \
+##        --zns-dir "$ZONED_DIR" \
+##        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
+##        --log-scale \
+##        --metric $m \
+##        --distribution UNIFORM
+#
+#    # Eviction phase (from eviction start)
+#
+#    python distribution_comparison_ecdfs.py \
+#        --block-dir "$BLOCK_DIR" \
+#        --zns-dir "$ZONED_DIR" \
+#        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
+#        --log-scale \
+#        --metric $m \
+#        --from-eviction-start \
+#        --distribution ZIPFIAN
+#
+#    python distribution_comparison_ecdfs.py \
+#        --block-dir "$BLOCK_DIR" \
+#        --zns-dir "$ZONED_DIR" \
+#        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
+#        --log-scale \
+#        --metric $m \
+#        --from-eviction-start \
+#        --distribution UNIFORM
+#done
 
 echo "✅ Comparison plots completed"
 
@@ -307,55 +276,103 @@ DISTRIBUTIONS="zipfian uniform"
 # Ratios to include
 RATIOS="2 10"
 
-# Generate disk_read tables for both eviction types
-echo "  - Generating disk_read Zone LRU matrix table..."
-python3 latency_table_matrix.py \
-    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-    --chunk-sizes $CHUNK_SIZES \
-    --distributions $DISTRIBUTIONS \
-    --ratios $RATIOS \
-    --eviction promotional \
-    --metric disk_read \
-    --output-file "${OUTPUT_DIR}/tables/disk_read_zone_lru_matrix.tex" \
-    --filter-minutes 5
-
-echo "  - Generating disk_read Chunk LRU matrix table..."
-python3 latency_table_matrix.py \
-    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-    --chunk-sizes $CHUNK_SIZES \
-    --distributions $DISTRIBUTIONS \
-    --ratios $RATIOS \
-    --eviction chunk \
-    --metric disk_read \
-    --output-file "${OUTPUT_DIR}/tables/disk_read_chunk_lru_matrix.tex" \
-    --filter-minutes 5
-
-# Generate disk_write tables for both eviction types
-echo "  - Generating disk_write Zone LRU matrix table..."
-python3 latency_table_matrix.py \
-    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-    --chunk-sizes $CHUNK_SIZES \
-    --distributions $DISTRIBUTIONS \
-    --ratios $RATIOS \
-    --eviction promotional \
-    --metric disk_write \
-    --output-file "${OUTPUT_DIR}/tables/disk_write_zone_lru_matrix.tex" \
-    --filter-minutes 5
-
-echo "  - Generating disk_write Chunk LRU matrix table..."
-python3 latency_table_matrix.py \
-    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-    --chunk-sizes $CHUNK_SIZES \
-    --distributions $DISTRIBUTIONS \
-    --ratios $RATIOS \
-    --eviction chunk \
-    --metric disk_write \
-    --output-file "${OUTPUT_DIR}/tables/disk_write_chunk_lru_matrix.tex" \
-    --filter-minutes 5
-
-echo "✅ Latency comparison matrix tables completed"
-
-echo ""
+## Generate disk_read tables for both eviction types
+#echo "  - Generating disk_read Zone LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction promotional \
+#    --metric disk_read \
+#    --output-file "${OUTPUT_DIR}/tables/disk_read_zone_lru_matrix.tex" \
+#    --filter-minutes 5
+#
+#echo "  - Generating disk_read Chunk LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction chunk \
+#    --metric disk_read \
+#    --output-file "${OUTPUT_DIR}/tables/disk_read_chunk_lru_matrix.tex" \
+#    --filter-minutes 5
+#
+## Generate disk_write tables for both eviction types
+#echo "  - Generating disk_write Zone LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction promotional \
+#    --metric disk_write \
+#    --output-file "${OUTPUT_DIR}/tables/disk_write_zone_lru_matrix.tex" \
+#    --filter-minutes 5
+#
+#echo "  - Generating disk_write Chunk LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction chunk \
+#    --metric disk_write \
+#    --output-file "${OUTPUT_DIR}/tables/disk_write_chunk_lru_matrix.tex" \
+#    --filter-minutes 5
+#
+#echo "  - Generating get_response Chunk LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction chunk \
+#    --metric get_response \
+#    --output-file "${OUTPUT_DIR}/tables/get_response_chunk_lru_matrix.tex" \
+#    --from-eviction-start \
+#    --filter-minutes 5
+#
+#echo "  - Generating get_response Chunk LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction promotional \
+#    --metric get_response \
+#    --output-file "${OUTPUT_DIR}/tables/get_response_zone_lru_matrix.tex" \
+#    --from-eviction-start \
+#    --filter-minutes 5
+#
+#echo "  - Generating get_total Chunk LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction chunk \
+#    --metric get_total \
+#    --output-file "${OUTPUT_DIR}/tables/get_total_chunk_lru_matrix.tex" \
+#    --from-eviction-start \
+#    --filter-minutes 5
+#
+#echo "  - Generating get_total Chunk LRU matrix table..."
+#python3 latency_table_matrix.py \
+#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+#    --chunk-sizes $CHUNK_SIZES \
+#    --distributions $DISTRIBUTIONS \
+#    --ratios $RATIOS \
+#    --eviction promotional \
+#    --metric get_total \
+#    --output-file "${OUTPUT_DIR}/tables/get_total_zone_lru_matrix.tex" \
+#    --from-eviction-start \
+#    --filter-minutes 5
+#
+#echo "✅ Latency comparison matrix tables completed"
+#
+#echo ""
 
 # Step 5: Summary
 echo "Step 5: Generation Summary"
