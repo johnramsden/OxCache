@@ -316,15 +316,15 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
         return
 
     # Calculate figure dimensions - half width, adjusted height to prevent overlap
-    fig_height = max(6, max_configs * 0.7)  # Increased from 0.4 to 0.7 for more vertical space
+    fig_height = max(8, max_configs * 1.8)
     fig_width = 8  # Half the original width
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height), sharey=False)
 
-    # Bar dimensions and spacing - original thickness for readability
-    bar_height = 0.15  # Original thickness
-    group_spacing = 1.0  # Original spacing
-    bar_spacing = 0.02  # Original spacing
+    # Bar dimensions and spacing - expanded to fit text labels
+    bar_height = 0.25
+    group_spacing = 0.4
+    bar_spacing = 0.05
 
     # Plot for each distribution
     axes = [ax1, ax2]
@@ -343,41 +343,42 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
         y_labels = []
 
         # Draw bars (reversed for proper display order)
+        y_base = 0
         for i, config in enumerate(reversed(distribution_data)):
-            y_base = i * group_spacing
-
-            # Extract values (may be None)
-            # Order: ZNS promotional, Block promotional, ZNS chunk, Block chunk
-            values_and_labels = [
+            # Extract only present values (skip None)
+            all_values = [
                 (config.get("zns_promotional"), "ZNS", "promotional"),
                 (config.get("block_promotional"), "Block", "promotional"),
                 (config.get("zns_chunk"), "ZNS", "chunk"),
                 (config.get("block_chunk"), "Block", "chunk"),
             ]
+            valid = [(v, d, e) for v, d, e in all_values if v is not None]
+            n_valid = len(valid)
 
-            # Draw each bar if value exists
-            for j, (value, device, eviction) in enumerate(values_and_labels):
-                if value is not None:
-                    y_pos = y_base + j * (bar_height + bar_spacing)
-                    color = BAR_COLORS[device]
-                    hatch = BAR_HATCHES[eviction]
+            for valid_j, (value, device, eviction) in enumerate(valid):
+                y_pos = y_base + valid_j * (bar_height + bar_spacing)
+                color = BAR_COLORS[device]
+                hatch = BAR_HATCHES[eviction]
 
-                    ax.barh(y_pos, value * 100, height=bar_height,
-                           color=color, hatch=hatch, edgecolor='black', linewidth=0.5, alpha=0.99)
+                ax.barh(y_pos, value * 100, height=bar_height,
+                       color=color, hatch=hatch, edgecolor='black', linewidth=0.5, alpha=0.99)
 
-                    # Add percentage label to the right of the bar
-                    percentage = value * 100
-                    text_x = percentage + 1.5
-                    ax.text(text_x, y_pos, f'{percentage:.1f}%',
-                           va='center', ha='left', fontsize=7, color='black')
+                # Add percentage label to the right of the bar
+                percentage = value * 100
+                text_x = percentage + 1.5
+                ax.text(text_x, y_pos, f'{percentage:.1f}%',
+                       va='center', ha='left', fontsize=15, color='black')
 
-            # Y-tick at center of the 4-bar group
-            y_center = y_base + 1.5 * (bar_height + bar_spacing)
+            # Y-tick at center of this group's actual bars
+            y_center = y_base + (n_valid - 1) / 2 * (bar_height + bar_spacing)
             y_ticks.append(y_center)
 
             # Format label: just chunk size (ratio shown in box on left)
             chunk_label = CHUNK_SIZE_LABELS[config["chunk_size"]]
             y_labels.append(chunk_label)
+
+            # Advance y_base by actual group height + inter-group gap
+            y_base += n_valid * (bar_height + bar_spacing) + group_spacing
 
         # Configure Y-axis
         ax.set_yticks(y_ticks)
@@ -385,7 +386,7 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
 
         # Configure X-axis - use fewer ticks to avoid overlap
         ax.set_xlabel("Hit Ratio (%)", fontsize=13)
-        ax.set_xlim(0, 105)  # Extended to give room for labels
+        ax.set_xlim(0, 125)  # Extended to give room for labels
         ax.set_xticks(range(0, 101, 20))  # Every 20% instead of 10%
         ax.grid(axis='x', alpha=0.3, linestyle='--')
 
@@ -508,7 +509,7 @@ def create_combined_horizontal_bar_chart(data_by_distribution, output_file):
     # Add legend at bottom center (below both subplots)
     fig.legend(handles=legend_handles, loc='lower center', fontsize=14,
               ncol=2, frameon=True, fancybox=True, shadow=True,
-              bbox_to_anchor=(0.5, -0.08), columnspacing=1.0)
+              bbox_to_anchor=(0.5, 0.01), columnspacing=1.0)
 
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"Saved: {output_file}")

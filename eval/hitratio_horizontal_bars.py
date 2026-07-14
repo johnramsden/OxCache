@@ -355,7 +355,7 @@ def create_horizontal_bar_chart(distribution_data, distribution_name, output_fil
                 percentage = value * 100
                 text_x = percentage + 1
                 ax.text(text_x, y_pos, f'{percentage:.1f}%',
-                       va='center', ha='left', fontsize=8, color='black')
+                       va='center', ha='left', fontsize=28, color='black')
 
         # Y-tick at center of the 4-bar group
         y_center = y_base + 1.5 * (bar_height + bar_spacing)

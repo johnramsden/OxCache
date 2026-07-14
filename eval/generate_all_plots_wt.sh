@@ -91,183 +91,196 @@ echo "Step 2: Generating individual plots"
 echo "===================================="
 
 echo "📈 Generating Block WT individual plots..."
-
-# Throughput plots
-python3 plot_throughput.py "$BLOCK_SPLIT_DIR" \
-    --bucket-seconds $BUCKET_SECONDS \
-    --output-dir "${OUTPUT_DIR}/block_individual" \
-    --metrics client_request_bytes_total \
-    --mark-device-fill
-
-# Raw latency plots
-python3 plot_latency.py "$BLOCK_SPLIT_DIR" \
-    --output-dir "${OUTPUT_DIR}/block_individual" \
-    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms
-
-# Smoothed latency plots
-python3 plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
-    --window-seconds $WINDOW_SECONDS \
-    --output-dir "${OUTPUT_DIR}/block_individual" \
-    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
-    --mark-device-fill
-
-# Hit ratio plots
-python3 plot_hitratio.py "$BLOCK_SPLIT_DIR" \
-    --output-dir "${OUTPUT_DIR}/block_individual"
-
-echo "✅ Block WT individual plots completed"
-
-echo "📈 Generating ZNS WT individual plots..."
-
-# Throughput plots
-python3 plot_throughput.py "$ZNS_SPLIT_DIR" \
-    --bucket-seconds $BUCKET_SECONDS \
-    --output-dir "${OUTPUT_DIR}/zns_individual" \
-    --metrics bytes_total written_bytes_total read_bytes_total client_request_bytes_total \
-    --mark-device-fill
-
-# Raw latency plots
-python3 plot_latency.py "$ZNS_SPLIT_DIR" \
-    --output-dir "${OUTPUT_DIR}/zns_individual" \
-    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms
-
-# Smoothed latency plots
-python3 plot_latency_smoothed.py "$ZNS_SPLIT_DIR" \
-    --window-seconds $WINDOW_SECONDS \
-    --output-dir "${OUTPUT_DIR}/zns_individual" \
-    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
-    --mark-device-fill
-
-# Hit ratio plots
-python3 plot_hitratio.py "$ZNS_SPLIT_DIR" \
-    --output-dir "${OUTPUT_DIR}/zns_individual"
-
-echo "✅ ZNS WT individual plots completed"
-
-echo ""
-
-# Step 3: Generate comparison plots
-echo "Step 3: Generating comparison plots"
-echo "===================================="
-
-echo "📊 Generating comparison plots (Block vs ZNS)..."
-
-# Throughput comparison plots
-python3 plot_throughput.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
-    --bucket-seconds $BUCKET_SECONDS \
-    --output-dir "${OUTPUT_DIR}/comparison" \
-    --metrics written_bytes_total read_bytes_total client_request_bytes_total \
-    --mark-device-fill
-
-# Smoothed latency comparison plots
-python3 plot_latency.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
-    --output-dir "${OUTPUT_DIR}/comparison" \
-    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
-    --mark-device-fill
 #
-# Smoothed latency comparison plots
-python3 plot_latency_smoothed.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
-    --window-seconds $WINDOW_SECONDS \
-    --output-dir "${OUTPUT_DIR}/comparison" \
-    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
-    --mark-device-fill
+## Throughput plots
+#python3 plot_throughput.py "$BLOCK_SPLIT_DIR" \
+#    --bucket-seconds $BUCKET_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/block_individual" \
+#    --metrics client_request_bytes_total \
+#    --mark-device-fill
+#
+## Raw latency plots
+#python3 plot_latency.py "$BLOCK_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/block_individual" \
+#    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms
+#
+## Smoothed latency plots
+#python3 plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
+#    --window-seconds $WINDOW_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/block_individual" \
+#    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
+#    --mark-device-fill
+#
+## Hit ratio plots
+#python3 plot_hitratio.py "$BLOCK_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/block_individual"
+#
+#echo "✅ Block WT individual plots completed"
+#
+#echo "📈 Generating ZNS WT individual plots..."
+#
+## Throughput plots
+#python3 plot_throughput.py "$ZNS_SPLIT_DIR" \
+#    --bucket-seconds $BUCKET_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/zns_individual" \
+#    --metrics bytes_total written_bytes_total read_bytes_total client_request_bytes_total \
+#    --mark-device-fill
+#
+## Raw latency plots
+#python3 plot_latency.py "$ZNS_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/zns_individual" \
+#    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms
+#
+## Smoothed latency plots
+#python3 plot_latency_smoothed.py "$ZNS_SPLIT_DIR" \
+#    --window-seconds $WINDOW_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/zns_individual" \
+#    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms \
+#    --mark-device-fill
+#
+## Hit ratio plots
+#python3 plot_hitratio.py "$ZNS_SPLIT_DIR" \
+#    --output-dir "${OUTPUT_DIR}/zns_individual"
+#
+#echo "✅ ZNS WT individual plots completed"
+#
+#echo ""
+#
+## Step 3: Generate comparison plots
+#echo "Step 3: Generating comparison plots"
+#echo "===================================="
+#
+#echo "📊 Generating comparison plots (Block vs ZNS)..."
+#
+## Throughput comparison plots
+#python3 plot_throughput.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
+#    --bucket-seconds $BUCKET_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/comparison" \
+#    --metrics written_bytes_total read_bytes_total client_request_bytes_total \
+#    --mark-device-fill
 
-# Hit ratio comparison plots
-python3 plot_hitratio.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
-    --output-dir "${OUTPUT_DIR}/comparison"
+## Smoothed latency comparison plots
+#python3 plot_latency.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
+#    --output-dir "${OUTPUT_DIR}/comparison" \
+#    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms get_total_latency_ms \
+#    --mark-device-fill
+##
+## Smoothed latency comparison plots
+#python3 plot_latency_smoothed.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
+#    --window-seconds $WINDOW_SECONDS \
+#    --output-dir "${OUTPUT_DIR}/comparison" \
+#    --metrics disk_write_latency_ms disk_read_latency_ms get_response_latency_ms get_total_latency_ms \
+#    --mark-device-fill
+#
+## Hit ratio comparison plots
+#python3 plot_hitratio.py "$ZNS_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
+#    --labels "$ZNS_LABEL" "$BLOCK_LABEL" \
+#    --output-dir "${OUTPUT_DIR}/comparison"
+#
+#echo "✅ Comparison plots completed"
+#
+#echo ""
+#
+## Step 4: Generate boxplots
+#echo "Step 4: Generating boxplots"
+#echo "============================"
+#
+## Throughput boxplots - fill phase (whole run)
+#echo "📊 Generating WT throughput boxplots (fill phase)..."
+#./boxplot_wt.py \
+#    --block-dir "$BLOCK_DIR" \
+#    --zns-dir "$ZNS_DIR" \
+#    --output-dir "${OUTPUT_DIR}/boxplot-fill"
+#
+#echo "✅ Fill phase boxplots completed"
+#
+## Throughput boxplots - eviction phase (from eviction start)
+#echo "📊 Generating WT throughput boxplots (eviction phase)..."
+#./boxplot_wt.py \
+#    --block-dir "$BLOCK_DIR" \
+#    --zns-dir "$ZNS_DIR" \
+#    --output-dir "${OUTPUT_DIR}/boxplot-nofill" \
+#    --from-eviction-start
+#
+#echo "✅ Eviction phase boxplots completed"
+#
+#echo ""
+#
+## Step 5: Generate ECDF plots
+#echo "Step 5: Generating ECDF plots"
+#echo "=============================="
+#
+### ECDF plots for different latency metrics
+#LATENCY_METRICS=("get_total" "disk_read" "disk_write" "get_response_latency_ms")
+#
+## Fill phase (whole run)
+#echo "📊 Generating ECDF plots for fill phase..."
+#for metric in "${LATENCY_METRICS[@]}"; do
+#    echo "  - Generating ${metric} ECDF (fill phase)..."
+#    ./ecdf_wt.py \
+#        --block-dir "$BLOCK_DIR" \
+#        --zns-dir "$ZNS_DIR" \
+#        --output-dir "${OUTPUT_DIR}/ecdfs-fill" \
+#        --log-scale \
+#        --metric "$metric"
+#done
+#
+#echo "✅ Fill phase ECDF plots completed"
+#
+## Eviction phase (from eviction start)
+#echo "📊 Generating ECDF plots for eviction phase..."
+#for metric in "${LATENCY_METRICS[@]}"; do
+#    echo "  - Generating ${metric} ECDF (eviction phase)..."
+#    ./ecdf_wt.py \
+#        --block-dir "$BLOCK_DIR" \
+#        --zns-dir "$ZNS_DIR" \
+#        --output-dir "${OUTPUT_DIR}/ecdfs-nofill" \
+#        --log-scale \
+#        --metric "$metric" \
+#        --from-eviction-start
+#done
+#
+#echo "✅ Eviction phase ECDF plots completed"
 
-echo "✅ Comparison plots completed"
+#echo ""
+#
+## Step 6: Generate latency comparison tables
+#echo "Step 6: Generating latency comparison tables"
+#echo "=============================================="
+#
+## Latency metrics for tables
+#TABLE_METRICS=("get_total" "disk_read" "disk_write" "get_response_latency_ms")
+#
+#echo "📊 Generating latency comparison tables (excluding last 5 minutes)..."
+#mkdir -p "${OUTPUT_DIR}/tables"
+#
+#for metric in "${TABLE_METRICS[@]}"; do
+#    echo "  - Generating ${metric} latency table..."
+#    ./latency_table.py \
+#        --block-dir "$BLOCK_DIR" \
+#        --zns-dir "$ZNS_DIR" \
+#        --output-file "${OUTPUT_DIR}/tables/${metric}_latency_table.tex" \
+#        --metric "$metric" \
+#        --filter-minutes 5 \
+#        --from-eviction-start
+#done
+#
+#echo "✅ Latency comparison tables completed"
+#
+#echo ""
 
-echo ""
-
-# Step 4: Generate boxplots
-echo "Step 4: Generating boxplots"
-echo "============================"
-
-# Throughput boxplots - fill phase (whole run)
-echo "📊 Generating WT throughput boxplots (fill phase)..."
-./boxplot_wt.py \
+# Throughput comparison table (ZNS promotional vs Block chunk, from eviction start)
+echo "📊 Generating throughput comparison table..."
+./throughput_table_wt.py \
     --block-dir "$BLOCK_DIR" \
     --zns-dir "$ZNS_DIR" \
-    --output-dir "${OUTPUT_DIR}/boxplot-fill"
+    --output-file "${OUTPUT_DIR}/tables/wt_throughput_table.tex" \
+    --filter-minutes 5
 
-echo "✅ Fill phase boxplots completed"
-
-# Throughput boxplots - eviction phase (from eviction start)
-echo "📊 Generating WT throughput boxplots (eviction phase)..."
-./boxplot_wt.py \
-    --block-dir "$BLOCK_DIR" \
-    --zns-dir "$ZNS_DIR" \
-    --output-dir "${OUTPUT_DIR}/boxplot-nofill" \
-    --from-eviction-start
-
-echo "✅ Eviction phase boxplots completed"
-
-echo ""
-
-# Step 5: Generate ECDF plots
-echo "Step 5: Generating ECDF plots"
-echo "=============================="
-
-# ECDF plots for different latency metrics
-LATENCY_METRICS=("disk_read" "disk_write" "get_response_latency_ms")
-
-# Fill phase (whole run)
-echo "📊 Generating ECDF plots for fill phase..."
-for metric in "${LATENCY_METRICS[@]}"; do
-    echo "  - Generating ${metric} ECDF (fill phase)..."
-    ./ecdf_wt.py \
-        --block-dir "$BLOCK_DIR" \
-        --zns-dir "$ZNS_DIR" \
-        --output-dir "${OUTPUT_DIR}/ecdfs-fill" \
-        --log-scale \
-        --metric "$metric"
-done
-
-echo "✅ Fill phase ECDF plots completed"
-
-# Eviction phase (from eviction start)
-echo "📊 Generating ECDF plots for eviction phase..."
-for metric in "${LATENCY_METRICS[@]}"; do
-    echo "  - Generating ${metric} ECDF (eviction phase)..."
-    ./ecdf_wt.py \
-        --block-dir "$BLOCK_DIR" \
-        --zns-dir "$ZNS_DIR" \
-        --output-dir "${OUTPUT_DIR}/ecdfs-nofill" \
-        --log-scale \
-        --metric "$metric" \
-        --from-eviction-start
-done
-
-echo "✅ Eviction phase ECDF plots completed"
-
-echo ""
-
-# Step 6: Generate latency comparison tables
-echo "Step 6: Generating latency comparison tables"
-echo "=============================================="
-
-# Latency metrics for tables
-TABLE_METRICS=("disk_read" "disk_write" "get_response_latency_ms")
-
-echo "📊 Generating latency comparison tables (excluding last 5 minutes)..."
-mkdir -p "${OUTPUT_DIR}/tables"
-
-for metric in "${TABLE_METRICS[@]}"; do
-    echo "  - Generating ${metric} latency table..."
-    ./latency_table.py \
-        --block-dir "$BLOCK_DIR" \
-        --zns-dir "$ZNS_DIR" \
-        --output-file "${OUTPUT_DIR}/tables/${metric}_latency_table.tex" \
-        --metric "$metric" \
-        --filter-minutes 5
-done
-
-echo "✅ Latency comparison tables completed"
+echo "✅ Throughput comparison table completed"
 
 echo ""
 
