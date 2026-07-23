@@ -21,13 +21,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 usage() {
-    printf "Usage: %s TRACE SPCCONFIGSPACE CONFIGFILE DEVICE\n" "$(basename "$0")"
+    printf "Usage: %s TRACE CONFIGFILE SPCCONFIGSPACE DEVICE\n" "$(basename "$0")"
     exit 1
 }
 
 # Check that exactly 4 positional arguments remain
 if [ "$#" -ne 4 ]; then
-    echo "Illegal number of parameters $#, should be 3"
+    echo "Illegal number of parameters $#, should be 4"
     usage
 fi
 

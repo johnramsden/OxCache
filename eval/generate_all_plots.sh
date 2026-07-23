@@ -1,7 +1,15 @@
 #!/bin/bash
 
-# OxCache Evaluation Plot Generation Script
-# Automates data splitting and plot generation for all metrics
+# OxCache parameter-sweep figure/table generation (SYSTOR '26)
+#
+# Produces every parameter-sweep artifact in the published paper:
+#   * plots/comparison/boxplot-nofill/{zipfian,uniform}_throughput.png
+#       -> Fig. "Cache throughput" boxplots (eviction phase)
+#   * plots/comparison/hitratio_bars_combined.png
+#       -> Fig. "Hit ratio" horizontal bars
+#   * plots/tables/get_total_{zone,chunk}_lru_matrix.tex
+#       -> Table 2 (GET P99 latency matrix; the P99 rows of these
+#          matrices are the published values)
 
 set -e  # Exit on any error
 
@@ -11,11 +19,11 @@ usage() {
 Usage: $0 <zoned_dir> <block_dir>
 
 Arguments:
-  zoned_dir    Path to the zoned (ZNS) data directory
-  block_dir    Path to the block interface data directory
+  zoned_dir    Path to the zoned (ZNS) consolidated data directory
+  block_dir    Path to the block-interface consolidated data directory
 
 Example:
-  $0 data/ZONED-PROMO data/BLOCK-PROMO
+  $0 data/logs/FINAL/PARAM/ZNS-consolidated data/logs/FINAL/PARAM/SSD-consolidated
 
 EOF
     exit 1
@@ -50,15 +58,9 @@ echo "  Block directory: $BLOCK_DIR"
 echo ""
 
 # Configuration
-BUCKET_SECONDS=60
-WINDOW_SECONDS=60
 OUTPUT_DIR="plots"
 ZONED_SPLIT_DIR="${ZONED_DIR}/split_output"
 BLOCK_SPLIT_DIR="${BLOCK_DIR}/split_output"
-
-# Labels for comparison plots
-ZONED_LABEL="ZNS"
-BLOCK_LABEL="Block-interface"
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
@@ -100,105 +102,15 @@ split_data_if_needed() {
 echo "Step 1: Checking and splitting data if needed"
 echo "============================================="
 
-split_data_if_needed "$ZONED_DIR" "$ZONED_SPLIT_DIR" "ZONED-PROMO"
-split_data_if_needed "$BLOCK_DIR" "$BLOCK_SPLIT_DIR" "BLOCK-PROMO"
+split_data_if_needed "$ZONED_DIR" "$ZONED_SPLIT_DIR" "ZNS"
+split_data_if_needed "$BLOCK_DIR" "$BLOCK_SPLIT_DIR" "Block"
 
 echo ""
 
-# Step 2: Generate individual plots for each dataset
-echo "Step 2: Generating individual plots"
-echo "===================================="
+# Step 2: Throughput boxplots (eviction phase)
+echo "Step 2: Generating throughput boxplots"
+echo "======================================="
 
-echo "📈 Generating BLOCK-PROMO individual plots..."
-
-# # Throughput plots
-# python plot_throughput.py "$BLOCK_SPLIT_DIR" \
-#    --bucket-seconds $BUCKET_SECONDS \
-#    --output-dir "${OUTPUT_DIR}/block_individual" \
-#    --metrics bytes_total written_bytes_total \
-#    --mark-device-fill
-# #
-# # Raw latency plots
-# python plot_latency.py "$BLOCK_SPLIT_DIR" \
-#    --output-dir "${OUTPUT_DIR}/block_individual" \
-#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
-
-# # Smoothed latency plots
-# python plot_latency_smoothed.py "$BLOCK_SPLIT_DIR" \
-#    --window-seconds $WINDOW_SECONDS \
-#    --output-dir "${OUTPUT_DIR}/block_individual" \
-#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
-#    --mark-device-fill
-
-# # Hit ratio plots
-# python plot_hitratio.py "$BLOCK_SPLIT_DIR" \
-#    --output-dir "${OUTPUT_DIR}/block_individual"
-
-# echo "✅ BLOCK-PROMO individual plots completed"
-
-# echo "📈 Generating ZONED-PROMO individual plots..."
-# #
-# # Throughput plots
-# python plot_throughput.py "$ZONED_SPLIT_DIR" \
-#    --bucket-seconds $BUCKET_SECONDS \
-#    --output-dir "${OUTPUT_DIR}/zoned_individual" \
-#    --metrics bytes_total written_bytes_total read_bytes_total \
-#    --mark-device-fill
-
-# # Raw latency plots
-# python plot_latency.py "$ZONED_SPLIT_DIR" \
-#    --output-dir "${OUTPUT_DIR}/zoned_individual" \
-#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms
-
-# # Smoothed latency plots
-# python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" \
-#    --window-seconds $WINDOW_SECONDS \
-#    --output-dir "${OUTPUT_DIR}/zoned_individual" \
-#    --metrics get_total_latency_ms device_write_latency_ms disk_write_latency_ms get_miss_latency_ms \
-#    --mark-device-fill
-
-# # Hit ratio plots
-# python plot_hitratio.py "$ZONED_SPLIT_DIR" \
-#    --output-dir "${OUTPUT_DIR}/zoned_individual"
-
-# echo "✅ ZONED-PROMO individual plots completed"
-
-# echo ""
-
-#  Step 3: Generate comparison plots
-# echo "Step 3: Generating comparison plots"
-# echo "===================================="
-
-# echo "📊 Generating comparison plots (Block vs ZNS)..."
-
-# # Throughput comparison plots
-# python plot_throughput.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-#    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
-#    --bucket-seconds $BUCKET_SECONDS \
-#    --output-dir "${OUTPUT_DIR}/comparison" \
-#    --metrics bytes_total written_bytes_total read_bytes_total \
-#    --mark-device-fill
-
-# # Smoothed latency comparison plots
-# python plot_latency_smoothed.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-#    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
-#    --window-seconds $WINDOW_SECONDS \
-#    --output-dir "${OUTPUT_DIR}/comparison" \
-#    --metrics get_total_latency_ms device_write_latency_ms device_read_latency_ms disk_write_latency_ms disk_read_latency_ms get_miss_latency_ms get_hit_latency_ms \
-#    --mark-device-fill
-
-# # Hit ratio comparison plots
-# python plot_hitratio.py "$ZONED_SPLIT_DIR" "$BLOCK_SPLIT_DIR" \
-#    --labels "$ZONED_LABEL" "$BLOCK_LABEL" \
-#    --output-dir "${OUTPUT_DIR}/comparison"
-
-## Distribution comparison boxplots
-#python distribution_comparison_boxplots.py \
-#    --block-dir "$BLOCK_DIR" \
-#    --zns-dir "$ZONED_DIR" \
-#    --output-dir "${OUTPUT_DIR}/comparison/boxplot-fill" \
-#    --common-y-scale
-#
 python distribution_comparison_boxplots.py \
     --block-dir "$BLOCK_DIR" \
     --zns-dir "$ZONED_DIR" \
@@ -206,61 +118,22 @@ python distribution_comparison_boxplots.py \
     --common-y-scale \
     --from-eviction-start
 
-# Hit ratio horizontal bar charts
-#python hitratio_horizontal_bars_combined.py \
-#    --block-dir "$BLOCK_DIR" \
-#    --zns-dir "$ZONED_DIR" \
-#    --output-dir "${OUTPUT_DIR}/comparison"
-
-# ecdfs lat - split by distribution to avoid memory issues
-
-#echo "📊 Generating ECDF plots..."
-#ECDF_METRICS="get_total get_response disk_write disk_read"
-#
-#for m in $ECDF_METRICS; do
-#    # Fill phase (whole run)
-##    python distribution_comparison_ecdfs.py \
-##        --block-dir "$BLOCK_DIR" \
-##        --zns-dir "$ZONED_DIR" \
-##        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
-##        --log-scale \
-##        --metric $m \
-##        --distribution ZIPFIAN
-##
-##    python distribution_comparison_ecdfs.py \
-##        --block-dir "$BLOCK_DIR" \
-##        --zns-dir "$ZONED_DIR" \
-##        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-fill" \
-##        --log-scale \
-##        --metric $m \
-##        --distribution UNIFORM
-#
-#    # Eviction phase (from eviction start)
-#
-#    python distribution_comparison_ecdfs.py \
-#        --block-dir "$BLOCK_DIR" \
-#        --zns-dir "$ZONED_DIR" \
-#        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
-#        --log-scale \
-#        --metric $m \
-#        --from-eviction-start \
-#        --distribution ZIPFIAN
-#
-#    python distribution_comparison_ecdfs.py \
-#        --block-dir "$BLOCK_DIR" \
-#        --zns-dir "$ZONED_DIR" \
-#        --output-dir "${OUTPUT_DIR}/comparison/ecdfs-nofill" \
-#        --log-scale \
-#        --metric $m \
-#        --from-eviction-start \
-#        --distribution UNIFORM
-#done
-
-echo "✅ Comparison plots completed"
-
+echo "✅ Throughput boxplots completed"
 echo ""
 
-# Step 4: Generate latency comparison matrix tables
+# Step 3: Hit-ratio horizontal bar chart
+echo "Step 3: Generating hit-ratio bars"
+echo "=================================="
+
+python hitratio_horizontal_bars_combined.py \
+    --block-dir "$BLOCK_DIR" \
+    --zns-dir "$ZONED_DIR" \
+    --output-dir "${OUTPUT_DIR}/comparison"
+
+echo "✅ Hit-ratio bars completed"
+echo ""
+
+# Step 4: GET latency comparison matrix tables (Table 2)
 echo "Step 4: Generating latency comparison matrix tables"
 echo "===================================================="
 
@@ -276,136 +149,48 @@ DISTRIBUTIONS="zipfian uniform"
 # Ratios to include
 RATIOS="2 10"
 
-## Generate disk_read tables for both eviction types
-#echo "  - Generating disk_read Zone LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction promotional \
-#    --metric disk_read \
-#    --output-file "${OUTPUT_DIR}/tables/disk_read_zone_lru_matrix.tex" \
-#    --filter-minutes 5
-#
-#echo "  - Generating disk_read Chunk LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction chunk \
-#    --metric disk_read \
-#    --output-file "${OUTPUT_DIR}/tables/disk_read_chunk_lru_matrix.tex" \
-#    --filter-minutes 5
-#
-## Generate disk_write tables for both eviction types
-#echo "  - Generating disk_write Zone LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction promotional \
-#    --metric disk_write \
-#    --output-file "${OUTPUT_DIR}/tables/disk_write_zone_lru_matrix.tex" \
-#    --filter-minutes 5
-#
-#echo "  - Generating disk_write Chunk LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction chunk \
-#    --metric disk_write \
-#    --output-file "${OUTPUT_DIR}/tables/disk_write_chunk_lru_matrix.tex" \
-#    --filter-minutes 5
-#
-#echo "  - Generating get_response Chunk LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction chunk \
-#    --metric get_response \
-#    --output-file "${OUTPUT_DIR}/tables/get_response_chunk_lru_matrix.tex" \
-#    --from-eviction-start \
-#    --filter-minutes 5
-#
-#echo "  - Generating get_response Chunk LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction promotional \
-#    --metric get_response \
-#    --output-file "${OUTPUT_DIR}/tables/get_response_zone_lru_matrix.tex" \
-#    --from-eviction-start \
-#    --filter-minutes 5
-#
-#echo "  - Generating get_total Chunk LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction chunk \
-#    --metric get_total \
-#    --output-file "${OUTPUT_DIR}/tables/get_total_chunk_lru_matrix.tex" \
-#    --from-eviction-start \
-#    --filter-minutes 5
-#
-#echo "  - Generating get_total Chunk LRU matrix table..."
-#python3 latency_table_matrix.py \
-#    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
-#    --chunk-sizes $CHUNK_SIZES \
-#    --distributions $DISTRIBUTIONS \
-#    --ratios $RATIOS \
-#    --eviction promotional \
-#    --metric get_total \
-#    --output-file "${OUTPUT_DIR}/tables/get_total_zone_lru_matrix.tex" \
-#    --from-eviction-start \
-#    --filter-minutes 5
-#
-#echo "✅ Latency comparison matrix tables completed"
-#
-#echo ""
+echo "  - Generating get_total Chunk LRU matrix table..."
+python3 latency_table_matrix.py \
+    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+    --chunk-sizes $CHUNK_SIZES \
+    --distributions $DISTRIBUTIONS \
+    --ratios $RATIOS \
+    --eviction chunk \
+    --metric get_total \
+    --output-file "${OUTPUT_DIR}/tables/get_total_chunk_lru_matrix.tex" \
+    --from-eviction-start \
+    --filter-minutes 5
+
+echo "  - Generating get_total Zone LRU matrix table..."
+python3 latency_table_matrix.py \
+    --data-dirs "$ZONED_DIR" "$BLOCK_DIR" \
+    --chunk-sizes $CHUNK_SIZES \
+    --distributions $DISTRIBUTIONS \
+    --ratios $RATIOS \
+    --eviction promotional \
+    --metric get_total \
+    --output-file "${OUTPUT_DIR}/tables/get_total_zone_lru_matrix.tex" \
+    --from-eviction-start \
+    --filter-minutes 5
+
+echo "✅ Latency comparison matrix tables completed"
+echo ""
 
 # Step 5: Summary
 echo "Step 5: Generation Summary"
 echo "=========================="
 
-# Count generated plots and tables
-block_count=$(find "${OUTPUT_DIR}/block_individual" -name "*.png" 2>/dev/null | wc -l)
-zoned_count=$(find "${OUTPUT_DIR}/zoned_individual" -name "*.png" 2>/dev/null | wc -l)
 comparison_count=$(find "${OUTPUT_DIR}/comparison" -name "*.png" 2>/dev/null | wc -l)
 table_count=$(find "${OUTPUT_DIR}/tables" -name "*.tex" 2>/dev/null | wc -l)
-total_count=$((block_count + zoned_count + comparison_count))
 
 echo "📊 Plot and Table Generation Complete!"
 echo ""
-echo "Generated plots:"
-echo "  • BLOCK-PROMO individual: $block_count plots"
-echo "  • ZONED-PROMO individual: $zoned_count plots"
-echo "  • Block vs ZNS comparison: $comparison_count plots"
-echo "  • Total plots: $total_count"
-echo ""
-echo "Generated tables:"
-echo "  • Latency comparison matrix tables: $table_count tables"
+echo "Generated artifacts:"
+echo "  • Comparison plots: $comparison_count"
+echo "  • LaTeX tables: $table_count"
 echo ""
 echo "Output directories:"
-echo "  • Individual BLOCK plots: ${OUTPUT_DIR}/block_individual/"
-echo "  • Individual ZONED plots: ${OUTPUT_DIR}/zoned_individual/"
 echo "  • Comparison plots: ${OUTPUT_DIR}/comparison/"
 echo "  • LaTeX tables: ${OUTPUT_DIR}/tables/"
-echo ""
-echo "Configuration used:"
-echo "  • Throughput bucket size: ${BUCKET_SECONDS}s"
-echo "  • Latency smoothing window: ${WINDOW_SECONDS}s"
-echo "  • Block interface label: $BLOCK_LABEL"
-echo "  • ZNS interface label: $ZONED_LABEL"
 echo ""
 echo "🎉 All plots and tables generated successfully!"

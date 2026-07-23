@@ -56,7 +56,7 @@ EVICTION_TYPE_LABELS = {
     "chunk": "Chunk-LRU"
 }
 
-# Device colors (using lighter colors from original boxplot_graphs.py)
+# Device colors (lighter variants for fill visibility)
 DEVICE_COLORS = {
     "ZNS": "#a65628",
     "Block": "#f781bf"

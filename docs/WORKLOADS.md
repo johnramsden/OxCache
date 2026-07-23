@@ -21,7 +21,8 @@ cd vendor/workloadgen/core
 mvn -Dtest=site.ycsb.generator.TestZipfianGeneratorBLOCK test
 ```
 
-Workloads will be located in `target/workloads`.
+Workloads will be located in `target/workloadszoned` (ZNS) and
+`target/workloadsblock` (block-interface).
 
 THESE SCRIPTS WILL WIPE THE DISK!
 
@@ -34,10 +35,43 @@ sudo  ./scripts/run_cpu_bench.sh vendor/workloadgen/core/target/workloadszoned $
 To run block-interface workloads, run (replacing $DEVICE and $CONFIGFILE):
 
 ```shell
-sudo  ./scripts/run_cpu_bench.sh vendor/workloadgen/core/target/workloadszoned $CONFIGFILE $DEVICE
+sudo  ./scripts/run_cpu_bench.sh vendor/workloadgen/core/target/workloadsblock $CONFIGFILE $DEVICE
 ```
 
 Output will be in `./logs/*` files
+
+## Eviction-threshold tuning
+
+`TestZipfianGeneratorZNSEvictTune` generates workloads sweeping the eviction
+high/low-water (and clean-low) threshold matrix into `target/workloads`:
+
+```shell
+cd vendor/workloadgen/core
+mvn -Dtest=site.ycsb.generator.TestZipfianGeneratorZNSEvictTune test
+```
+
+These are run with `scripts/run_cpu_bench_evict.sh`:
+
+```shell
+sudo ./scripts/run_cpu_bench_evict.sh vendor/workloadgen/core/target/workloads $NR_THREADS $CONFIGFILE $DEVICE
+```
+
+which runs each configuration in benchmark mode and appends throughput
+results to `evict_bench.log`.
+
+## WiredTiger trace workloads
+
+The WiredTiger case study replays a block-access trace captured with the
+`vendor/OxCache-WiredTiger-Trace` submodule (an instrumented WiredTiger whose
+`wtperf` YCSB-C runner logs its block accesses). The trace is replayed in SPC
+format through the `spclient` binary via:
+
+```shell
+sudo ./scripts/run_cpu_bench_spc.sh $TRACE $CONFIGFILE $SPCCONFIGSPACE $DEVICE
+```
+
+with the eviction-parameter combinations (`$SPCCONFIGSPACE`) sourced from
+`scripts/spcconfigspace.block.sh` / `scripts/spcconfigspace.zns.sh`.
 
 ## Cortes
 
@@ -141,11 +175,6 @@ Then plot via:
 ./generate_all_plots.sh <zoned_dir>-consolidated <block_dir>-consolidated
 ```
 
-To create boxplots:
-
-```shell
-python3 distribution_comparison_boxplots.py \
-  --block-dir <block_dir>-consolidated \
-  --zns-dir <zoned_dir>-consolidated \
-  --output-dir plots/
-```
+See [eval/README.md](../eval/README.md) for the full figure/table
+reproduction guide, including the WiredTiger case-study pipeline
+(`eval/generate_all_plots_wt.sh`) and the WAF/RAF analysis.

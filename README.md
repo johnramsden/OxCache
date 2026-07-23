@@ -2,6 +2,16 @@
 
 Disk based cache with ZNS and block-interface backends.
 
+OxCache is the system evaluated in *"When Do Zoned Namespaces SSDs Matter? A
+Comparative Study of Cache Workloads"* (SYSTOR '26). To reproduce the paper's
+experiments and figures, see:
+
+- [docs/WORKLOADS.md](docs/WORKLOADS.md) — generating workloads and running
+  the benchmarks (parameter sweep, eviction-threshold tuning, and the
+  WiredTiger trace case study)
+- [eval/README.md](eval/README.md) — the evaluation pipeline: which script
+  produces each figure and table, data pre-processing, and data availability
+
 ## Dependencies
 
 Rust
@@ -16,7 +26,7 @@ See options via:
 oxcache --help
 ```
 
-Set config via CLI or toml file. See [example.server.toml](example.server.toml) for a basic configuration or [example.benchmark.toml](example.benchmark.toml) for a benchmark configuration
+Set config via CLI or toml file. See [example.server.toml](example.server.toml) for a basic configuration; the `cortes.server.*.toml` files are the configurations used on the benchmark host for the paper's experiments (block/ZNS × Chunk-LRU/Zone-LRU variants), and the `qemu.*.toml` files target the QEMU-emulated devices set up by [qemu-zns-device.sh](qemu-zns-device.sh)
 
 ### Server Parameters
 
