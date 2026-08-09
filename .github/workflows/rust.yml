@@ -37,7 +37,7 @@ jobs:
         ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
 
     - name: Install packages
-      run: sudo apt install -y qemu-system-x86 qemu-utils cloud-utils wget sshpass
+      run: sudo apt update && sudo apt install -y qemu-system-x86 qemu-utils cloud-utils wget sshpass
 
     - name: Cache Ubuntu Cloud Image
       id: cache-ubuntu-restore
