@@ -37,11 +37,7 @@ jobs:
         ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts
 
     - name: Install packages
-      uses: awalsh128/cache-apt-pkgs-action@latest
-      with:
-        packages: qemu-system-x86 qemu-utils cloud-utils wget sshpass
-        version: 1.0
-        execute_install_scripts: true
+      run: sudo apt install -y qemu-system-x86 qemu-utils cloud-utils wget sshpass
 
     - name: Cache Ubuntu Cloud Image
       id: cache-ubuntu-restore
